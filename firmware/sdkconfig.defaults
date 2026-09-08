@@ -1,0 +1,12 @@
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_ESP32S3_SPIRAM_SUPPORT=y
+
+# Logs (ESP_LOGI/E) por UART0 (puerto del chip puente USB-UART), no por el
+# USB-Serial-JTAG nativo. Asi liberamos el USB-Serial-JTAG (GPIO19/20) para
+# uso exclusivo nuestro (comandos + datos hacia la PC) sin que el sistema
+# tambien instale su propio driver ahi y choque con el nuestro.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_NUM=0
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

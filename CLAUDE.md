@@ -32,3 +32,4 @@ Sí cursamos una materia de C hace unos años, pero **lo tenemos oxidado** — n
 - Toda sugerencia debe **priorizar escalabilidad 1:1 con producción en PCB** (componentes soldados en placa, fabricación en China), evitando soluciones que solo funcionen en prototipo/dev board.
 - Ir etapa por etapa: no adelantar diseño de etapas futuras sin pedido explícito.
 - En la Etapa 1, explicar las librerías a usar y construir el código de forma incremental junto al usuario (no entregar todo de una vez) — objetivo es que el usuario entienda las bases.
+- **Ser crítico con cada decisión, no solo cuando se pregunta.** No hace falta ser criticón, pero sí juzgar activamente cada elección de diseño (buffers, formatos, protocolos, manejo de errores, uso de memoria, etc.) pensando en el producto final — señalar de entrada si algo puede salir caro de corregir más adelante (en escalabilidad, en PCB, en producción), en vez de esperar a que se pregunte explícitamente.

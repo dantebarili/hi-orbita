@@ -1,3 +1,18 @@
+/**
+ * @file    audio_capture.c
+ * @author  Dante Barili - Juan Ignacio Forster / Proyecto Órbita
+ * @brief   Inicializo el canal I2S para leer los mics INMP441/ICS-43434 y proveo una funcion para leer N frames de audio.
+ * @version 1.0.0
+ * @date    2026-09-03
+ * 
+ * @copyright Copyright (c) 2026 - Proyecto Órbita
+ * 
+ * @details Buffer DMA del I2S: 6 descriptores de 240 frames cada uno = 1440 frames (~90ms @16kHz). Ese es el margen maximo 
+ *          entre llamadas a orbita_audio_i2s_read() antes de arriesgar overrun (perder muestras).
+ *          
+ *          
+ */
+
 #include "audio_capture.h"
 #include "driver/i2s_std.h"
 #include "esp_log.h"
@@ -7,10 +22,16 @@ static i2s_chan_handle_t s_rx_chan = NULL; // Handle para identidicar el canal a
 
 esp_err_t orbita_audio_i2s_init(void)
 {
-    // Se crea la configuracion del canal con la ESP como el Master
+    /*  - Se crea la configuracion del canal con la ESP como el Master
+    *   - Buffer interno DMA del I2S: dma_desc_num(6) * dma_frame_num(240) = 1440
+    *      frames (~90ms @16kHz). Ese es el margen maximo entre llamadas a
+    *      orbita_audio_i2s_read() antes de arriesgar overrun (perder muestras).
+    */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-  // Creamos el canal con la config anterior creada y en modo RX
-  // Y lo guardamos en s_rx_chan
+
+  
+    // Creamos el canal con la config anterior creada y en modo RX
+    // Y lo guardamos en s_rx_chan
     esp_err_t err = i2s_new_channel(&chan_cfg, NULL, &s_rx_chan);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "i2s_new_channel fallo: %s", esp_err_to_name(err));
@@ -76,12 +97,12 @@ esp_err_t orbita_audio_i2s_read(int32_t *out_buf, size_t frame_count, size_t *fr
     size_t bytes_to_read = frame_count * 2 * sizeof(int32_t); // bytes totales a leer, 2 canales * frame (L/R)
     size_t bytes_read = 0; // Inicializamos en 0 por las dudas
 
-  /*
-  * Se lee el canal, se guardan N bytes_to_read en out_buf, te carga los M bytes leidos en bytes_read 
- * Se le indica al FreeRTOS, mediante portMAX_DELAY que no se active la accion hasta que haya un evento 
-   es decir que se tengan en buffer al menos N bytes_to_read. 
-* La LATENCIA DE LECTURA de esta accion es de frames_count / sample_frec
-  */
+    /*
+    * Se lee el canal, se guardan N bytes_to_read en out_buf, te carga los M bytes leidos en bytes_read 
+    * Se le indica al FreeRTOS, mediante portMAX_DELAY que no se active la accion hasta que haya un evento 
+        es decir que se tengan en buffer al menos N bytes_to_read. 
+    * La LATENCIA DE LECTURA de esta accion es de frames_count / sample_frec
+    */
     esp_err_t err = i2s_channel_read(s_rx_chan, out_buf, bytes_to_read, &bytes_read, portMAX_DELAY);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "i2s_channel_read fallo: %s", esp_err_to_name(err));
