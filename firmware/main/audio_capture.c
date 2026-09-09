@@ -14,7 +14,13 @@
  */
 
 #include "audio_capture.h"
+#if __has_include("driver/i2s_std.h")
 #include "driver/i2s_std.h"
+#elif __has_include("esp_driver_i2s/i2s_std.h")
+#include "esp_driver_i2s/i2s_std.h"
+#else
+#error "I2S standard-mode header not found; install/configure the ESP-IDF I2S driver component"
+#endif
 #include "esp_log.h"
 
 static const char *TAG = "orbita_audio";

@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -84,6 +85,15 @@ void app_main(void)
         return;
     }
 
+    // Buffer chico y reusable para empaquetar de a un bloque (32->24 bit)
+    // justo antes de mandarlo — evita duplicar en PSRAM los ~1.28MB de
+    // buf_psram en formato empaquetado.
+    uint8_t *pack_buf = malloc(frame_count_test_to_read * FRAME_SIZE * 3);
+    if (pack_buf == NULL) {
+        ESP_LOGE(TAG, "No se pudo reservar el buffer de empaquetado");
+        return;
+    }
+
     while (1) {
         
         // Lee 1 byte de la PC (sin bloquear, timeout=0). Si no hay nada, n=0 y cmd[0] queda sin modificar.
@@ -133,7 +143,30 @@ void app_main(void)
                 frames_acumulados += frames_leidos_este_bloque;
             }
 
-            // hacer .wav y mandar a la compu
+            // Armo el header con el tamaño REAL capturado (frames_acumulados
+            // puede ser menor a frame_count_test si alguna lectura fallo a
+            // mitad de la grabacion) — asi el .wav queda consistente con lo
+            // que realmente se grabo, en vez de declarar un tamaño mayor al
+            // de los datos que van a seguir.
+            uint32_t wav_data_size = (uint32_t)(frames_acumulados * FRAME_SIZE * 3);
+            wav_build_header(wav_header, ORBITA_SAMPLE_RATE_HZ, FRAME_SIZE, 24, wav_data_size);
+            usb_serial_jtag_write_bytes(wav_header, WAV_HEADER_SIZE, portMAX_DELAY);
+
+            // Empaqueto y mando el audio de a bloques (32->24 bit), reusando
+            // el mismo pack_buf chico en cada vuelta.
+            size_t frames_enviados = 0;
+            while (frames_enviados < frames_acumulados) {
+                size_t frames_este_bloque = frame_count_test_to_read;
+                if (frames_enviados + frames_este_bloque > frames_acumulados) {
+                    frames_este_bloque = frames_acumulados - frames_enviados;
+                }
+
+                size_t bytes_empaquetados = wav_pack_block_24bit(
+                    buf_psram + frames_enviados * FRAME_SIZE, frames_este_bloque, pack_buf);
+                usb_serial_jtag_write_bytes(pack_buf, bytes_empaquetados, portMAX_DELAY);
+
+                frames_enviados += frames_este_bloque;
+            }
 
         } else {
             // Todavia no llego 'g': leo un bloque a un buffer descartable
