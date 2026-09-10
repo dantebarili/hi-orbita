@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -11,7 +12,7 @@
 
 static const char *TAG = "orbita_main";
 
-#define TEST_DURATION_SEC 10
+#define TEST_DURATION_SEC 3 // bajado de 10 a 3 para iterar mas rapido mientras probamos el pipeline (el cuello de botella real es el throughput de USB-Serial-JTAG, ver notas)
 #define FRAME_SIZE 2
 
 // Margen maximo entre llamadas a orbita_audio_i2s_read() antes de arriesgar
@@ -50,7 +51,10 @@ void app_main(void)
     // no tiene de donde leer.
     usb_serial_jtag_driver_config_t usb_cfg = {
         .rx_buffer_size = 256, // buffer chico: solo esperamos comandos de 1 byte
-        .tx_buffer_size = 256,
+        // TX mas grande: mandamos hasta 9600 bytes de un saque por bloque de
+        // audio (pack_buf); con 256 bytes el driver tenia que trocear cada
+        // bloque en ~38 vueltas internas de espera, penalizando el throughput.
+        .tx_buffer_size = 4096,
     };
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_cfg));
 
@@ -148,6 +152,14 @@ void app_main(void)
             // mitad de la grabacion) — asi el .wav queda consistente con lo
             // que realmente se grabo, en vez de declarar un tamaño mayor al
             // de los datos que van a seguir.
+            // Marcador explicito de fin de stream de texto (RMS) / inicio
+            // de datos binarios (header + audio). Sin esto, el lado Python
+            // tiene que "adivinar" el corte contando lineas de RMS -- si se
+            // pierde o duplica una, arranca a leer el header en el lugar
+            // equivocado del stream y saca basura (visto en pruebas reales).
+            const char *wav_start_marker = "WAV_START\n";
+            usb_serial_jtag_write_bytes(wav_start_marker, strlen(wav_start_marker), portMAX_DELAY);
+
             uint32_t wav_data_size = (uint32_t)(frames_acumulados * FRAME_SIZE * 3);
             wav_build_header(wav_header, ORBITA_SAMPLE_RATE_HZ, FRAME_SIZE, 24, wav_data_size);
             usb_serial_jtag_write_bytes(wav_header, WAV_HEADER_SIZE, portMAX_DELAY);

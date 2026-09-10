@@ -23,10 +23,7 @@ import serial
 import matplotlib.pyplot as plt
 
 # --- Constantes: deben coincidir con firmware/main/main.c ---
-SAMPLE_RATE_HZ = 16000
-BLOCK_FRAMES = 1600           # frame_count_test_to_read en el firmware
-CAPTURE_SECONDS = 10          # TEST_DURATION_SEC en el firmware
-TOTAL_BLOCKS = (SAMPLE_RATE_HZ * CAPTURE_SECONDS) // BLOCK_FRAMES  # 100
+CAPTURE_SECONDS = 3           # TEST_DURATION_SEC en el firmware
 WAV_HEADER_SIZE = 44
 PLOT_WINDOW_BLOCKS = 100      # puntos visibles en el grafico (~10s de historia)
 
@@ -38,15 +35,21 @@ def parse_args():
     return parser.parse_args()
 
 
-def read_exact(ser: serial.Serial, n: int) -> bytes:
+def read_exact(ser: serial.Serial, n: int, on_progress=None) -> bytes:
     # ser.read(n) puede devolver menos de n bytes si se corta el timeout;
     # hay que insistir hasta juntar exactamente los n bytes esperados.
+    # on_progress(bytes_hasta_ahora) es opcional -- lo usamos para bombear
+    # los eventos de matplotlib durante lecturas largas (el header + los
+    # ~960KB de audio), si no la ventana queda "No responde" en Windows, y
+    # tambien para mostrar progreso en consola.
     data = b""
     while len(data) < n:
         chunk = ser.read(n - len(data))
         if not chunk:
             break
         data += chunk
+        if on_progress is not None:
+            on_progress(len(data))
     return data
 
 
@@ -66,14 +69,30 @@ def input_listener(trigger_event: threading.Event, stop_event: threading.Event):
             trigger_event.set()
 
 
-def save_wav(ser: serial.Serial) -> None:
-    header = read_exact(ser, WAV_HEADER_SIZE)
+def save_wav(ser: serial.Serial, fig) -> None:
+    print("Descargando WAV de la placa (header)...")
+    header = read_exact(ser, WAV_HEADER_SIZE, on_progress=lambda _n: fig.canvas.flush_events())
     if len(header) < WAV_HEADER_SIZE:
-        print("Header incompleto, se descarta esta captura.")
+        print(f"Header incompleto: {len(header)}/{WAV_HEADER_SIZE} bytes. Se descarta esta captura.")
         return
 
     data_size = wav_data_size(header)
-    data = read_exact(ser, data_size)
+    # data_size esperado ~= 10s * 16000Hz * 2 canales * 3 bytes = 960000.
+    # Si este numero sale disparatado (gigante o irrisorio), el header esta
+    # corrido (bytes de mas/de menos antes de "RIFF") y por eso la descarga
+    # se queda esperando bytes que nunca van a llegar del todo.
+    print(f"Header OK, esperando {data_size} bytes de audio...")
+
+    last_print = [0]
+    def report_progress(bytes_so_far):
+        fig.canvas.flush_events()
+        # Imprime cada ~5KB para poder ver si avanza (aunque sea lento) o
+        # esta trabado en 0.
+        if bytes_so_far - last_print[0] >= 5_000:
+            last_print[0] = bytes_so_far
+            print(f"  ...{bytes_so_far}/{data_size} bytes")
+
+    data = read_exact(ser, data_size, on_progress=report_progress)
     if len(data) < data_size:
         print(f"Audio incompleto: {len(data)}/{data_size} bytes. Se guarda igual.")
 
@@ -107,9 +126,9 @@ def main():
     ax.set_ylabel("RMS")
     ax.set_title("Monitoreo en vivo")
     ax.legend()
+    plt.show(block=False)
 
     recording = False
-    blocks_received = 0
 
     try:
         while True:
@@ -117,15 +136,26 @@ def main():
                 trigger_event.clear()
                 ser.write(b"g")
                 recording = True
-                blocks_received = 0
                 ax.set_title("Grabando...")
+                print(f"Grabando {CAPTURE_SECONDS}s...")
 
             raw_line = ser.readline()
             if not raw_line:
-                plt.pause(0.01)
+                fig.canvas.flush_events()
                 continue
 
             text = raw_line.decode("ascii", errors="ignore").strip()
+
+            if recording and text == "WAV_START":
+                # Marcador explicito: el firmware termino de mandar lineas
+                # RMS y lo que sigue en el stream es el header WAV binario.
+                # No dependemos de contar N lineas de antemano.
+                save_wav(ser, fig)
+                recording = False
+                ax.set_title("Monitoreo en vivo")
+                print("Listo, volviendo a monitoreo en vivo.")
+                continue
+
             if "," not in text:
                 continue
             try:
@@ -139,17 +169,7 @@ def main():
             line_l.set_data(range(len(rms_l_hist)), rms_l_hist)
             line_r.set_data(range(len(rms_r_hist)), rms_r_hist)
             fig.canvas.draw_idle()
-            plt.pause(0.001)
-
-            if recording:
-                blocks_received += 1
-                # TOTAL_BLOCKS es el conteo esperado en el camino sin
-                # errores (ver limitacion en el resumen: no hay marcador
-                # explicito de fin de stream RMS / inicio de datos binarios).
-                if blocks_received >= TOTAL_BLOCKS:
-                    save_wav(ser)
-                    recording = False
-                    ax.set_title("Monitoreo en vivo")
+            fig.canvas.flush_events()
 
     except KeyboardInterrupt:
         pass

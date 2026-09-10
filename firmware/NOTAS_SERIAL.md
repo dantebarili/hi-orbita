@@ -30,6 +30,19 @@ Esto manda todos los logs por **UART0** y desactiva el espejo automático por US
 
 **Cómo identificar cuál COM es cuál:** conectar ambos cables, ver Administrador de Dispositivos → Puertos (COM y LPT); desconectar un cable a la vez para ver cuál puerto desaparece.
 
+## Pines declarados (para armar el prototipo)
+
+| GPIO | Señal | Definido en | Uso |
+|---|---|---|---|
+| GPIO4 | `ORBITA_I2S_BCLK_GPIO` (BCLK) | [audio_capture.h](main/audio_capture.h) | Reloj de bit I2S — lo genera el ESP32 (master), va a los dos mics. |
+| GPIO5 | `ORBITA_I2S_WS_GPIO` (WS/LRCLK) | [audio_capture.h](main/audio_capture.h) | Word Select — indica a los mics si el bit que sigue es del canal L o R. |
+| GPIO6 | `ORBITA_I2S_DIN_GPIO` (DIN) | [audio_capture.h](main/audio_capture.h) | Entrada de datos — **compartida por ambos mics** (uno manda en el slot L, el otro en el R). |
+| GPIO19 / GPIO20 | USB-Serial-JTAG nativo | Fijo en el chip (no configurable en el código) | Puerto B — comandos (`'g'`) y datos hacia `tools/orbita_serial.py`. |
+| — | UART0 (chip puente USB-UART) | Fijo, vía `sdkconfig.defaults` | Puerto A — solo logs (`ESP_LOGI`/`ESP_LOGE`), `idf.py monitor`. |
+| GPIO33–37 | PSRAM Octal | Reservados por el propio módulo N16R8 (no tocar) | Bus de memoria — **nunca mapear otro periférico acá** (ver `CLAUDE.md`). |
+
+**Para el armado físico:** BCLK y WS van **en paralelo a los dos mics** (misma señal, ambos micrófonos la reciben); DIN también es una sola línea compartida — cada mic decide si transmite en el slot L o R según cómo esté cableado su pin `L/R` (a GND = canal L, a VDD = canal R, según el datasheet del INMP441/ICS-43434). Alimentación de los mics: 3.3V estricto (ver guardrails de `CLAUDE.md`) — **no usar 5V**, aunque la placa lo tenga disponible en otro pin.
+
 ## Del lado del firmware
 
 En `main.c`, `usb_serial_jtag_driver_install()` inicializa el periférico nativo para lectura/escritura propia (no confundir con el log, que ya sale solo por UART0 gracias a la config de arriba).
@@ -37,6 +50,8 @@ En `main.c`, `usb_serial_jtag_driver_install()` inicializa el periférico nativo
 ---
 
 ## Guía paso a paso: flasheo y prueba (primera vez)
+
+**Nota sobre OneDrive:** el proyecto vive dentro de una carpeta sincronizada por OneDrive. Esto puede trabar builds de ESP-IDF (archivos bloqueados durante sync, paths largos). Recomendado: pausar la sincronización de OneDrive mientras compilás, o mover el proyecto fuera de la carpeta sincronizada.
 
 ### 0. Conectar la placa
 
@@ -47,8 +62,8 @@ Después conectá el **segundo cable** (USB nativo, directo al chip, suele decir
 Si tenés dudas de cuál es cuál, desconectá uno a la vez y mirá cuál puerto desaparece del Administrador de Dispositivos.
 
 **Anotá los dos:**
-- Puerto A (UART0, chip puente) → logs/flasheo → `COM___`
-- Puerto B (USB-Serial-JTAG nativo) → comandos/datos → `COM___`
+- Puerto A (UART0, chip puente) → logs/flasheo → `COM4` (puerto arriba de mi note)
+- Puerto B (USB-Serial-JTAG nativo) → comandos/datos → `COM`
 
 ### 1. Abrir una terminal con ESP-IDF activado
 
@@ -57,8 +72,10 @@ Desde el menú Start de Windows, buscá **"ESP-IDF PowerShell"** (o "ESP-IDF CMD
 Navegá a la carpeta del firmware:
 
 ```powershell
-cd D:\Users\Dante\Desktop\Orbita\hi-orbita\firmware
+cd C:\Users\dante\OneDrive\Escritorio\Orbita\hi-orbita\firmware
 ```
+
+(Ajustá esta ruta si movés el proyecto fuera de OneDrive — ver nota más abajo.)
 
 ### 2. Setear el target (solo la primera vez)
 
@@ -77,37 +94,37 @@ Si hay errores de compilación, pegámelos y los vemos juntos antes de seguir.
 ### 4. Flashear (usa el Puerto A — UART0)
 
 ```powershell
-idf.py -p COM3 flash
+idf.py -p PUERTOA flash
 ```
 
-(Reemplazá `COM3` por el puerto A que anotaste en el paso 0.)
+(Reemplazá `PUERTOA` por el puerto A que anotaste en el paso 0.)
 
 ### 5. Ver los logs (mismo Puerto A)
 
 ```powershell
-idf.py -p COM3 monitor
+idf.py -p PUERTO1 monitor
 ```
 
 Deberías ver los `ESP_LOGI` de inicialización (I2S, buffer PSRAM reservado, etc.). Para salir del monitor: `Ctrl+]`.
 
-**Importante:** este puerto (A) es de **solo lectura de logs** — no manda comandos ni recibe audio. Podés dejarlo abierto en una ventana mientras trabajás con el otro puerto en paralelo, para ver si algo falla (`ESP_LOGE`) durante las pruebas.
+**Importante:** este puerto (1) es de **solo lectura de logs** — no manda comandos ni recibe audio. Podés dejarlo abierto en una ventana mientras trabajás con el otro puerto en paralelo, para ver si algo falla (`ESP_LOGE`) durante las pruebas.
 
 ### 6. Preparar el entorno de Python (una sola vez)
 
 En **otra** terminal (puede ser PowerShell normal, no hace falta que sea la de ESP-IDF) desde la raíz del proyecto:
 
 ```powershell
-cd D:\Users\Dante\Desktop\Orbita\hi-orbita\tools
+cd C:\Users\dante\OneDrive\Escritorio\Orbita\hi-orbita\tools
 pip install -r requirements.txt
 ```
 
 ### 7. Correr el cliente (usa el Puerto B — USB nativo)
 
 ```powershell
-python orbita_serial.py COM5
+python orbita_serial.py PUERTOB
 ```
 
-(Reemplazá `COM5` por el puerto B que anotaste en el paso 0.)
+(Reemplazá `PUERTOB` por el puerto B que anotaste en el paso 0.)
 
 Debería abrirse una ventana de gráfico con el RMS en vivo de ambos canales. Escribí `g` y Enter en esa misma terminal para disparar una grabación de 10 segundos — al terminar, se guarda un archivo `orbita_AAAAMMDD_HHMMSS.wav` en la carpeta `tools/`.
 

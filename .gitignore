@@ -1,0 +1,13 @@
+# ESP-IDF build output y config generada (se regenera con idf.py)
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/dependencies.lock
+firmware/managed_components/
+
+# Python
+tools/__pycache__/
+*.pyc
+
+# Grabaciones de prueba (no versionar audio de test)
+tools/*.wav
