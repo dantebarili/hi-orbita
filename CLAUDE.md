@@ -14,13 +14,13 @@ Dispositivo IoT de escritorio sin pantalla para consultorios médicos. Realiza e
 - **Resiliencia:** resguardo offline opcional en MicroSD (FAT32 por SPI) ante caídas de red (primera idea de robustez, sin definir aún).
 
 ## Hoja de Ruta (5 etapas)
-Etapa 1 es la más definida; el resto se van a ir precisando en conjunto.
+Etapa 1 completada (2026-09). El resto se van a ir precisando en conjunto.
 
-1. **Captura Local** — 2x mic I2S INMP441, empaquetado WAV, guardado/envío a PC para estudio de calidad de audio según distancia (grabaciones a distintas distancias, análisis de SNR vía FFT).
-2. **DSP avanzado** — ESP-AFE con 2 mics, beamforming a 50 mm, supresión de ruido (NSNet), VAD (VADNet).
-3. **Wake Word local** — detección de "Órbita" on-device.
-4. **Integración Backend de IA** — envío y procesamiento de datos.
-5. **PCB personalizada** — diseño de placa y primera tanda de producción.
+1. **Captura Local** ✅ — 2x mic I2S INMP441, empaquetado WAV (24-bit estéreo) armado en el propio ESP32-S3, guardado/envío a PC vía USB-Serial-JTAG para estudio de calidad de audio según distancia (grabaciones a distintas distancias, análisis de SNR vía FFT).
+2. **Filtrado + Wake Word** — ESP-AFE con 2 mics, beamforming a 50 mm, supresión de ruido (NSNet), VAD (VADNet), y detección de "Órbita" on-device (WakeNet). Se unifican en una sola etapa porque la wake word consume el audio ya filtrado — no tiene sentido separarlas en el pipeline. Definir de entrada un criterio concreto de "etapa terminada" (ej. SNR objetivo a X distancia, tasa de falsos aciertos/rechazos de la wake word) para no dejarla abierta indefinidamente.
+3. **Comunicación + FSM** — máquina de estados del dispositivo (idle / wake detectada / grabando / enviando / error-reintento) + integración WebSockets con el backend de IA. Bocetar la FSM (estados y transiciones, sin código) *antes* de dividir el trabajo en paralelo — el research de WebSockets depende de saber qué transiciones tiene que soportar (reconexión, qué cierra el estado de envío, qué pasa si la wake word dispara a mitad de un envío), no al revés.
+4. **Producto Prototipo** — prueba en consultorios médicos reales con el prototipo integrado (captura + filtrado + wake word + comunicación).
+5. **Producto Final** — PCB personalizada y primera tanda de producción.
 
 ## Quiénes somos (contexto del equipo)
 Somos estudiantes de Ingeniería Electrónica. Todavía **no cursamos la materia de Sistemas Embebidos**, así que no asumas conocimiento previo de microcontroladores, periféricos, RTOS, drivers, etc. — hay que explicar esos conceptos desde la base cuando aparecen por primera vez.
