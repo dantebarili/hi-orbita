@@ -78,3 +78,19 @@ size_t wav_pack_block_24bit(const int32_t *in_buf, size_t frame_count,
     
     return frames_read*2*3; // 2 muestras por frame, de 3 bytes c/u
 }
+
+size_t wav_pack_block_16bit(const int32_t *in_buf, size_t frame_count,
+                             uint8_t *out_buf)
+{
+    size_t sample_count = frame_count * 2; // L y R juntos, cuantos int32_t hay que recorrer en total
+
+    for (size_t i = 0; i < sample_count; i++)
+    {
+        // Nos quedamos con los 16 bits mas altos del slot de 32 bits (el
+        // audio esta alineado a la izquierda). Little-endian: byte bajo primero.
+        out_buf[2 * i]     = (uint8_t)((in_buf[i] >> 16) & 0xFF);
+        out_buf[2 * i + 1] = (uint8_t)((in_buf[i] >> 24) & 0xFF);
+    }
+
+    return sample_count * 2;
+}

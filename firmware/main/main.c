@@ -1,85 +1,90 @@
-#include <math.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/ringbuf.h"
 #include "esp_log.h"
 #include "audio_capture.h"
 #include "wav_writer.h"
-#include "esp_heap_caps.h"
 #include "driver/usb_serial_jtag.h"
 #include "driver/uart.h"
-#include "esp_timer.h"
 
 static const char *TAG = "orbita_main";
 
-#define TEST_DURATION_SEC 3 // bajado de 10 a 3 para iterar mas rapido mientras probamos el pipeline (el cuello de botella real es el throughput de USB-Serial-JTAG, ver notas)
-#define FRAME_SIZE 2
+// ---------------------------------------------------------------------------
+// Constantes
+// ---------------------------------------------------------------------------
+#define STREAM_SECONDS      10                 // 10 para probar, 600 para la grabacion larga
+#define FRAME_SIZE          2                  // muestras por frame (L y R)
+#define FRAMES_PER_BLOCK    1600               // frames por i2s_read (100 ms)
+#define BYTES_PER_SAMPLE    2                  // 16 bit en el cable
+#define RING_SIZE_BYTES     (FRAME_SIZE * BYTES_PER_SAMPLE * ORBITA_SAMPLE_RATE_HZ)       // sin margen= fs*2muestrasxframe*2bytesxmuestra
+#define SEND_CHUNK_BYTES    4096               // maximo que pedimos al ring por vuelta
 
-// El audio (header + datos) se manda por UART0 -- el mismo cable/puerto
-// que ya usabamos solo para logs -- en vez de por USB-Serial-JTAG, que
-// resulto tener throughput real de ~170 B/s para transferencias grandes
-// (medido: el driver acepta el audio casi instantaneo pero el envio real
-// por USB queda muy por detras, desacoplado -- inviable para un .wav de
-// cientos de KB). Un UART de verdad sostiene 921600 baud sin problema.
-//
-// ORBITA_UART_CONSOLE_BAUD tiene que coincidir con el baudrate de consola
-// real (CONFIG_ESP_CONSOLE_UART_BAUDRATE en sdkconfig, default 115200) --
-// es al que volvemos despues de mandar el audio, para que idf.py monitor
-// siga viendo los logs bien.
-#define ORBITA_UART_DATA_NUM UART_NUM_0
-#define ORBITA_UART_DATA_BAUD 921600
+#define ORBITA_UART_DATA_NUM     UART_NUM_0
+#define ORBITA_UART_DATA_BAUD    921600
 #define ORBITA_UART_CONSOLE_BAUD 115200
 
-// Margen maximo entre llamadas a orbita_audio_i2s_read() antes de arriesgar
-// overrun: dma_desc_num(6) * dma_frame_num(240) = 1440 frames (~90ms @16kHz)
-// de capacidad en el buffer interno del driver I2S.
-#define MAX_MARGEN_LECTURA_US 90000
+// ---------------------------------------------------------------------------
+// Estado compartido entre las dos tareas
+// ---------------------------------------------------------------------------
+// "volatile" le dice al compilador que estas variables pueden cambiar por
+// fuera del codigo que esta mirando (porque las toca OTRA tarea). Sin eso
+// podria guardarlas en un registro y nunca ver el cambio.
+static RingbufHandle_t ring_handle;            // captura -> envio
+static volatile bool capture_done;             // la captura ya termino
+static volatile bool sender_done;              // el envio ya termino
+static volatile uint32_t overruns;             // bloques que no entraron al ring
+static volatile uint32_t bytes_sent;           // bytes de audio mandados por UART
+static volatile size_t max_ocupado;            // maximo de bytes que llego a haber en el ring
 
-// Defino la cantidad de FRAMES por archivo TEST
-static size_t frame_count_test = TEST_DURATION_SEC * ORBITA_SAMPLE_RATE_HZ;
-static size_t frame_count_test_to_read = 1600; // cantidad de frames a leer en cada bloque (buffer temporal)
-
-// Calcula RMS de un canal a partir del buffer entrelazado L/R.
-// channel: 0 = izquierdo, 1 = derecho.
-// Sin uso por ahora (RMS en vivo desactivado, ver app_main) -- __attribute__
-// unused para que no tire warning de "funcion definida pero no usada".
-static double __attribute__((unused)) do_rms(const int32_t *data_buf, size_t frame_count, int channel)
+// ---------------------------------------------------------------------------
+// Tarea de envio: saca bytes del ring y los manda por UART0
+// ---------------------------------------------------------------------------
+static void tarea_envio(void *arg)
 {
-    double sum_rms = 0.0;
-    for (size_t i = 0; i < frame_count; i++) {
-        // Se descartan los 8 bits menos significativos (relleno/basura del
-        // slot de 32 bits; el mic solo entrega 24 bits utiles alineados a la
-        // izquierda). El shift preserva el signo porque sample es int32_t.
-        int32_t sample = data_buf[i * 2 + channel] >> 8;
-        // Cast a double ANTES de multiplicar: sample al cuadrado puede superar
-        // el rango de int32_t (overflow), asi que la multiplicacion tiene que
-        // hacerse ya en double, no despues de sumarla.
-        sum_rms += (double)sample * (double)sample;
+    while (1) {
+        // Leemos la bandera ANTES de pedir datos. Si ya estaba en true, es
+        // porque la captura termino de escribir todo antes de este momento;
+        // entonces, si el ring devuelve NULL (timeout), esta realmente vacio.
+        // Si leyeramos la bandera DESPUES, podria haberse escrito el ultimo
+        // bloque justo en el medio y lo perderiamos.
+        bool captura_termino = capture_done;
+
+        // Pide hasta SEND_CHUNK_BYTES bytes. Espera como maximo 50 ms por
+        // datos. Devuelve un PUNTERO adentro del ring (no copia nada) y en
+        // n cuantos bytes hay realmente (puede ser menos de lo pedido).
+        size_t n = 0;
+        uint8_t *p = xRingbufferReceiveUpTo(ring_handle, &n, pdMS_TO_TICKS(50), SEND_CHUNK_BYTES);
+
+        if (p == NULL) {
+            // Timeout: no habia datos.
+            if (captura_termino) {
+                break; // la captura termino Y el ring esta vacio: terminamos
+            }
+            continue;  // la captura sigue; esperamos a que llegue mas
+        }
+
+        // Mandamos al UART. Si el buffer TX del driver esta lleno, esta
+        // llamada BLOQUEA hasta que haya lugar: esa espera es la que frena
+        // al envio y permite que el ring se llene (la "contrapresion").
+        uart_write_bytes(ORBITA_UART_DATA_NUM, (const char *)p, n);
+
+        // Hay que DEVOLVER el item: hasta entonces ese espacio del ring
+        // sigue ocupado y no se puede reutilizar.
+        vRingbufferReturnItem(ring_handle, p);
+
+        bytes_sent += n;
     }
 
-    return sqrt(sum_rms / frame_count);
+    sender_done = true;
+    vTaskDelete(NULL); // una tarea de FreeRTOS NO puede hacer return: se borra a si misma
 }
 
 void app_main(void)
 {
-    // Instalamos el driver de UART0 (el mismo cable/puerto que hoy usa
-    // Puerto A para logs) para poder mandar el audio del WAV por ahi a
-    // alto baudrate. Mientras no estemos mandando audio, UART0 se sigue
-    // comportando igual que siempre (logs a 115200) -- ver el bloque de
-    // envio mas abajo, donde subimos el baudrate solo durante esa ventana.
-    // rx_buffer_size=256: no usamos RX (no leemos nada por este UART), pero
-    // el driver EXIGE un buffer RX mayor al FIFO de hardware (128 bytes)
-    // para instalarse -- pasar 0 tira "uart rx buffer length error" y
-    // aborta (visto en pruebas reales). 256 alcanza de sobra.
-    //
-    // OJO: la consola de ESP-IDF (CONFIG_ESP_CONSOLE_UART_NUM=0) puede
-    // haber instalado YA su propio driver sobre este mismo UART0 antes de
-    // que arranquemos -- instalarlo de nuevo devuelve ESP_ERR_INVALID_STATE,
-    // que NO es un error real (solo significa "ya hay uno, no hace falta
-    // instalarlo de nuevo"). Si lo tratamos como error fatal (como hacia
-    // antes con ESP_ERROR_CHECK a secas), abortaba el arranque entero --
-    // eso es lo que rompio todo la vez pasada.
+    // --- Setup UART0 ---
     esp_err_t uart_install_err = uart_driver_install(ORBITA_UART_DATA_NUM, 256, 8192, 0, NULL, 0);
     if (uart_install_err == ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG, "UART0 ya tenia un driver instalado (consola) -- lo reusamos.");
@@ -87,167 +92,142 @@ void app_main(void)
         ESP_ERROR_CHECK(uart_install_err);
     }
 
-    // Configuracion del driver USB-Serial-JTAG en modo lectura: define el
-    // tamaño de los buffers internos de RX (bytes que llegan de la PC) y TX
-    // (bytes que mandamos nosotros). Sin este paso, usb_serial_jtag_read_bytes
-    // no tiene de donde leer.
     usb_serial_jtag_driver_config_t usb_cfg = {
-        .rx_buffer_size = 256, // buffer chico: solo esperamos comandos de 1 byte
-        // TX mas grande: mandamos hasta 9600 bytes de un saque por bloque de
-        // audio (pack_buf); con 256 bytes el driver tenia que trocear cada
-        // bloque en ~38 vueltas internas de espera, penalizando el throughput.
-        .tx_buffer_size = 4096,
+        .rx_buffer_size = 256,
+        .tx_buffer_size = 256,
     };
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_cfg));
 
-    // Inicializaciòn del protocolo I2S.
     ESP_ERROR_CHECK(orbita_audio_i2s_init());
 
-    // Reservo memoria en la PSRAM para la cantidad de frames que ocupa un archivo de salida
-    int32_t *buf_psram = heap_caps_malloc(frame_count_test * FRAME_SIZE * sizeof(int32_t), MALLOC_CAP_SPIRAM);
-    if (buf_psram == NULL) {
-        // No hay memoria disponible: logueamos el motivo y cortamos aca.
-        // return sale de app_main() -> FreeRTOS borra esta tarea sola, no hace
-        // falta (ni corresponde) un "return -1" como en un main() de PC.
-        ESP_LOGE(TAG, "No se pudo reservar %d bytes en PSRAM", (int)(frame_count_test * FRAME_SIZE * sizeof(int32_t)));
+    ring_handle = xRingbufferCreate(RING_SIZE_BYTES, RINGBUF_TYPE_BYTEBUF);
+    if (ring_handle == NULL) {
+        ESP_LOGE(TAG, "No se pudo crear el ring buffer (%d bytes)", RING_SIZE_BYTES);
         return;
     }
 
-    ESP_LOGI(TAG, "Buffer en PSRAM reservado: %d frames (%d seg)", (int)frame_count_test, TEST_DURATION_SEC);
-
-    // Buffer chico y descartable para el modo "monitoreo" (cuando todavia no
-    // llego el comando 'g'): no hace falta PSRAM aca, se pisa en cada vuelta.
-    int32_t *monitor_buf = malloc(frame_count_test_to_read * FRAME_SIZE * sizeof(int32_t));
-    if (monitor_buf == NULL) {
-        ESP_LOGE(TAG, "No se pudo reservar el buffer de monitoreo");
+    // block_buf: aca deja i2s_read cada bloque, tal cual sale del mic (32 bit por muestra).
+    int32_t *block_buf = malloc(FRAMES_PER_BLOCK * FRAME_SIZE * sizeof(int32_t));
+    if (block_buf == NULL) {
+        ESP_LOGE(TAG, "No se pudo reservar block_buf");
         return;
     }
 
-    uint8_t cmd;
-    uint8_t *wav_header = malloc(WAV_HEADER_SIZE); // 44 bytes del header WAV
-    if (wav_header == NULL)
-    {
+    // pack_buf: el mismo bloque ya convertido a 16 bit (2 bytes por muestra), listo para el ring.
+    uint8_t *pack_buf = malloc(FRAMES_PER_BLOCK * FRAME_SIZE * BYTES_PER_SAMPLE);
+    if (pack_buf == NULL) {
+        ESP_LOGE(TAG, "No se pudo reservar pack_buf");
+        return;
+    }
+
+    uint8_t *wav_header = malloc(WAV_HEADER_SIZE);
+    if (wav_header == NULL) {
         ESP_LOGE(TAG, "No se pudo reservar la memoria en la RAM para el header.");
         return;
     }
 
-    // Buffer chico y reusable para empaquetar de a un bloque (32->24 bit)
-    // justo antes de mandarlo — evita duplicar en PSRAM los ~1.28MB de
-    // buf_psram en formato empaquetado.
-    uint8_t *pack_buf = malloc(frame_count_test_to_read * FRAME_SIZE * 3);
-    if (pack_buf == NULL) {
-        ESP_LOGE(TAG, "No se pudo reservar el buffer de empaquetado");
-        return;
-    }
+    uint8_t cmd;
 
     while (1) {
-        
-        // Lee 1 byte de la PC (sin bloquear, timeout=0). Si no hay nada, n=0 y cmd[0] queda sin modificar.
         int n = usb_serial_jtag_read_bytes(&cmd, sizeof(char), 0);
 
         if (n == 1 && cmd == 'g') {
-            size_t frames_acumulados = 0;
-            // t_fin_lectura_anterior en 0 = "todavia no hay lectura previa
-            // con la cual comparar" (recien vamos a arrancar la primera).
-            int64_t t_fin_lectura_anterior = 0;
 
-            while (frames_acumulados < frame_count_test) {
-                // Mido cuanto paso desde que termino la lectura anterior
-                // hasta que voy a pedir la proxima: ese es el tiempo que
-                // "gaste" haciendo do_rms/snprintf/write_bytes, y es lo que
-                // se compara contra el margen maximo antes de overrun.
-                if (t_fin_lectura_anterior != 0) {
-                    int64_t margen_us = esp_timer_get_time() - t_fin_lectura_anterior;
-                    if (margen_us > MAX_MARGEN_LECTURA_US) {
-                        ESP_LOGE(TAG, "Posible overrun: %lld us entre lecturas (max %d)", margen_us, MAX_MARGEN_LECTURA_US);
-                    } else {
-                        ESP_LOGI(TAG, "Margen entre lecturas: %lld us", margen_us);
-                    }
-                }
+            // --- Flags y variables de control compartidas ---
+            capture_done = false;
+            sender_done = false;
+            overruns = 0;
+            bytes_sent = 0;
+            max_ocupado = 0;
 
-                // Leer un bloque de frames y lo guardo en el buffer de PSRAM.
-                size_t frames_leidos_este_bloque = 0;
-                esp_err_t lectura_actual = orbita_audio_i2s_read(buf_psram + frames_acumulados * FRAME_SIZE, frame_count_test_to_read, &frames_leidos_este_bloque);
-                if(lectura_actual != ESP_OK){
-                    ESP_LOGE(TAG, "Error al leer frames [%d; %d + %d]: %s", (int)frames_acumulados, (int)frames_acumulados, (int)frame_count_test, esp_err_to_name(lectura_actual));
-                    break;
-                }
-                t_fin_lectura_anterior = esp_timer_get_time();
+            // --- 2. Aviso a la PC + header + cambio de baud ---
 
-                // RMS en vivo desactivado a proposito (simplificacion
-                // temporal): no lo necesitamos para descargar el .wav, y
-                // sacarlo reduce trafico/puntos de falla en el puerto de
-                // comandos mientras depuramos el envio por UART0. Se puede
-                // reactivar despues llamando do_rms() aca de nuevo.
-
-                frames_acumulados += frames_leidos_este_bloque;
-            }
-
-            // Armo el header con el tamaño REAL capturado (frames_acumulados
-            // puede ser menor a frame_count_test si alguna lectura fallo a
-            // mitad de la grabacion) — asi el .wav queda consistente con lo
-            // que realmente se grabo, en vez de declarar un tamaño mayor al
-            // de los datos que van a seguir.
-            // Le avisamos a la PC por Puerto B (USB-Serial-JTAG, como
-            // siempre -- ahi sigue viviendo el comando 'g' y el RMS en
-            // vivo) que el audio en si viene por Puerto A (UART0) ahora,
-            // no por aca. Sin este marcador, Python no sabe cuando dejar
-            // de esperar lineas de RMS y pasar a escuchar el otro puerto.
+            // Avisamos a la PC (por USB-Serial-JTAG) que el audio viene ahora por UART0.
             const char *wav_start_marker = "WAV_ON_UART0\n";
             usb_serial_jtag_write_bytes(wav_start_marker, strlen(wav_start_marker), portMAX_DELAY);
 
-            uint32_t wav_data_size = (uint32_t)(frames_acumulados * FRAME_SIZE * 3);
-            wav_build_header(wav_header, ORBITA_SAMPLE_RATE_HZ, FRAME_SIZE, 24, wav_data_size);
+            // Header con el tamaño TOTAL declarado de antemano (en streaming no
+            // sabemos cuanto se va a capturar de verdad; la PC compara bytes
+            // recibidos contra este numero para detectar huecos).
+            uint32_t wav_data_size = (uint32_t)(STREAM_SECONDS * ORBITA_SAMPLE_RATE_HZ * FRAME_SIZE * BYTES_PER_SAMPLE);
+            wav_build_header(wav_header, ORBITA_SAMPLE_RATE_HZ, FRAME_SIZE, BYTES_PER_SAMPLE * 8, wav_data_size);
 
-            // A partir de aca mandamos TODO (header + audio) por UART0 a
-            // baudrate alto. Silenciamos los logs mientras dure esta
-            // ventana: si un ESP_LOGI se cuela en medio, corrompe el
-            // archivo (texto de log mezclado con bytes binarios en el
-            // mismo cable). Los restauramos apenas terminamos.
+            // Desde aca y hasta el final de la grabacion NO puede salir ningun
+            // log por UART0: se mezclaria texto con el audio binario y
+            // corromperia el archivo. Por eso los apagamos y subimos el baud.
             esp_log_level_set("*", ESP_LOG_NONE);
             uart_set_baudrate(ORBITA_UART_DATA_NUM, ORBITA_UART_DATA_BAUD);
 
+            // El header lo manda app_main ANTES de crear la tarea de envio:
+            // asi esta garantizado que es lo primero que sale por el cable.
             uart_write_bytes(ORBITA_UART_DATA_NUM, (const char *)wav_header, WAV_HEADER_SIZE);
 
-            // Empaqueto y mando el audio de a bloques (32->24 bit), reusando
-            // el mismo pack_buf chico en cada vuelta.
-            size_t frames_enviados = 0;
-            while (frames_enviados < frames_acumulados) {
-                size_t frames_este_bloque = frame_count_test_to_read;
-                if (frames_enviados + frames_este_bloque > frames_acumulados) {
-                    frames_este_bloque = frames_acumulados - frames_enviados;
+            // --- 3. Lanzar la tarea de envio ---
+            // Parametros: funcion, nombre, stack en bytes, argumento, prioridad, handle.
+            // Prioridad 5 (mayor que la de app_main, que es 1): casi todo el
+            // tiempo esta bloqueada esperando datos o esperando al UART, asi que
+            // no le saca CPU a la captura; cuando hay algo para mandar, lo manda ya.
+            xTaskCreate(tarea_envio, "envio", 4096, NULL, 5, NULL);
+
+            // --- 4. Captura (corre aca, en app_main) ---
+            size_t frames_totales = (size_t)STREAM_SECONDS * ORBITA_SAMPLE_RATE_HZ;
+            size_t frames_capturados = 0;
+
+            while (frames_capturados < frames_totales) {
+                // Pedimos de a FRAMES_PER_BLOCK, pero en el ultimo bloque solo lo que falta,
+                // para no pasarnos del total declarado en el header.
+                size_t frames_a_pedir = frames_totales - frames_capturados;
+                if (frames_a_pedir > FRAMES_PER_BLOCK) {
+                    frames_a_pedir = FRAMES_PER_BLOCK;
                 }
 
-                size_t bytes_empaquetados = wav_pack_block_24bit(
-                    buf_psram + frames_enviados * FRAME_SIZE, frames_este_bloque, pack_buf);
-                uart_write_bytes(ORBITA_UART_DATA_NUM, (const char *)pack_buf, bytes_empaquetados);
+                size_t leidos = 0;
+                esp_err_t err = orbita_audio_i2s_read(block_buf, frames_a_pedir, &leidos);
+                if (err != ESP_OK) {
+                    break; // sin logs (estan apagados): se nota porque bytes_sent < esperado
+                }
 
-                frames_enviados += frames_este_bloque;
+                // 32 bit -> 16 bit. Devuelve cuantos bytes escribio en pack_buf.
+                size_t bytes = wav_pack_block_16bit(block_buf, leidos, pack_buf);
+
+                // Timeout 0 = no esperar. Si no hay lugar en el ring, el bloque se
+                // pierde y lo contamos: esa grabacion tiene un hueco.
+                if (xRingbufferSend(ring_handle, pack_buf, bytes, 0) != pdTRUE) {
+                    overruns++;
+                }
+
+                // Que tan lleno llego a estar el ring (sirve para dimensionarlo).
+                size_t ocupado = RING_SIZE_BYTES - xRingbufferGetCurFreeSize(ring_handle);
+                if (ocupado > max_ocupado) {
+                    max_ocupado = ocupado;
+                }
+
+                frames_capturados += leidos;
             }
 
-            // Esperamos a que salgan FISICAMENTE todos los bytes del FIFO
-            // antes de bajar el baudrate -- si no, los ultimos bytes que
-            // todavia estan "en vuelo" saldrian a un baudrate distinto del
-            // que se armaron, y quedarian corridos/corruptos.
+            // --- 5. Cierre ---
+            // Le avisamos a la tarea de envio que ya no va a llegar mas audio.
+            capture_done = true;
+
+            // Esperamos a que termine de vaciar el ring.
+            while (!sender_done) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+
+            // Esperar a que salgan FISICAMENTE los ultimos bytes del UART antes
+            // de bajar el baud; si no, los ultimos quedan corruptos.
             uart_wait_tx_done(ORBITA_UART_DATA_NUM, portMAX_DELAY);
             uart_set_baudrate(ORBITA_UART_DATA_NUM, ORBITA_UART_CONSOLE_BAUD);
             esp_log_level_set("*", ESP_LOG_INFO);
 
-            ESP_LOGI(TAG, "Envio de audio por UART0 completo: %d bytes", (int)(frames_enviados * FRAME_SIZE * 3));
-
+            ESP_LOGI(TAG, "Fin: mandados %u de %u bytes, overruns=%u, ring maximo=%u de %u bytes",
+                     (unsigned)bytes_sent, (unsigned)wav_data_size, (unsigned)overruns,
+                     (unsigned)max_ocupado, (unsigned)RING_SIZE_BYTES);
         } else {
-            // Todavia no llego 'g': leo un bloque a un buffer descartable
-            // (siempre a la misma direccion, monitor_buf, se pisa cada vez)
-            // solo para mantener el pipeline I2S drenado (evitar overrun
-            // mientras esperamos el comando). RMS en vivo desactivado a
-            // proposito -- ver comentario en la rama de grabacion.
-            size_t frames_leidos_monitor = 0;
-            esp_err_t lectura_actual = orbita_audio_i2s_read(monitor_buf, frame_count_test_to_read, &frames_leidos_monitor);
-            if (lectura_actual != ESP_OK) {
-                ESP_LOGE(TAG, "Error al leer bloque de monitoreo: %s", esp_err_to_name(lectura_actual));
-            }
+            // Esperando 'g': hay que seguir leyendo el I2S (si nadie lo vacia, el DMA
+            // se pisa) pero los datos se tiran.
+            size_t leidos = 0;
+            orbita_audio_i2s_read(block_buf, FRAMES_PER_BLOCK, &leidos);
         }
-
     }
-
 }
