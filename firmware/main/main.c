@@ -15,7 +15,7 @@ static const char *TAG = "orbita_main";
 // ---------------------------------------------------------------------------
 // Constantes
 // ---------------------------------------------------------------------------
-#define STREAM_SECONDS      10                 // 10 para probar, 600 para la grabacion larga
+#define STREAM_SECONDS      60                 // 10 para probar, 600 para la grabacion larga
 #define FRAME_SIZE          2                  // muestras por frame (L y R)
 #define FRAMES_PER_BLOCK    1600               // frames por i2s_read (100 ms)
 #define BYTES_PER_SAMPLE    2                  // 16 bit en el cable
