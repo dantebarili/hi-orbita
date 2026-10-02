@@ -11,3 +11,6 @@ tools/__pycache__/
 
 # Grabaciones de prueba (no versionar audio de test)
 tools/*.wav
+
+# Grabaciones de ruido de laboratorio
+tools/ruido_labo/

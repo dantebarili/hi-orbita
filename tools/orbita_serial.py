@@ -22,9 +22,10 @@ Ej:  python orbita_serial.py COM5 COM3
 """
 
 import argparse
+import re
 import struct
 import time
-from datetime import datetime
+from pathlib import Path
 
 import serial
 
@@ -42,7 +43,20 @@ def parse_args():
     parser.add_argument("cmd_port", help="Puerto COM del USB-Serial-JTAG nativo (Puerto B)")
     parser.add_argument("data_port", help="Puerto COM del UART0/chip puente (Puerto A), sin monitor abierto")
     parser.add_argument("--cmd-baud", type=int, default=115200)
+    parser.add_argument("--out-dir", type=Path, default=Path(__file__).parent / "ruido_labo",
+                        help="carpeta donde se guardan las grabaciones (default: tools/ruido_labo)")
+    parser.add_argument("--prefix", default="ruido_labo",
+                        help="prefijo del nombre: <prefix>1.wav, <prefix>2.wav, ... (default: ruido_labo)")
     return parser.parse_args()
+
+
+def next_filename(out_dir: Path, prefix: str) -> Path:
+    # Siguiente numero libre: mira los <prefix>N.wav que ya hay en la carpeta
+    # y usa el maximo N + 1, asi nunca pisa una grabacion anterior.
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pattern = re.compile(rf"^{re.escape(prefix)}(\d+)\.wav$")
+    numbers = [int(m.group(1)) for f in out_dir.iterdir() if (m := pattern.match(f.name))]
+    return out_dir / f"{prefix}{max(numbers, default=0) + 1}.wav"
 
 
 def wav_data_size(header: bytes) -> int:
@@ -107,7 +121,7 @@ def read_firmware_summary(ser_data: serial.Serial) -> None:
     print("No se vio la linea final del firmware (no implica error; mira el tamano recibido).")
 
 
-def record(ser_cmd: serial.Serial, ser_data: serial.Serial) -> None:
+def record(ser_cmd: serial.Serial, ser_data: serial.Serial, out_dir: Path, prefix: str) -> None:
     ser_cmd.reset_input_buffer()
     ser_cmd.write(b"g")
 
@@ -128,7 +142,7 @@ def record(ser_cmd: serial.Serial, ser_data: serial.Serial) -> None:
     total = wav_data_size(header)
     print(f"Header OK, esperando {total} bytes de audio...")
 
-    filename = datetime.now().strftime("orbita_%Y%m%d_%H%M%S.wav")
+    filename = next_filename(out_dir, prefix)
     received = 0
     t_start = time.monotonic()
     t_progress = t_start
@@ -166,7 +180,7 @@ def main():
         while True:
             line = input("Escribi 'g' + Enter para grabar (q para salir): ").strip().lower()
             if line == "g":
-                record(ser_cmd, ser_data)
+                record(ser_cmd, ser_data, args.out_dir, args.prefix)
             elif line == "q":
                 break
     except (KeyboardInterrupt, EOFError):
