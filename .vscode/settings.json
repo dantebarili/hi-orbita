@@ -1,0 +1,12 @@
+{
+    "idf.pythonInstallPath": "C:\\Espressif\\tools\\idf-python\\3.11.2\\python.exe",
+    "idf.espIdfPath": "C:\\Espressif\\frameworks\\esp-idf-v5.5.5",
+    "idf.toolsPath": "C:\\Espressif",
+    "idf.currentSetup": "C:\\Espressif\\frameworks\\esp-idf-v5.5.5",
+    "idf.projectPath": "${workspaceFolder}\\firmware",
+    "idf.buildPath": "${workspaceFolder}\\firmware\\build",
+    "idf.flashType": "UART",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/firmware/build/compile_commands.json",
+    "C_Cpp.default.compilerPath": "C:\\Espressif\\tools\\xtensa-esp-elf\\esp-14.2.0_20260121\\xtensa-esp-elf\\bin\\xtensa-esp32s3-elf-gcc.exe",
+    "C_Cpp.intelliSenseEngine": "default"
+}

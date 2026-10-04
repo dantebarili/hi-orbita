@@ -15,7 +15,7 @@ static const char *TAG = "orbita_main";
 // ---------------------------------------------------------------------------
 // Constantes
 // ---------------------------------------------------------------------------
-#define STREAM_SECONDS      60                 // 10 para probar, 600 para la grabacion larga
+#define STREAM_SECONDS      600                // 10 para probar, 600 para la grabacion larga
 #define FRAME_SIZE          2                  // muestras por frame (L y R)
 #define FRAMES_PER_BLOCK    1600               // frames por i2s_read (100 ms)
 #define BYTES_PER_SAMPLE    2                  // 16 bit en el cable
@@ -45,10 +45,10 @@ static volatile size_t max_ocupado;            // maximo de bytes que llego a ha
 static void tarea_envio(void *arg)
 {
     while (1) {
-        // Leemos la bandera ANTES de pedir datos. Si ya estaba en true, es
+        // Leemos la flag ANTES de pedir datos. Si ya estaba en true, es
         // porque la captura termino de escribir todo antes de este momento;
         // entonces, si el ring devuelve NULL (timeout), esta realmente vacio.
-        // Si leyeramos la bandera DESPUES, podria haberse escrito el ultimo
+        // Si leyeramos la flag DESPUES, podria haberse escrito el ultimo
         // bloque justo en el medio y lo perderiamos.
         bool captura_termino = capture_done;
 
@@ -71,15 +71,14 @@ static void tarea_envio(void *arg)
         // al envio y permite que el ring se llene (la "contrapresion").
         uart_write_bytes(ORBITA_UART_DATA_NUM, (const char *)p, n);
 
-        // Hay que DEVOLVER el item: hasta entonces ese espacio del ring
-        // sigue ocupado y no se puede reutilizar.
+        // Se debe devolver el item
         vRingbufferReturnItem(ring_handle, p);
 
         bytes_sent += n;
     }
 
     sender_done = true;
-    vTaskDelete(NULL); // una tarea de FreeRTOS NO puede hacer return: se borra a si misma
+    vTaskDelete(NULL); 
 }
 
 void app_main(void)
@@ -140,7 +139,7 @@ void app_main(void)
             bytes_sent = 0;
             max_ocupado = 0;
 
-            // --- 2. Aviso a la PC + header + cambio de baud ---
+            // --- Aviso a la PC + header + cambio de baud ---
 
             // Avisamos a la PC (por USB-Serial-JTAG) que el audio viene ahora por UART0.
             const char *wav_start_marker = "WAV_ON_UART0\n";
@@ -162,7 +161,7 @@ void app_main(void)
             // asi esta garantizado que es lo primero que sale por el cable.
             uart_write_bytes(ORBITA_UART_DATA_NUM, (const char *)wav_header, WAV_HEADER_SIZE);
 
-            // --- 3. Lanzar la tarea de envio ---
+            // --- Lanzar la tarea de envio ---
             // Parametros: funcion, nombre, stack en bytes, argumento, prioridad, handle.
             // Prioridad 5 (mayor que la de app_main, que es 1): casi todo el
             // tiempo esta bloqueada esperando datos o esperando al UART, asi que
