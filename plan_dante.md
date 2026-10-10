@@ -15,7 +15,9 @@ Orden: **A (flujo perfecto) → B (AFE integrado y medido) → C (listo para soc
 
 **Antes de pushear:** avisar al compañero. Al hacer pull se le borra su `.vscode/settings.json` (ahora es `settings.example.json`); que lo copie antes. Sin commitear: `plan_dante.md`, `main.c.old`, cambios del vault.
 
-**A0 hecho (2026-10-10), falta probar en el chip:** al flashear, el log de arranque tiene que decir `SPI Mode : QIO`; si no arranca, volver la flash a DIO (ver `arquitectura.md`, sección 1). Hay que borrar el `sdkconfig` local y reconfigurar al hacer pull.
+**Retomar:** `arquitectura.md` §3.6 (cómo se cierra el segmento urgente y la latencia; decisiones en orden). Falta commitear lo del 2026-10-10.
+
+**A0 hecho (2026-10-10), falta probar en el chip:** al flashear, el log de arranque tiene que decir `SPI Mode : QIO`; si no arranca, volver la flash a DIO (ver `arquitectura.md`, §1). Hay que borrar el `sdkconfig` local y reconfigurar al hacer pull.
 
 **Por verificar (no confirmado):** chunk del AFE = 512 muestras/canal (del reviewer, de memoria); ICS-43434 a 16 kHz (datasheet).
 
@@ -56,10 +58,10 @@ Pasos (fixes del `embedded-reviewer` del 2026-10-06 más lo que salió de revisa
   - Prueba: `vTaskDelay(200)` en el loop de captura; el contador tiene que subir.
 - [ ] **A2. Captura en tarea propia** *(código escrito y compilado 2026-10-10, core 1, prioridad 6; falta probar en el labo: 60 s con `overruns=0` y `dma_overflows=0`)* (hoy corre en `app_main`, prioridad 1), con prioridad mayor que las del AFE y fijada a un core.
 - [x] **A3. Estructura en componente — hecho 2026-10-10** *(solo se movieron `audio_capture`, `wav_writer` y la dependencia `esp-sr`; `tarea_captura`, constantes y ring siguen en `main.c` hasta A5–A8; build idéntico, 0x3b7c0)*: mover `audio_capture`, `wav_writer` y lo que se sume a `firmware/components/orbita_audio/` (con su `CMakeLists.txt`); `main/` queda fino. Mover ahí también la dependencia `esp-sr` del `idf_component.yml`. Es barato ahora y caro cuando el compañero ya tenga código en `main.c`.
-- [ ] **A4. Tamaño de bloque = chunk del AFE** (`get_feed_chunksize()`, a verificar; el reviewer estima 512 muestras/canal a 16 kHz). Hoy 1600 no es múltiplo. Un solo parámetro que B ajusta a lo que devuelva el AFE en runtime, sin rehacer el ring.
-- [ ] **A5. Ring** *(políticas decididas 2026-10-10, ver `arquitectura.md` sección 5; falta implementar el ring de slots y verificar si `feed()` bloquea)* (decisiones de producto en `orbita-obsidian/arquitectura.md`; Claude sugiere dos rings, Dante investiga cómo se suele hacer antes de cerrar): **primero definir las políticas** (reintentos de la FSM, pre-roll, qué pasa al llenarse) y recién ahí el tipo: el ring de FreeRTOS es de consumo único y no permite releer para reintentar. En PSRAM (`xRingbufferCreateWithCaps` existe en 5.5.5, pero el struct de control también cae en PSRAM; alternativa `xRingbufferCreateStatic`). Antes de armar ring 1, ver si `feed()` bloquea y qué hace `afe_ringbuf_size`. Hoy el ring es `BYTEBUF` y su memoria la decide `malloc` (con `SPIRAM_USE_MALLOC` y umbral de 16 KB probablemente ya cae en PSRAM: confirmarlo).
+- [ ] **A4. Chunk de captura = chunk del AFE** (`get_feed_chunksize()`, a verificar; el reviewer estima 512 muestras/canal a 16 kHz). Hoy 1600 no es múltiplo. Un solo parámetro que B ajusta a lo que devuelva el AFE en runtime, sin rehacer el ring.
+- [ ] **A5. Ring** *(políticas decididas 2026-10-10, ver `arquitectura.md` §3.4; falta implementar el ring de slots y verificar si `feed()` bloquea)* (decisiones de producto en `orbita-obsidian/arquitectura.md`; Claude sugiere dos rings, Dante investiga cómo se suele hacer antes de cerrar): **primero definir las políticas** (reintentos de la FSM, pre-roll, qué pasa al llenarse) y recién ahí el tipo: el ring de FreeRTOS es de consumo único y no permite releer para reintentar. En PSRAM (`xRingbufferCreateWithCaps` existe en 5.5.5, pero el struct de control también cae en PSRAM; alternativa `xRingbufferCreateStatic`). Antes de armar ring 1, ver si `feed()` bloquea y qué hace `afe_ringbuf_size`. Hoy el ring es `BYTEBUF` y su memoria la decide `malloc` (con `SPIRAM_USE_MALLOC` y umbral de 16 KB probablemente ya cae en PSRAM: confirmarlo).
   - **Dimensionar para sockets:** cuántos segundos de corte de WiFi tiene que absorber (a 64 KB/s, 10 s = 640 KB; si el ring largo es mono procesado, la mitad) y qué pasa cuando se llena.
-- [ ] **A6. Contrato del chunk (lo que ve cualquier consumidor).** Cada ítem del ring lleva un **encabezado chico**: número de secuencia, cantidad de canales/muestras y flag de discontinuidad. Con eso (a) el socket puede mandarlo tal cual y el backend detecta huecos, (b) el WAV de estudio sabe dónde se perdió audio, (c) no hay que rediseñar al sumar sockets. Definirlo ahora; es lo que el compañero más va a necesitar.
+- [ ] **A6. Contrato del chunk (lo que ve cualquier consumidor).** Encabezado de 16 B por chunk del ring 2 y tabla de segmentos: diseño en `arquitectura.md` §3.4; falta revisarlo con el compañero y codearlo junto con el ring (A5).
 - [ ] **A7. Interfaz del consumidor ("sink")** con operaciones mínimas: abrir/empezar, recibir chunk, cerrar. Implementaciones: `uart_sink` (estudio, lo que hoy hace `tarea_envio`) y, para probar sin red, `throttled_sink` (consume a ritmo configurable y se puede "cortar" N segundos). El socket del compañero será una tercera implementación.
 - [ ] **A8. Interfaz de control** (arrancar/parar el flujo): hoy lo dispara el comando `'g'`; mañana lo dispara la FSM (`dev_wake_word`, `dev_fin_segmento`). `main.c` solo traduce comandos a esas llamadas. Sin wake word entrenada todavía, el disparo manual (o el VAD del AFE) hace de stub.
 - [ ] **A9.** `CONFIG_I2S_ISR_IRAM_SAFE` y más descriptores DMA (`dma_desc_num` 8–12).
@@ -68,7 +70,7 @@ Pasos (fixes del `embedded-reviewer` del 2026-10-06 más lo que salió de revisa
 - [ ] **A12. Pruebas de validación:**
   - Captura larga (10 min, en el labo): línea "Fin: ..." con ambos contadores en 0 y WAV sin saltos (un tono conocido ayuda a ver huecos).
   - **Corte simulado con `throttled_sink`:** parar el consumidor 5, 10 y 20 s. Verificar que el ring absorbe lo prometido en A5 y que, al llenarse, la discontinuidad llega marcada al consumidor y los contadores lo reflejan. Valida el tamaño del ring sin necesitar sockets.
-- [ ] **A13. Menores:** borrar `wav_pack_block_24bit` (muerto), comentarios desactualizados, `FRAME_SIZE` → `CHANNELS`, capacidad de `out_buf` en `wav_pack_block_16bit`.
+- [ ] **A13. Menores:** borrar `wav_pack_chunk_24bit` (muerto), comentarios desactualizados, `FRAME_SIZE` → `CHANNELS`, capacidad de `out_buf` en `wav_pack_chunk_16bit`.
 
 **No tocar la ganancia/shift de captura** una vez que se graba: los picos andan en −25 a −30 dBFS (margen cómodo contra clipping) y cambiarlo invalida lo grabado con la ESP.
 
@@ -82,7 +84,7 @@ Se integra **como medición**: el resultado confirma o descarta, no se da por de
   - Modo 2: `SR_NSN_NSNET2` o `NSNET3` + `SR_VADN_VADNET1_MEDIUM` (cuál NSNet: NSNet3 pesa 113 KB, NSNet2 334 KB; probar el que entre en CPU).
   - Medir en cada uno: CPU (% de núcleo), RAM interna y PSRAM, latencia del `fetch`, `overruns`/`dma_overflows` en 0, y calidad de la salida (SNR y si se come consonantes como r, b).
   - Cambiar de modo es cambiar el `sdkconfig` y recompilar: dejar anotado en el informe qué modo se usó en cada toma.
-- [ ] Levantar el AFE: 2 mics, WakeNet apagado, NS y VAD activos, AGC apagado. Solo `feed` + `fetch`, en tareas propias (fetch tiene que correr tan rápido como feed o el AFE se atrasa). Ajustar el bloque de A4 al chunk real.
+- [ ] Levantar el AFE: 2 mics, WakeNet apagado, NS y VAD activos, AGC apagado. Solo `feed` + `fetch`, en tareas propias (fetch tiene que correr tan rápido como feed o el AFE se atrasa). Ajustar el chunk de A4 al valor real.
 - [ ] **Crear el AFE al arrancar, antes del `'g'`.** `esp-sr` imprime config al crearse y, si algo escribe por `printf` durante el streaming por UART0, corrompe el audio (apagar `esp_log` no frena `printf`). Verificar en una captura que el WAV no tiene texto adentro.
 - [ ] Loguear tamaños de chunk, RAM y CPU (completa los pasos 1–2 de `orbita-obsidian/plan-presupuesto-ram-cpu.md`). Documentar en `orbita-obsidian/`.
 - [ ] Confirmar que con el AFE andando siguen `overruns=0` y `dma_overflows=0` (el AFE compite por CPU; es la prueba real de A2).

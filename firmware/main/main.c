@@ -20,8 +20,8 @@ static const char *TAG = "orbita_main";
 #define CHANNELS            2                  // mics (L y R); tras el AFE la salida sera mono
 #define BYTES_PER_SAMPLE    2                  // 16 bit en el cable
 #define FRAME_BYTES         (CHANNELS * BYTES_PER_SAMPLE)       // un frame = una muestra por canal
-#define FRAMES_PER_BLOCK    1600               // frames por i2s_read (100 ms); pasara a ser el chunk del AFE
-#define BLOCK_BYTES         (FRAMES_PER_BLOCK * FRAME_BYTES)    // un bloque ya en 16 bit
+#define FRAMES_PER_CHUNK    1600               // frames por i2s_read (100 ms); pasara a ser el chunk del AFE
+#define CHUNK_BYTES         (FRAMES_PER_CHUNK * FRAME_BYTES)    // un chunk ya en 16 bit
 
 // --- Ring (el tamaño se redefine segun la politica de perdida) ---
 #define RING_SECONDS        1                  // audio que absorbe, sin margen
@@ -29,18 +29,18 @@ static const char *TAG = "orbita_main";
 
 // --- TEST por UART (desaparecen o pasan al sink UART) ---
 #define STREAM_SECONDS      600                // 10 para probar, 600 para la grabacion larga
-#define SEND_CHUNK_BYTES    4096               // maximo que se pide al ring por vuelta
+#define UART_SEND_BYTES    4096               // maximo que se pide al ring por vuelta
 #define ORBITA_UART_DATA_NUM     UART_NUM_0
 #define ORBITA_UART_DATA_BAUD    921600        // durante la grabacion (audio)
 #define ORBITA_UART_CONSOLE_BAUD 115200        // el resto del tiempo (logs)
 
 // --- Verificaciones en compilacion ---
 // Si se cambia un numero y se rompe una relacion, no compila.
-// El ring debe ser multiplo del bloque: si no, un bloque se parte en el borde
+// El ring debe ser multiplo del chunk: si no, un chunk se parte en el borde
 // y una lectura puede cortar una muestra a la mitad (se cruzan L y R).
-_Static_assert(RING_SIZE_BYTES % BLOCK_BYTES == 0, "RING_SIZE_BYTES debe ser multiplo de BLOCK_BYTES");
+_Static_assert(RING_SIZE_BYTES % CHUNK_BYTES == 0, "RING_SIZE_BYTES debe ser multiplo de CHUNK_BYTES");
 // Lo que se lee del ring tiene que ser un numero entero de frames.
-_Static_assert(SEND_CHUNK_BYTES % FRAME_BYTES == 0, "SEND_CHUNK_BYTES debe ser multiplo de FRAME_BYTES");
+_Static_assert(UART_SEND_BYTES % FRAME_BYTES == 0, "UART_SEND_BYTES debe ser multiplo de FRAME_BYTES");
 
 // =============================================================================
 //  ESTADO COMPARTIDO ENTRE TAREAS
@@ -54,7 +54,7 @@ static volatile bool capture_done;             // captura -> envio / app_main: l
 static volatile bool sender_done;              // envio -> app_main: el envio termino
 
 // Metricas de la toma
-static volatile uint32_t overruns;             // bloques que no entraron al ring
+static volatile uint32_t overruns;             // chunks que no entraron al ring
 static volatile uint32_t bytes_sent;           // bytes de audio mandados por UART
 static volatile size_t max_ocupado;            // maximo de bytes que llego a haber en el ring
 
@@ -66,13 +66,13 @@ static void tarea_envio(void *arg)
     while (1) {
         // La flag se lee ANTES de pedir datos. Si ya era true, la captura habia
         // terminado de escribir; entonces un ring vacio (NULL) es realmente el
-        // final. Leerla despues podria perder un ultimo bloque escrito en el medio.
+        // final. Leerla despues podria perder un ultimo chunk escrito en el medio.
         bool captura_termino = capture_done;
 
-        // Pide hasta SEND_CHUNK_BYTES y espera como mucho 50 ms. Devuelve un
+        // Pide hasta UART_SEND_BYTES y espera como mucho 50 ms. Devuelve un
         // puntero DENTRO del ring (no copia) y en `n` cuantos bytes hay (<= lo pedido).
         size_t n = 0;
-        uint8_t *p = xRingbufferReceiveUpTo(ring_handle, &n, pdMS_TO_TICKS(50), SEND_CHUNK_BYTES);
+        uint8_t *p = xRingbufferReceiveUpTo(ring_handle, &n, pdMS_TO_TICKS(50), UART_SEND_BYTES);
 
         if (p == NULL) {
             if (captura_termino) {
@@ -96,16 +96,16 @@ static void tarea_envio(void *arg)
 // =============================================================================
 //  TAREA DE CAPTURA  -  I2S -> ring
 // =============================================================================
-// Corre siempre y nunca termina. Con toma en curso manda los bloques al ring;
+// Corre siempre y nunca termina. Con toma en curso manda los chunks al ring;
 // sin toma los tira, pero igual hay que seguir leyendo para vaciar el DMA.
 static void tarea_captura(void *arg)
 {
     // --- Buffers ---
-    // block_buf: bloque tal cual sale del mic (32 bit por muestra).
-    // pack_buf:  el mismo bloque en 16 bit, listo para el ring.
-    int32_t *block_buf = malloc(FRAMES_PER_BLOCK * CHANNELS * sizeof(int32_t));
-    uint8_t *pack_buf = malloc(BLOCK_BYTES);
-    if (block_buf == NULL || pack_buf == NULL) {
+    // chunk_buf: chunk tal cual sale del mic (32 bit por muestra).
+    // pack_buf:  el mismo chunk en 16 bit, listo para el ring.
+    int32_t *chunk_buf = malloc(FRAMES_PER_CHUNK * CHANNELS * sizeof(int32_t));
+    uint8_t *pack_buf = malloc(CHUNK_BYTES);
+    if (chunk_buf == NULL || pack_buf == NULL) {
         ESP_LOGE(TAG, "No se pudieron reservar los buffers de captura");
         vTaskDelete(NULL);  // una tarea nunca hace return: se borra a si misma
     }
@@ -122,15 +122,15 @@ static void tarea_captura(void *arg)
         grabando_antes = graba;
 
         // --- Lectura del I2S ---
-        // De a FRAMES_PER_BLOCK; el ultimo bloque de la toma solo pide lo que
+        // De a FRAMES_PER_CHUNK; el ultimo chunk de la toma solo pide lo que
         // falta, para no pasarse del total declarado en el header.
-        size_t frames_a_pedir = FRAMES_PER_BLOCK;
+        size_t frames_a_pedir = FRAMES_PER_CHUNK;
         if (graba && frames_objetivo - frames_capturados < frames_a_pedir) {
             frames_a_pedir = frames_objetivo - frames_capturados;
         }
 
         size_t frames_leidos = 0;
-        esp_err_t err = orbita_audio_i2s_read(block_buf, frames_a_pedir, &frames_leidos);
+        esp_err_t err = orbita_audio_i2s_read(chunk_buf, frames_a_pedir, &frames_leidos);
         if (err != ESP_OK) {
             if (graba) {
                 // Sin log (estan apagados durante la toma): se nota porque bytes_sent < esperado.
@@ -142,13 +142,13 @@ static void tarea_captura(void *arg)
         }
 
         if (!graba) {
-            continue;  // sin toma: el bloque se descarta
+            continue;  // sin toma: el chunk se descarta
         }
 
         // --- Conversion y envio al ring ---
-        size_t bytes = wav_pack_block_16bit(block_buf, frames_leidos, pack_buf);  // 32 -> 16 bit
+        size_t bytes = wav_pack_chunk_16bit(chunk_buf, frames_leidos, pack_buf);  // 32 -> 16 bit
 
-        // Timeout 0: si no hay lugar, el bloque se pierde y queda contado (hueco en la toma).
+        // Timeout 0: si no hay lugar, el chunk se pierde y queda contado (hueco en la toma).
         if (xRingbufferSend(ring_handle, pack_buf, bytes, 0) != pdTRUE) {
             overruns++;
         }

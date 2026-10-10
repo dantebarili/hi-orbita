@@ -13,11 +13,11 @@ Objetivo: saber, **antes de integrar**, si AFE + wake word + WiFi/TLS/WebSocket 
 
 Idea clave: la PSRAM sobra, la RAM interna se llena primero. El audio en PSRAM casi no cuenta; lo que hay que vigilar es RAM interna y CPU de los "plugins".
 
-## Decisión previa: chunk provisorio
+## Decisión previa: segmento provisorio
 
 El buffer de audio es barato (mono 16 kHz / 16-bit = 32 KB/s):
 
-| Chunk | Ping-pong (2 buffers) | % de PSRAM |
+| Segmento | Ping-pong (2 buffers) | % de PSRAM |
 |---|---|---|
 | 0,5 s | 32 KB | 0,4 % |
 | 2 s | 128 KB | 1,6 % |
@@ -25,14 +25,14 @@ El buffer de audio es barato (mono 16 kHz / 16-bit = 32 KB/s):
 
 - Tomar **1–2 s como valor provisorio** para el presupuesto; se afina con el compañero (frente Comunicación).
 - **Pregunta abierta que lo define:** ¿cuánto se acepta esperar la respuesta a una pregunta puntual ("¿qué hora es?") desde que el médico termina de hablar?
-- Hay 3 niveles de buffer: DMA del I2S (chico, RAM interna), frame del AFE (lo fija la librería, es un dato) y chunk de transmisión (el único que se elige).
+- Hay 3 niveles de buffer: DMA del I2S (chico, RAM interna), chunk del AFE (lo fija la librería, es un dato) y segmento de transmisión (el único que se elige).
 - Ojo: con reintentos (`error_reintento`) el micrófono sigue produciendo audio; ping-pong de 2 buffers puede no alcanzar. Se resuelve en el tema "pérdida de datos" (pendiente).
 
 ## Pasos
 
 Método: sumar **un consumidor a la vez y medir después de cada uno**, así se sabe cuánto cuesta cada pieza y cuál rompe el presupuesto.
 
-- [ ] **0. Fijar el chunk provisorio (1–2 s)** según la latencia aceptable para una pregunta puntual y el overhead del WebSocket; afinar con el compañero.
+- [ ] **0. Fijar el segmento provisorio (1–2 s)** según la latencia aceptable para una pregunta puntual y el overhead del WebSocket; afinar con el compañero.
 - [ ] **1. Línea base del firmware actual (Etapa 1).** Agregar al `main.c` logs de memoria libre al arrancar y después de reservar el buffer de audio. Sirve además para aprender las herramientas.
 - [ ] **2. Experimento mínimo de ESP-AFE con 2 mics.** Medir RAM interna, PSRAM y CPU. Es la medición más importante (mayor incertidumbre).
 - [ ] **3. Agregar un modelo de Edge Impulse de prueba** (sin dataset propio: para memoria y CPU importa la arquitectura, no el entrenamiento). Comparar con la estimación de RAM/ROM/latencia de Edge Impulse Studio para el target ESP32.
@@ -58,7 +58,7 @@ Método: sumar **un consumidor a la vez y medir después de cada uno**, así se 
 | Modelo de Edge Impulse | ? | ? | ? | Studio + medir |
 | WiFi + WebSocket con TLS | ? | ? | ? | doc de ESP-IDF + medir (compañero) |
 | Salida de audio + AEC | ? | ? | ? | por medir |
-| Buffers de audio (ping-pong) | — | por chunk | — | cálculo |
+| Buffers de audio (ping-pong) | — | por segmento | — | cálculo |
 | NFC, LED, SD | pequeño | — | pequeño | datasheet |
 
 Los valores de esp-sr no se toman de memoria: leerlos de su documentación oficial.

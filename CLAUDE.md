@@ -58,6 +58,7 @@ Sí cursamos una materia de C hace unos años, pero **lo tenemos oxidado** — n
 - Toda sugerencia debe **priorizar escalabilidad 1:1 con producción en PCB** (componentes soldados en placa, fabricación en China), evitando soluciones que solo funcionen en prototipo/dev board.
 - Ir por frente: no adelantar diseño de otros frentes o fases futuras sin pedido explícito. Las interfaces entre frentes (la FSM del vault) sí se revisan siempre.
 - Al introducir una librería o patrón nuevo, explicarlo y construir el código de forma incremental junto al usuario (no entregar todo de una vez) — objetivo es que entiendan las bases.
+- **Notas en `.md` (docs, plan, vault) lo más acotadas posible, sin perder claridad:** sin relleno ni repetir lo que ya está en otro archivo; no llenar el repo de texto.
 - **Ser crítico con cada decisión, no solo cuando se pregunta.** No hace falta ser criticón, pero sí juzgar activamente cada elección de diseño (buffers, formatos, protocolos, manejo de errores, uso de memoria, etc.) pensando en el producto final — señalar de entrada si algo puede salir caro de corregir más adelante (en escalabilidad, en PCB, en producción), en vez de esperar a que se pregunte explícitamente.
 
 ## Sincronización de instrucciones (Claude y Codex)

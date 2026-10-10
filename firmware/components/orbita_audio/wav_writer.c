@@ -59,7 +59,7 @@ void wav_build_header(uint8_t *header_out, uint32_t sample_rate,
     header_out[43] = (uint8_t)((data_size >> 24) & 0xFF);
 }
 
-size_t wav_pack_block_24bit(const int32_t *in_buf, size_t frame_count,
+size_t wav_pack_chunk_24bit(const int32_t *in_buf, size_t frame_count,
                              uint8_t *out_buf)
 {
     size_t frames_read = 0;
@@ -79,7 +79,7 @@ size_t wav_pack_block_24bit(const int32_t *in_buf, size_t frame_count,
     return frames_read*2*3; // 2 muestras por frame, de 3 bytes c/u
 }
 
-size_t wav_pack_block_16bit(const int32_t *in_buf, size_t frame_count,
+size_t wav_pack_chunk_16bit(const int32_t *in_buf, size_t frame_count,
                              uint8_t *out_buf)
 {
     size_t sample_count = frame_count * 2; // L y R juntos, cuantos int32_t hay que recorrer en total
