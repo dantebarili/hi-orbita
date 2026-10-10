@@ -12,78 +12,168 @@
 
 static const char *TAG = "orbita_main";
 
-// ---------------------------------------------------------------------------
-// Constantes
-// ---------------------------------------------------------------------------
-#define STREAM_SECONDS      600                // 10 para probar, 600 para la grabacion larga
-#define FRAME_SIZE          2                  // muestras por frame (L y R)
-#define FRAMES_PER_BLOCK    1600               // frames por i2s_read (100 ms)
+// =============================================================================
+//  CONSTANTES
+// =============================================================================
+
+// --- Audio (se quedan en el producto) ---
+#define CHANNELS            2                  // mics (L y R); tras el AFE la salida sera mono
 #define BYTES_PER_SAMPLE    2                  // 16 bit en el cable
-#define RING_SIZE_BYTES     (FRAME_SIZE * BYTES_PER_SAMPLE * ORBITA_SAMPLE_RATE_HZ)       // sin margen= fs*2muestrasxframe*2bytesxmuestra
-#define SEND_CHUNK_BYTES    4096               // maximo que pedimos al ring por vuelta
+#define FRAME_BYTES         (CHANNELS * BYTES_PER_SAMPLE)       // un frame = una muestra por canal
+#define FRAMES_PER_BLOCK    1600               // frames por i2s_read (100 ms); pasara a ser el chunk del AFE
+#define BLOCK_BYTES         (FRAMES_PER_BLOCK * FRAME_BYTES)    // un bloque ya en 16 bit
 
+// --- Ring (el tamaño se redefine segun la politica de perdida) ---
+#define RING_SECONDS        1                  // audio que absorbe, sin margen
+#define RING_SIZE_BYTES     (RING_SECONDS * ORBITA_SAMPLE_RATE_HZ * FRAME_BYTES)
+
+// --- TEST por UART (desaparecen o pasan al sink UART) ---
+#define STREAM_SECONDS      600                // 10 para probar, 600 para la grabacion larga
+#define SEND_CHUNK_BYTES    4096               // maximo que se pide al ring por vuelta
 #define ORBITA_UART_DATA_NUM     UART_NUM_0
-#define ORBITA_UART_DATA_BAUD    921600
-#define ORBITA_UART_CONSOLE_BAUD 115200
+#define ORBITA_UART_DATA_BAUD    921600        // durante la grabacion (audio)
+#define ORBITA_UART_CONSOLE_BAUD 115200        // el resto del tiempo (logs)
 
-// ---------------------------------------------------------------------------
-// Estado compartido entre las dos tareas
-// ---------------------------------------------------------------------------
-// "volatile" le dice al compilador que estas variables pueden cambiar por
-// fuera del codigo que esta mirando (porque las toca OTRA tarea). Sin eso
-// podria guardarlas en un registro y nunca ver el cambio.
+// --- Verificaciones en compilacion ---
+// Si se cambia un numero y se rompe una relacion, no compila.
+// El ring debe ser multiplo del bloque: si no, un bloque se parte en el borde
+// y una lectura puede cortar una muestra a la mitad (se cruzan L y R).
+_Static_assert(RING_SIZE_BYTES % BLOCK_BYTES == 0, "RING_SIZE_BYTES debe ser multiplo de BLOCK_BYTES");
+// Lo que se lee del ring tiene que ser un numero entero de frames.
+_Static_assert(SEND_CHUNK_BYTES % FRAME_BYTES == 0, "SEND_CHUNK_BYTES debe ser multiplo de FRAME_BYTES");
+
+// =============================================================================
+//  ESTADO COMPARTIDO ENTRE TAREAS
+// =============================================================================
 static RingbufHandle_t ring_handle;            // captura -> envio
-static volatile bool capture_done;             // la captura ya termino
-static volatile bool sender_done;              // el envio ya termino
+
+// Control de la toma
+static volatile bool grabando;                 // app_main -> captura: hay toma en curso (si es false, la captura tira los datos)
+static volatile size_t frames_objetivo;        // app_main -> captura: frames a grabar en esta toma
+static volatile bool capture_done;             // captura -> envio / app_main: la captura termino
+static volatile bool sender_done;              // envio -> app_main: el envio termino
+
+// Metricas de la toma
 static volatile uint32_t overruns;             // bloques que no entraron al ring
 static volatile uint32_t bytes_sent;           // bytes de audio mandados por UART
 static volatile size_t max_ocupado;            // maximo de bytes que llego a haber en el ring
 
-// ---------------------------------------------------------------------------
-// Tarea de envio: saca bytes del ring y los manda por UART0
-// ---------------------------------------------------------------------------
+// =============================================================================
+//  TAREA DE ENVIO  -  ring -> UART0
+// =============================================================================
 static void tarea_envio(void *arg)
 {
     while (1) {
-        // Leemos la flag ANTES de pedir datos. Si ya estaba en true, es
-        // porque la captura termino de escribir todo antes de este momento;
-        // entonces, si el ring devuelve NULL (timeout), esta realmente vacio.
-        // Si leyeramos la flag DESPUES, podria haberse escrito el ultimo
-        // bloque justo en el medio y lo perderiamos.
+        // La flag se lee ANTES de pedir datos. Si ya era true, la captura habia
+        // terminado de escribir; entonces un ring vacio (NULL) es realmente el
+        // final. Leerla despues podria perder un ultimo bloque escrito en el medio.
         bool captura_termino = capture_done;
 
-        // Pide hasta SEND_CHUNK_BYTES bytes. Espera como maximo 50 ms por
-        // datos. Devuelve un PUNTERO adentro del ring (no copia nada) y en
-        // n cuantos bytes hay realmente (puede ser menos de lo pedido).
+        // Pide hasta SEND_CHUNK_BYTES y espera como mucho 50 ms. Devuelve un
+        // puntero DENTRO del ring (no copia) y en `n` cuantos bytes hay (<= lo pedido).
         size_t n = 0;
         uint8_t *p = xRingbufferReceiveUpTo(ring_handle, &n, pdMS_TO_TICKS(50), SEND_CHUNK_BYTES);
 
         if (p == NULL) {
-            // Timeout: no habia datos.
             if (captura_termino) {
-                break; // la captura termino Y el ring esta vacio: terminamos
+                break;     // captura terminada y ring vacio: fin
             }
-            continue;  // la captura sigue; esperamos a que llegue mas
+            continue;      // la captura sigue; esperar mas datos
         }
 
-        // Mandamos al UART. Si el buffer TX del driver esta lleno, esta
-        // llamada BLOQUEA hasta que haya lugar: esa espera es la que frena
-        // al envio y permite que el ring se llene (la "contrapresion").
+        // Si el buffer TX del UART esta lleno, esto bloquea. Esa espera frena
+        // el envio y deja que el ring se llene (contrapresion).
         uart_write_bytes(ORBITA_UART_DATA_NUM, (const char *)p, n);
 
-        // Se debe devolver el item
-        vRingbufferReturnItem(ring_handle, p);
-
+        vRingbufferReturnItem(ring_handle, p);  // obligatorio devolver el item
         bytes_sent += n;
     }
 
     sender_done = true;
-    vTaskDelete(NULL); 
+    vTaskDelete(NULL);
 }
 
+// =============================================================================
+//  TAREA DE CAPTURA  -  I2S -> ring
+// =============================================================================
+// Corre siempre y nunca termina. Con toma en curso manda los bloques al ring;
+// sin toma los tira, pero igual hay que seguir leyendo para vaciar el DMA.
+static void tarea_captura(void *arg)
+{
+    // --- Buffers ---
+    // block_buf: bloque tal cual sale del mic (32 bit por muestra).
+    // pack_buf:  el mismo bloque en 16 bit, listo para el ring.
+    int32_t *block_buf = malloc(FRAMES_PER_BLOCK * CHANNELS * sizeof(int32_t));
+    uint8_t *pack_buf = malloc(BLOCK_BYTES);
+    if (block_buf == NULL || pack_buf == NULL) {
+        ESP_LOGE(TAG, "No se pudieron reservar los buffers de captura");
+        vTaskDelete(NULL);  // una tarea nunca hace return: se borra a si misma
+    }
+
+    size_t frames_capturados = 0;  // de la toma actual
+    bool grabando_antes = false;   // para detectar el instante en que arranca una toma
+
+    while (1) {
+        // --- Estado de la toma ---
+        bool graba = grabando;     // una sola lectura por vuelta
+        if (graba && !grabando_antes) {
+            frames_capturados = 0; // toma nueva
+        }
+        grabando_antes = graba;
+
+        // --- Lectura del I2S ---
+        // De a FRAMES_PER_BLOCK; el ultimo bloque de la toma solo pide lo que
+        // falta, para no pasarse del total declarado en el header.
+        size_t frames_a_pedir = FRAMES_PER_BLOCK;
+        if (graba && frames_objetivo - frames_capturados < frames_a_pedir) {
+            frames_a_pedir = frames_objetivo - frames_capturados;
+        }
+
+        size_t frames_leidos = 0;
+        esp_err_t err = orbita_audio_i2s_read(block_buf, frames_a_pedir, &frames_leidos);
+        if (err != ESP_OK) {
+            if (graba) {
+                // Sin log (estan apagados durante la toma): se nota porque bytes_sent < esperado.
+                grabando = false;
+                capture_done = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));  // no girar al maximo si el error persiste
+            continue;
+        }
+
+        if (!graba) {
+            continue;  // sin toma: el bloque se descarta
+        }
+
+        // --- Conversion y envio al ring ---
+        size_t bytes = wav_pack_block_16bit(block_buf, frames_leidos, pack_buf);  // 32 -> 16 bit
+
+        // Timeout 0: si no hay lugar, el bloque se pierde y queda contado (hueco en la toma).
+        if (xRingbufferSend(ring_handle, pack_buf, bytes, 0) != pdTRUE) {
+            overruns++;
+        }
+
+        // --- Metricas ---
+        size_t ocupado = RING_SIZE_BYTES - xRingbufferGetCurFreeSize(ring_handle);
+        if (ocupado > max_ocupado) {
+            max_ocupado = ocupado;  // sirve para dimensionar el ring
+        }
+
+        // --- Fin de la toma ---
+        frames_capturados += frames_leidos;
+        if (frames_capturados >= frames_objetivo) {
+            grabando = false;
+            capture_done = true;    // va ultimo: es la señal para el envio
+        }
+    }
+}
+
+// =============================================================================
+//  APP_MAIN  -  inicializacion y comandos
+// =============================================================================
 void app_main(void)
 {
-    // --- Setup UART0 ---
+    // --- Drivers de comunicacion ---
     esp_err_t uart_install_err = uart_driver_install(ORBITA_UART_DATA_NUM, 256, 8192, 0, NULL, 0);
     if (uart_install_err == ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG, "UART0 ya tenia un driver instalado (consola) -- lo reusamos.");
@@ -97,6 +187,7 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_cfg));
 
+    // --- Audio ---
     ESP_ERROR_CHECK(orbita_audio_i2s_init());
 
     ring_handle = xRingbufferCreate(RING_SIZE_BYTES, RINGBUF_TYPE_BYTEBUF);
@@ -105,19 +196,10 @@ void app_main(void)
         return;
     }
 
-    // block_buf: aca deja i2s_read cada bloque, tal cual sale del mic (32 bit por muestra).
-    int32_t *block_buf = malloc(FRAMES_PER_BLOCK * FRAME_SIZE * sizeof(int32_t));
-    if (block_buf == NULL) {
-        ESP_LOGE(TAG, "No se pudo reservar block_buf");
-        return;
-    }
-
-    // pack_buf: el mismo bloque ya convertido a 16 bit (2 bytes por muestra), listo para el ring.
-    uint8_t *pack_buf = malloc(FRAMES_PER_BLOCK * FRAME_SIZE * BYTES_PER_SAMPLE);
-    if (pack_buf == NULL) {
-        ESP_LOGE(TAG, "No se pudo reservar pack_buf");
-        return;
-    }
+    // Captura desde el arranque, fija al core 1 (WiFi usa el 0 por defecto).
+    // Parametros: funcion, nombre, stack (bytes), argumento, prioridad, handle, core.
+    // Prioridad 6: mayor que envio (5) y que app_main (1).
+    xTaskCreatePinnedToCore(tarea_captura, "captura", 4096, NULL, 6, NULL, 1);
 
     uint8_t *wav_header = malloc(WAV_HEADER_SIZE);
     if (wav_header == NULL) {
@@ -125,6 +207,7 @@ void app_main(void)
         return;
     }
 
+    // --- Loop de comandos ---
     uint8_t cmd;
 
     while (1) {
@@ -132,101 +215,60 @@ void app_main(void)
 
         if (n == 1 && cmd == 'g') {
 
-            // --- Flags y variables de control compartidas ---
+            // ---------- 1. Reinicio de contadores ----------
             capture_done = false;
             sender_done = false;
             overruns = 0;
+            orbita_audio_reset_dma_overflows();
             bytes_sent = 0;
             max_ocupado = 0;
 
-            // --- Aviso a la PC + header + cambio de baud ---
-
-            // Avisamos a la PC (por USB-Serial-JTAG) que el audio viene ahora por UART0.
+            // ---------- 2. Aviso a la PC y header del WAV ----------
+            // Marcador por USB-Serial-JTAG: desde aca el audio viene por UART0.
             const char *wav_start_marker = "WAV_ON_UART0\n";
             usb_serial_jtag_write_bytes(wav_start_marker, strlen(wav_start_marker), portMAX_DELAY);
 
-            // Header con el tamaño TOTAL declarado de antemano (en streaming no
-            // sabemos cuanto se va a capturar de verdad; la PC compara bytes
-            // recibidos contra este numero para detectar huecos).
-            uint32_t wav_data_size = (uint32_t)(STREAM_SECONDS * ORBITA_SAMPLE_RATE_HZ * FRAME_SIZE * BYTES_PER_SAMPLE);
-            wav_build_header(wav_header, ORBITA_SAMPLE_RATE_HZ, FRAME_SIZE, BYTES_PER_SAMPLE * 8, wav_data_size);
+            // El header declara el tamaño TOTAL de antemano (en streaming no se
+            // sabe cuanto va a llegar de verdad; la PC compara bytes recibidos
+            // contra este numero para detectar huecos).
+            size_t frames_totales_rec_test = (size_t)STREAM_SECONDS * ORBITA_SAMPLE_RATE_HZ;
+            uint32_t wav_data_size = (uint32_t)(frames_totales_rec_test * FRAME_BYTES);
+            wav_build_header(wav_header, ORBITA_SAMPLE_RATE_HZ, CHANNELS, BYTES_PER_SAMPLE * 8, wav_data_size);
 
-            // Desde aca y hasta el final de la grabacion NO puede salir ningun
-            // log por UART0: se mezclaria texto con el audio binario y
-            // corromperia el archivo. Por eso los apagamos y subimos el baud.
+            // ---------- 3. UART en modo audio ----------
+            // Hasta el final de la toma no puede salir ningun log por UART0: se
+            // mezclaria texto con el audio y se corrompe el archivo.
             esp_log_level_set("*", ESP_LOG_NONE);
             uart_set_baudrate(ORBITA_UART_DATA_NUM, ORBITA_UART_DATA_BAUD);
 
-            // El header lo manda app_main ANTES de crear la tarea de envio:
-            // asi esta garantizado que es lo primero que sale por el cable.
+            // El header sale ANTES de crear la tarea de envio: asi es lo primero en el cable.
             uart_write_bytes(ORBITA_UART_DATA_NUM, (const char *)wav_header, WAV_HEADER_SIZE);
 
-            // --- Lanzar la tarea de envio ---
-            // Parametros: funcion, nombre, stack en bytes, argumento, prioridad, handle.
-            // Prioridad 5 (mayor que la de app_main, que es 1): casi todo el
-            // tiempo esta bloqueada esperando datos o esperando al UART, asi que
-            // no le saca CPU a la captura; cuando hay algo para mandar, lo manda ya.
+            // ---------- 4. Arranque de la toma ----------
             xTaskCreate(tarea_envio, "envio", 4096, NULL, 5, NULL);
 
-            // --- 4. Captura (corre aca, en app_main) ---
-            size_t frames_totales = (size_t)STREAM_SECONDS * ORBITA_SAMPLE_RATE_HZ;
-            size_t frames_capturados = 0;
+            // `grabando` va ULTIMO: asi la captura nunca arranca con valores viejos.
+            frames_objetivo = frames_totales_rec_test;
+            grabando = true;
 
-            while (frames_capturados < frames_totales) {
-                // Pedimos de a FRAMES_PER_BLOCK, pero en el ultimo bloque solo lo que falta,
-                // para no pasarnos del total declarado en el header.
-                size_t frames_a_pedir = frames_totales - frames_capturados;
-                if (frames_a_pedir > FRAMES_PER_BLOCK) {
-                    frames_a_pedir = FRAMES_PER_BLOCK;
-                }
-
-                size_t leidos = 0;
-                esp_err_t err = orbita_audio_i2s_read(block_buf, frames_a_pedir, &leidos);
-                if (err != ESP_OK) {
-                    break; // sin logs (estan apagados): se nota porque bytes_sent < esperado
-                }
-
-                // 32 bit -> 16 bit. Devuelve cuantos bytes escribio en pack_buf.
-                size_t bytes = wav_pack_block_16bit(block_buf, leidos, pack_buf);
-
-                // Timeout 0 = no esperar. Si no hay lugar en el ring, el bloque se
-                // pierde y lo contamos: esa grabacion tiene un hueco.
-                if (xRingbufferSend(ring_handle, pack_buf, bytes, 0) != pdTRUE) {
-                    overruns++;
-                }
-
-                // Que tan lleno llego a estar el ring (sirve para dimensionarlo).
-                size_t ocupado = RING_SIZE_BYTES - xRingbufferGetCurFreeSize(ring_handle);
-                if (ocupado > max_ocupado) {
-                    max_ocupado = ocupado;
-                }
-
-                frames_capturados += leidos;
-            }
-
-            // --- 5. Cierre ---
-            // Le avisamos a la tarea de envio que ya no va a llegar mas audio.
-            capture_done = true;
-
-            // Esperamos a que termine de vaciar el ring.
+            // ---------- 5. Espera y cierre ----------
             while (!sender_done) {
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
 
-            // Esperar a que salgan FISICAMENTE los ultimos bytes del UART antes
-            // de bajar el baud; si no, los ultimos quedan corruptos.
+            // Esperar a que salgan fisicamente los ultimos bytes antes de bajar
+            // el baud; si no, los ultimos quedan corruptos.
             uart_wait_tx_done(ORBITA_UART_DATA_NUM, portMAX_DELAY);
             uart_set_baudrate(ORBITA_UART_DATA_NUM, ORBITA_UART_CONSOLE_BAUD);
             esp_log_level_set("*", ESP_LOG_INFO);
 
-            ESP_LOGI(TAG, "Fin: mandados %u de %u bytes, overruns=%u, ring maximo=%u de %u bytes",
+            ESP_LOGI(TAG, "Fin: mandados %u de %u bytes, overruns=%u, dma_overflows=%u, ring maximo=%u de %u bytes",
                      (unsigned)bytes_sent, (unsigned)wav_data_size, (unsigned)overruns,
+                     (unsigned)orbita_audio_get_dma_overflows(),
                      (unsigned)max_ocupado, (unsigned)RING_SIZE_BYTES);
         } else {
-            // Esperando 'g': hay que seguir leyendo el I2S (si nadie lo vacia, el DMA
-            // se pisa) pero los datos se tiran.
-            size_t leidos = 0;
-            orbita_audio_i2s_read(block_buf, FRAMES_PER_BLOCK, &leidos);
+            // Sin comando: la captura ya vacia el I2S; aca solo se espera para no girar al maximo.
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
 }

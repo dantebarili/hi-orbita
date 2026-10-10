@@ -28,6 +28,30 @@
 static const char *TAG = "orbita_audio";
 static i2s_chan_handle_t s_rx_chan = NULL; // Handle para identidicar el canal a utilizar
 
+// Contador de overflows del DMA. Lo incrementa la interrupcion (ISR)
+static volatile uint32_t s_dma_overflows = 0;
+
+// Callback que el driver I2S llama (desde una ISR) cuando el DMA se queda sin
+// lugar y pisa audio que nadie leyo. IRAM_ATTR la deja en la RAM interna: una
+// ISR no puede esperar a que la flash este disponible.
+// Tiene que ser rapida: solo cuenta, nada de logs ni malloc.
+// Devuelve false porque no desperto ninguna tarea de mayor prioridad.
+static bool IRAM_ATTR on_recv_overflow(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx)
+{
+    s_dma_overflows++;
+    return false;
+}
+
+uint32_t orbita_audio_get_dma_overflows(void)
+{
+    return s_dma_overflows;
+}
+
+void orbita_audio_reset_dma_overflows(void)
+{
+    s_dma_overflows = 0;
+}
+
 esp_err_t orbita_audio_i2s_init(void)
 {
     /*  - Se crea la configuracion del canal con la ESP como el Master
@@ -89,6 +113,17 @@ esp_err_t orbita_audio_i2s_init(void)
         return err;
     }
   
+    // Registro el callback de overflow. Tiene que ser ANTES del enable: con el
+    // canal ya prendido el driver devuelve ESP_ERR_INVALID_STATE.
+    i2s_event_callbacks_t cbs = {
+        .on_recv_q_ovf = on_recv_overflow,
+    };
+    err = i2s_channel_register_event_callback(s_rx_chan, &cbs, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2s_channel_register_event_callback fallo: %s", esp_err_to_name(err));
+        return err;
+    }
+
 // Prendo el canal con toda la configuracion anterioremente creada
     err = i2s_channel_enable(s_rx_chan);
     if (err != ESP_OK) {

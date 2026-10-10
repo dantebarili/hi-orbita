@@ -10,3 +10,34 @@ CONFIG_ESP32S3_SPIRAM_SUPPORT=y
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_CONSOLE_UART_NUM=0
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Flash: el modulo N16R8 trae 16 MB. Con el default (2 MB) el bootloader
+# cree que la flash es mas chica y la tabla de particiones no entra.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# Modo de lectura de la flash: QIO usa 4 pines de datos (el default DIO usa
+# 2), o sea lee el doble de rapido a la misma frecuencia. La flash del N16R8
+# es quad, asi que lo soporta. 80 MHz es el maximo para esta flash.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# IDF puede detectar al arrancar si la flash es quad u octal. Nosotros
+# sabemos que es quad, asi que se apaga y se usa lo configurado arriba.
+# CONFIG_ESPTOOLPY_FLASH_MODE_AUTO_DETECT is not set
+
+# Tabla de particiones propia (firmware/partitions.csv). Hace falta una
+# particion "model" para los modelos del AFE de esp-sr y dos slots de app
+# para poder actualizar por OTA mas adelante.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# CPU a 240 MHz (el maximo del S3). El AFE es lo mas pesado del sistema y
+# el consumo hay que medirlo con esta frecuencia, que es la de produccion.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Tick de FreeRTOS a 1 ms (antes 10 ms). Define el piso de vTaskDelay y de
+# los timeouts: a 100 Hz no se puede esperar menos de 10 ms.
+CONFIG_FREERTOS_HZ=1000
+
+# Stack de app_main (antes 3584 bytes, justo para un printf). Sale de la
+# RAM interna, asi que no subirlo de mas.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

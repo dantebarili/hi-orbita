@@ -1,4 +1,4 @@
-# Manifest de dependencias del componente "main" (gestionado por ESP-IDF,
+# Manifest de dependencias del componente "orbita_audio" (gestionado por ESP-IDF,
 # lo resuelve/descarga solo "idf.py build" o "idf.py reconfigure", no hay
 # que instalar nada a mano).
 #

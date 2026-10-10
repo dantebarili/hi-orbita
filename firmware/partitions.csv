@@ -1,0 +1,10 @@
+# Mapa de la flash de 16 MB. Los offsets en blanco los calcula el build
+# a continuacion de la particion anterior.
+# Name,    Type, SubType, Offset,   Size,   Flags
+nvs,       data, nvs,     0x9000,   24K,
+otadata,   data, ota,     0xf000,   8K,
+phy_init,  data, phy,     0x11000,  4K,
+ota_0,     app,  ota_0,   0x20000,  3M,
+ota_1,     app,  ota_1,   ,         3M,
+model,     data, spiffs,  ,         2M,
+clips,     data, spiffs,  ,         1M,

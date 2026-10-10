@@ -15,6 +15,8 @@ Orden: **A (flujo perfecto) → B (AFE integrado y medido) → C (listo para soc
 
 **Antes de pushear:** avisar al compañero. Al hacer pull se le borra su `.vscode/settings.json` (ahora es `settings.example.json`); que lo copie antes. Sin commitear: `plan_dante.md`, `main.c.old`, cambios del vault.
 
+**A0 hecho (2026-10-10), falta probar en el chip:** al flashear, el log de arranque tiene que decir `SPI Mode : QIO`; si no arranca, volver la flash a DIO (ver `arquitectura.md`, sección 1). Hay que borrar el `sdkconfig` local y reconfigurar al hacer pull.
+
 **Por verificar (no confirmado):** chunk del AFE = 512 muestras/canal (del reviewer, de memoria); ICS-43434 a 16 kHz (datasheet).
 
 ## Dos hitos
@@ -40,20 +42,20 @@ Orden: **A (flujo perfecto) → B (AFE integrado y medido) → C (listo para soc
 
 Pasos (fixes del `embedded-reviewer` del 2026-10-06 más lo que salió de revisar el código el 2026-10-08):
 
-- [ ] **A0. `sdkconfig.defaults` del repo** (hoy el build usa defaults que no sirven y `sdkconfig` está ignorado por git, así que el compañero no los tendría):
+- [x] **A0. `sdkconfig.defaults` del repo — hecho 2026-10-10** (build limpio verificado; decisiones y consecuencias en `arquitectura.md`; el stack de las tareas nuevas se revisa en A2; el `sdkconfig` local hay que borrarlo para que tome los cambios) (antes: hoy el build usa defaults que no sirven y `sdkconfig` está ignorado por git, así que el compañero no los tendría):
   - Flash **16 MB** (`CONFIG_ESPTOOLPY_FLASHSIZE_16MB`; hoy dice 2 MB). Con 2 MB no entran app + modelos de `esp-sr`.
   - Tabla de particiones **custom** (`partitions.csv`) con partición `model` para los modelos del AFE; hoy está `SINGLE_APP` y el archivo custom no existe. Tamaño de la partición: verificar en la doc de `esp-sr`.
   - CPU a **240 MHz** (hoy 160) y `CONFIG_FREERTOS_HZ=1000` (hoy 100: ticks de 10 ms).
   - Stack de `app_main` y de cada tarea nueva: revisar (hoy 3584 bytes en `app_main`).
   - Cambiar esto invalida mediciones previas de CPU; hacerlo antes de medir el AFE.
-- [ ] **A1. Contador de overflows del DMA.** Hoy `overruns` solo cuenta ring lleno: el DMA puede perder muestras sin que nadie lo sepa, así que `overruns=0` **no garantiza** audio sin huecos.
+- [ ] **A1. Contador de overflows del DMA.** *(código escrito y compilado 2026-10-10; falta la prueba con `vTaskDelay(200)` en el labo)* Hoy `overruns` solo cuenta ring lleno: el DMA puede perder muestras sin que nadie lo sepa, así que `overruns=0` **no garantiza** audio sin huecos.
   - Firma (`i2s_types.h:139`): `bool cb(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx)`, retorna `false` si no despertó ninguna tarea.
   - Registro (`i2s_common.h:241`): `i2s_channel_register_event_callback(handle, &cbs, NULL)` con `cbs.on_recv_q_ovf = cb`. Falla con `ESP_ERR_INVALID_STATE` si el canal ya está habilitado: **registrar antes de `i2s_channel_enable`**.
   - Callback `static IRAM_ATTR`, contador `static volatile uint32_t` en `audio_capture.c`, getter público `orbita_audio_get_dma_overflows()` en `audio_capture.h`. Reiniciar a 0 en cada grabación e imprimirlo junto a `overruns` en la línea "Fin: ...".
   - `event->size` = bytes sobrescritos: opcional sumarlo para saber cuánto audio se perdió.
   - Prueba: `vTaskDelay(200)` en el loop de captura; el contador tiene que subir.
-- [ ] **A2. Captura en tarea propia** (hoy corre en `app_main`, prioridad 1), con prioridad mayor que las del AFE y fijada a un core.
-- [ ] **A3. Estructura en componente:** mover `audio_capture`, `wav_writer` y lo que se sume a `firmware/components/orbita_audio/` (con su `CMakeLists.txt`); `main/` queda fino. Mover ahí también la dependencia `esp-sr` del `idf_component.yml`. Es barato ahora y caro cuando el compañero ya tenga código en `main.c`.
+- [ ] **A2. Captura en tarea propia** *(código escrito y compilado 2026-10-10, core 1, prioridad 6; falta probar en el labo: 60 s con `overruns=0` y `dma_overflows=0`)* (hoy corre en `app_main`, prioridad 1), con prioridad mayor que las del AFE y fijada a un core.
+- [x] **A3. Estructura en componente — hecho 2026-10-10** *(solo se movieron `audio_capture`, `wav_writer` y la dependencia `esp-sr`; `tarea_captura`, constantes y ring siguen en `main.c` hasta A5–A8; build idéntico, 0x3b7c0)*: mover `audio_capture`, `wav_writer` y lo que se sume a `firmware/components/orbita_audio/` (con su `CMakeLists.txt`); `main/` queda fino. Mover ahí también la dependencia `esp-sr` del `idf_component.yml`. Es barato ahora y caro cuando el compañero ya tenga código en `main.c`.
 - [ ] **A4. Tamaño de bloque = chunk del AFE** (`get_feed_chunksize()`, a verificar; el reviewer estima 512 muestras/canal a 16 kHz). Hoy 1600 no es múltiplo. Un solo parámetro que B ajusta a lo que devuelva el AFE en runtime, sin rehacer el ring.
 - [ ] **A5. Ring** (decisiones de producto en `orbita-obsidian/arquitectura.md`; Claude sugiere dos rings, Dante investiga cómo se suele hacer antes de cerrar): **primero definir las políticas** (reintentos de la FSM, pre-roll, qué pasa al llenarse) y recién ahí el tipo: el ring de FreeRTOS es de consumo único y no permite releer para reintentar. En PSRAM (`xRingbufferCreateWithCaps` existe en 5.5.5, pero el struct de control también cae en PSRAM; alternativa `xRingbufferCreateStatic`). Antes de armar ring 1, ver si `feed()` bloquea y qué hace `afe_ringbuf_size`. Hoy el ring es `BYTEBUF` y su memoria la decide `malloc` (con `SPIRAM_USE_MALLOC` y umbral de 16 KB probablemente ya cae en PSRAM: confirmarlo).
   - **Dimensionar para sockets:** cuántos segundos de corte de WiFi tiene que absorber (a 64 KB/s, 10 s = 640 KB; si el ring largo es mono procesado, la mitad) y qué pasa cuando se llena.
@@ -75,6 +77,11 @@ Pasos (fixes del `embedded-reviewer` del 2026-10-06 más lo que salió de revisa
 Se integra **como medición**: el resultado confirma o descarta, no se da por decidido.
 
 - [ ] Verificar en la doc/ejemplos de `esp-sr` cómo carga NSNet/VADNet (probablemente partición `model`, ver A0; **verificar, no asumir**) y cómo se flashean los modelos.
+- [ ] **Prueba de filtros: WebRTC vs. redes neuronales (decisión pendiente).** Hoy el `sdkconfig` trae NS y VAD de WebRTC (default de `esp-sr`, clásico, liviano). El plan original asumía NSNet/VADNet (redes neuronales, más CPU, usan la partición `model`). Se prueban **los dos modos** con las mismas tomas y se decide con datos:
+  - Modo 1: `SR_NSN_WEBRTC` + `SR_VADN_WEBRTC` (partición `model` vacía).
+  - Modo 2: `SR_NSN_NSNET2` o `NSNET3` + `SR_VADN_VADNET1_MEDIUM` (cuál NSNet: NSNet3 pesa 113 KB, NSNet2 334 KB; probar el que entre en CPU).
+  - Medir en cada uno: CPU (% de núcleo), RAM interna y PSRAM, latencia del `fetch`, `overruns`/`dma_overflows` en 0, y calidad de la salida (SNR y si se come consonantes como r, b).
+  - Cambiar de modo es cambiar el `sdkconfig` y recompilar: dejar anotado en el informe qué modo se usó en cada toma.
 - [ ] Levantar el AFE: 2 mics, WakeNet apagado, NS y VAD activos, AGC apagado. Solo `feed` + `fetch`, en tareas propias (fetch tiene que correr tan rápido como feed o el AFE se atrasa). Ajustar el bloque de A4 al chunk real.
 - [ ] **Crear el AFE al arrancar, antes del `'g'`.** `esp-sr` imprime config al crearse y, si algo escribe por `printf` durante el streaming por UART0, corrompe el audio (apagar `esp_log` no frena `printf`). Verificar en una captura que el WAV no tiene texto adentro.
 - [ ] Loguear tamaños de chunk, RAM y CPU (completa los pasos 1–2 de `orbita-obsidian/plan-presupuesto-ram-cpu.md`). Documentar en `orbita-obsidian/`.

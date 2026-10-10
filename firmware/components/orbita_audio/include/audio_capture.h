@@ -53,3 +53,11 @@ esp_err_t orbita_audio_i2s_init(void);
 // cada una de 32 bits crudos tal como los entrega el mic).
 // `out_buf` debe tener espacio para frame_count * 2 * sizeof(int32_t).
 esp_err_t orbita_audio_i2s_read(int32_t *out_buf, size_t frame_count, size_t *frames_read);
+
+// Cuantas veces el DMA del I2S piso audio que nadie habia leido todavia
+// (la tarea de lectura llego tarde). Cada cuenta = un hueco en el audio.
+// Es distinto de `overruns` de main.c, que cuenta el ring lleno.
+uint32_t orbita_audio_get_dma_overflows(void);
+
+// Pone el contador en 0. Llamar al empezar cada grabacion.
+void orbita_audio_reset_dma_overflows(void);
