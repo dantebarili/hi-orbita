@@ -14,7 +14,7 @@ Vocabulario (de menor a mayor):
 | Frame de I2S | Un par L+R (`FRAMES_PER_BLOCK` en el código) | 4 bytes. Hoy se leen 1600 por vez (100 ms) |
 | Bloque | Lo que se le da al AFE en cada `feed` | ~512 muestras por canal (a verificar) |
 | Ítem | Lo que se guarda en el ring de una vez | Un bloque, o lo que se decida |
-| Segmento | Lo que se manda al backend entre un `dev_f_stop_send` y el siguiente | 1–2 s, provisorio |
+| Segmento | Lo que se manda al backend entre un `dev_fin_segmento` y el siguiente | 1–2 s, provisorio |
 
 ## 1. Configuración del chip (`sdkconfig.defaults` y `partitions.csv`)
 
@@ -103,20 +103,28 @@ Puntos abiertos:
 
 ## 5. Ring buffer
 
-El tipo de ring depende de las políticas, no al revés: **primero las políticas**, después si alcanza el ring de FreeRTOS o hace falta uno propio.
+Políticas decididas el 2026-10-10 (A5). El ring guarda la **salida mono del AFE** (32 KB/s) y sirve a la escucha continua de la consulta (ver "Arquitectura real" en `órbita..md`).
 
-| Parámetro | Valor |
-|---|---|
-| Reintentos de la FSM (`error_reintento → server_send`) | **A completar.** El ring de FreeRTOS es de consumo único: lo leído no se puede releer. Reenviar tras un reintento exige retener el segmento hasta tener confirmación, o un buffer circular propio con puntero de lectura. |
-| Pre-roll (audio previo a la wake word) | **A completar** (depende de la política de captura). Tampoco es posible con el ring de FreeRTOS. |
-| Tipo | **Abierta.** `NOSPLIT` con un ítem por bloque era la idea inicial. Ojo: si el sink retiene un ítem esperando ACK, el espacio se libera en orden y bloquea todo el ring. |
-| Memoria | PSRAM (decidido). `xRingbufferCreateWithCaps` existe en IDF 5.5.5, pero deja también el struct de control en PSRAM (no confirmado que sea seguro en S3). Alternativa: `xRingbufferCreateStatic`, struct en RAM interna y datos en PSRAM. |
-| Cantidad de rings | **Sugerido, sin validar** (Dante investiga cómo se suele hacer): dos. Ring 1 corto captura→AFE; ring 2 largo post-AFE→socket (mono, 32 KB/s). |
-| Tamaño / segundos de corte de WiFi a absorber | **A completar** |
-| Política cuando se llena (descartar viejo / nuevo / cortar) | **A completar.** La FSM trata "buffer lleno" como corte normal de segmento (`dev_f_stop_send`), pero acá es pérdida: aclarar cuál es cuál. |
-| Cómo se avisa la discontinuidad al consumidor | **A completar** |
+| Parámetro | Decisión | Estado |
+|---|---|---|
+| Qué se guarda | Siempre, también durante `server_back` y `audio_play`: sin huecos en la historia clínica. | Cerrada |
+| Reintentos de la FSM | El segmento se **retiene hasta `srv_respuesta_recibida`**. Con timeout de 5 s, backoff de 1 s y 2 intentos son ~11 s. Si se agotan, la FSM descarta el segmento y se marca la discontinuidad. | Cerrada |
+| Pre-roll | ~1 s. Con escucha continua el ring ya tiene ese audio; solo hay que poder arrancar un segmento ~1 s antes del instante de la wake word. | Cerrada |
+| Cuando se llena | Se descarta el **segmento pendiente más viejo**, se marca discontinuidad en el siguiente y se sigue grabando. Cuenta en un contador. | Cerrada |
+| Aviso de discontinuidad | Flag en el encabezado del primer slot después del hueco, más el contador. Detalle del encabezado en la sección 6. | Propuesta |
+| Tamaño | **~60 s ≈ 1,9 MB** de PSRAM. Cubre: segmento (2 s) + reintentos de request (~11 s) o reconexión de WiFi (1+2+4+8+16 s + detección ≈ 35 s). Falta sumar el largo máximo de una respuesta de `audio_play` (sin definir). | Provisoria |
+| Estructura | **Ring de slots propio** en PSRAM, no el ring de FreeRTOS. Cada slot = un bloque con encabezado. Una tabla chica de segmentos (tipo fondo/urgente; estado pendiente/enviado/confirmado) y el espacio se libera por segmento. | Propuesta |
+| Cantidad de rings | **Dos.** Ring 1 chico entre la captura y la tarea que hace `feed` (~0,25–0,5 s, unos 16 bloques ≈ 32 KB): seguro contra un `feed()` que bloquee, que dejaría sin leer al I2S. Ring 2 grande (post-AFE, ~60 s) hacia el sink. | Propuesta |
 
-**¿Ring 1 sobra?** `afe_config_t` ya tiene `afe_ringbuf_size` y `fetch` informa `ringbuff_free_pct`: `feed` ya encola en un buffer interno. Hay que saber si `feed()` bloquea cuando se llena (los headers no lo dicen; leer ejemplos de `esp-sr`). Si bloquea y la captura lo llama directo, el DMA pierde muestras; si no bloquea, ring 1 no hace falta.
+**Por qué no el ring de FreeRTOS:** es de consumo único (lo leído no se puede releer, y hacen falta los reintentos), no permite pre-roll, y libera en orden. Una wake word en medio del envío obliga a mandar **primero el pedido urgente y después el resumen pendiente**; en un FIFO el urgente queda detrás. El consumidor tiene que poder elegir qué segmento manda.
+
+**Nota: se puede achicar.** Si se deja de grabar durante `audio_play`, el ring baja a ~40 s (estimado) y deja de depender del AEC para lo que se guarda. Cuesta huecos en la consulta mientras el equipo contesta.
+
+Puntos abiertos:
+- **Contradicción con la FSM:** `dev_fin_segmento()` incluye "buffer lleno" como motivo de corte normal. Con esta política "ring lleno" es pérdida, no corte. Propongo que `dev_fin_segmento` sea solo por tiempo o VAD y que "ring lleno" quede fuera de ese evento. Falta actualizar `órbita..md`.
+- **Tamaño del slot:** un bloque de salida del AFE (`get_fetch_chunksize`, que puede no coincidir con el de entrada). A verificar junto con A4.
+- **¿Se puede sacar el ring 1?** `afe_config_t` ya tiene `afe_ringbuf_size` y `fetch` informa `ringbuff_free_pct`: `feed` ya encola en un buffer interno. Los headers de `esp-sr` no dicen si `feed()` bloquea cuando ese buffer se llena. Por seguridad el ring 1 queda; en la Fase B se prueba y, si `feed()` no bloquea, se puede sacar.
+- Mutex o índices atómicos entre la tarea productora y el sink: a los ~31 slots/s un mutex alcanza.
 
 ## 6. Consumidor y contrato del ítem
 
@@ -125,8 +133,9 @@ El tipo de ring depende de las políticas, no al revés: **primero las política
 | Consumidor intercambiable ("sink": empezar / recibir ítem / cerrar) | Provisoria | Falta definir quién es dueño del ítem y si puede bloquear. |
 | Cada ítem lleva encabezado: nº de secuencia, canales/muestras, flag de discontinuidad | Propuesta | Detecta pérdidas locales (ring/DMA), no de red. El formato en el cable es del frente Comunicación; esto es interfaz interna. |
 | Audio aislado en `firmware/components/orbita_audio/`; `main` solo integra | Provisoria | Hecho para `audio_capture`, `wav_writer` y la dependencia `esp-sr`. Faltan la tarea de captura, las constantes de bloque y el ring (se mudan con A5–A8, cuando se defina su interfaz). |
-| Segmento de transmisión (`f_stop`) | Abierta | Provisorio 1–2 s; depende de la latencia aceptable para "¿qué hora es?". |
+| Segmento de transmisión (`dev_fin_segmento`) | Abierta | Provisorio 1–2 s; depende de la latencia aceptable para "¿qué hora es?". |
 | Mono vs. estéreo hacia el backend | Abierta | Ver sección 4. |
+| Recibir mientras se envía (WebSocket full-duplex) | Abierta | El socket permite recibir y enviar a la vez; la FSM del vault es secuencial. Para que el backend pueda interrumpir en plena conversación, los eventos `srv_` deberían poder llegar durante `server_send`. Decisión del frente Comunicación; impacta la FSM. |
 | Política de captura: continua vs. solo tras la wake word | Abierta | Condiciona qué entra al ring y si hace falta pre-roll. |
 
 ## 7. Depuración en producto

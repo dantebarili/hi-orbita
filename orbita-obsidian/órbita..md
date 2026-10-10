@@ -12,13 +12,13 @@ stateDiagram-v2
     audio_wake --> server_send : dev_wake_word()
 
     server_send --> server_send : dev_wake_word_durante_envio() / dev_push_flag_urgente(pausa_resumen)
-    server_send --> server_back : dev_f_stop_send()
+    server_send --> server_back : dev_fin_segmento()
 
     server_back --> audio_play : srv_respuesta_recibida()
     server_back --> error_reintento : ver Diagrama 2
 
-    audio_play --> audio_wake : srv_f_stop_rec()
-    audio_play --> server_send : srv_f_keep_rec()
+    audio_play --> audio_wake : srv_fin_conversacion()
+    audio_play --> server_send : srv_sigue_conversacion()
     audio_play --> server_send : dev_wake_word_durante_playback() / dev_push_flag_urgente(pausa_playback)
 
     note right of audio_wake
@@ -49,9 +49,9 @@ stateDiagram-v2
 | `dev_init_ok()`                                                      | ESP32        | Resultado de inicializar hardware local (I2S, PSRAM) — el backend ni existe todavía en este punto.                                                                                                                                                                                       |
 | `dev_no_wake_word()` / `dev_wake_word()`                             | ESP32        | Detección local (modelo de Edge Impulse on-device) — tiene que ser instantánea, no puede depender de la red.                                                                                                                                                                                            |
 | `dev_wake_word_durante_envio()` / `dev_wake_word_durante_playback()` | ESP32        | Misma razón: detectar la wake word es siempre local.                                                                                                                                                                                                                                     |
-| `dev_f_stop_send()`                                                  | ESP32        | Corte de chunk (timer/VAD/buffer lleno) — es una decisión sobre la señal de audio cruda, que el backend ni tiene todavía en tiempo real. Ver contraargumento más abajo sobre por qué esto NO debería depender del servidor.                                                              |
+| `dev_fin_segmento()`                                                  | ESP32        | Corte de chunk (timer/VAD/buffer lleno) — es una decisión sobre la señal de audio cruda, que el backend ni tiene todavía en tiempo real. Ver contraargumento más abajo sobre por qué esto NO debería depender del servidor.                                                              |
 | `srv_respuesta_recibida()`                                           | Backend      | El dispositivo no puede "decidir" que hay una respuesta — solo puede esperarla. El backend es quien la genera y la manda cuando está lista.                                                                                                                                              |
-| `srv_f_stop_rec()` / `srv_f_keep_rec()`                              | Backend      | Esto no es "terminó de sonar el audio" (eso sería local) — es "¿la conversación sigue o se terminó?", una decisión semántica (¿el médico se despidió? ¿hay más para tratar con este paciente?) que solo el backend puede tomar, porque solo él entiende el contenido de la conversación. |
+| `srv_fin_conversacion()` / `srv_sigue_conversacion()`                              | Backend      | Esto no es "terminó de sonar el audio" (eso sería local) — es "¿la conversación sigue o se terminó?", una decisión semántica (¿el médico se despidió? ¿hay más para tratar con este paciente?) que solo el backend puede tomar, porque solo él entiende el contenido de la conversación. |
 
 Regla general: si la decisión depende de **la señal de audio en el momento** (VAD, wake word, buffer) → `dev_`, es local y no puede esperar a la red. Si la decisión depende de **entender el contenido/contexto de la conversación** → `srv_`, porque solo el backend tiene esa información.
 
@@ -61,19 +61,19 @@ Regla general: si la decisión depende de **la señal de audio en el momento** (
 > Se separan dos fallas distintas porque requieren manejo distinto:
 > - **WS vivo, sin respuesta** (`dev_timeout_respuesta()`, 5 s desde el último byte enviado — streaming en paralelo hace que una respuesta normal cierre casi inmediato, así que 5 s ya es anómalo): reintento del *request*, backoff fijo 1 s, máx. 2 intentos. Agotados → se descarta el chunk pendiente, se reproduce un clip local ("error_conexion") y vuelve a `audio_wake` (no hay backlog SD todavía, ver punto pendiente del roadmap "resiliencia offline").
 > - **WS caído** (`dev_ws_desconectado()`, vía heartbeat: ping cada 10 s, sin pong en 3 s = caído): reconexión de *socket*, backoff exponencial 1-2-4-8-16 s, máx. 5 intentos. Agotados → se reproduce un clip local ("error_wifi") y vuelve a `audio_wake`.
-> - Ambos casos pasan por `audio_play`, pero saliendo por `dev_msg_local_fin()` (lo decide el ESP32 porque terminó su propio clip) en vez de `srv_f_stop_rec()`/`srv_f_keep_rec()` (que dependen del backend) — un mensaje de error local no tiene backend del otro lado tomando esa decisión.
+> - Ambos casos pasan por `audio_play`, pero saliendo por `dev_msg_local_fin()` (lo decide el ESP32 porque terminó su propio clip) en vez de `srv_fin_conversacion()`/`srv_sigue_conversacion()` (que dependen del backend) — un mensaje de error local no tiene backend del otro lado tomando esa decisión.
 >
 > [!question] Abierto: los clips de error (`error_conexion.wav`, `error_wifi.wav`) tienen que estar pregrabados y guardados en el propio ESP32 (flash/SPIFFS) — no se le pueden pedir al backend si el problema es justamente que no hay backend. Etapa 1 solo grabó/mandó audio, nunca reprodujo nada local; hay que definir dónde vive el audio de reproducción (driver de salida, formato, capacidad de flash) antes de picar código de esto. ¿Seguimos con LED además del audio, o el audio solo ya cubre la necesidad de avisar al médico?
 >
 > [!question] Abierto: el heartbeat de WS hoy solo se dibujó saliendo de `server_back`. Un socket caído mientras el dispositivo está en `server_send` o `audio_play` no tiene todavía un arco explícito — evaluar si conviene que el heartbeat sea un evento global (interrumpe cualquier estado "ocupado" con red) en vez de estar atado solo a la espera de respuesta.
 
 > [!info] Arquitectura real: escucha continua en background, no "un pedido = un envío"
-> El uso real no es "wake word dispara un pedido puntual aislado". El médico se loguea por NFC al arrancar el turno, y le pide a Órbita que **resuma y anote continuamente durante toda la consulta**. Preguntas puntuales tipo "Órbita, ¿qué hora es?" ocurren *en medio* de esa escucha continua. El loop ya dibujado (`server_send → server_back → audio_play → server_send`, vía `f_keep_rec`) cubre el caso base: cada chunk de audio pasa por send → back → play (play no hace nada si la respuesta no trae audio, como en un chunk normal de resumen) → send de nuevo.
+> El uso real no es "wake word dispara un pedido puntual aislado". El médico se loguea por NFC al arrancar el turno, y le pide a Órbita que **resuma y anote continuamente durante toda la consulta**. Preguntas puntuales tipo "Órbita, ¿qué hora es?" ocurren *en medio* de esa escucha continua. El loop ya dibujado (`server_send → server_back → audio_play → server_send`, vía `srv_sigue_conversacion`) cubre el caso base: cada chunk de audio pasa por send → back → play (play no hace nada si la respuesta no trae audio, como en un chunk normal de resumen) → send de nuevo.
 
 > [!info] Prioridad de pedidos: la resuelve el backend, no el ESP32 — y es secuencial, no concurrente
 > Decisión (corregida): si la wake word dispara mientras ya se está en `server_send` (mandando un chunk de fondo), el dispositivo **pausa el envío del resumen** — no lo mezcla con el audio urgente, porque mandar ambas cosas a la vez confundiría al backend sobre qué es qué. La secuencia es: (1) detecta wake word en medio de un chunk de fondo, (2) manda un flag avisando "resumen en pausa, viene un pedido urgente", (3) graba y manda el audio urgente (sigue siendo el mismo estado `server_send`, pero ahora mandando el audio urgente, no el de fondo), (4) `server_back` espera la respuesta, (5) `audio_play` la reproduce, (6) vuelve a `server_send` y **retoma** el resumen de fondo. No hace falta que el envío y la recepción corran en paralelo — es un único camino secuencial, el mismo loop de siempre. El backend, de su lado, entiende que el resumen queda en pausa hasta que termina de contestar lo urgente.
 
-> [!question] Abierto: tamaño de chunk (`f_stop`)
+> [!question] Abierto: tamaño de chunk (`dev_fin_segmento`)
 > Respuesta parcial: "lo más chico posible sin generar problemas no controlables" — falta un número concreto (ms) y un criterio de corte (tiempo fijo / VAD / límite de buffer en PSRAM) para poder dimensionar buffers y estimar la latencia máxima de respuesta a una pregunta puntual.
 
 > [!question] Abierto: qué pasa con el `audio_play` interrumpido, una vez atendida la urgencia

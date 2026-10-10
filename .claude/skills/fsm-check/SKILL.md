@@ -10,7 +10,7 @@ Antes de proponer o validar un cambio que:
 - agregue, quite, o modifique un evento `dev_*` o `srv_*`,
 - cambie una transición de estado o agregue un estado nuevo,
 - toque el contrato entre el frente Audio (wake word, filtrado) y el frente Comunicación (WebSockets, backend),
-- o proponga un comportamiento durante envío/interrupción (ej. wake word a mitad de un envío, `dev_f_stop_send`),
+- o proponga un comportamiento durante envío/interrupción (ej. wake word a mitad de un envío, `dev_fin_segmento`),
 
 leer `orbita-obsidian/órbita..md` completo (no solo buscar el término puntual) y verificar:
 
