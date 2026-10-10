@@ -63,13 +63,4 @@ Método: sumar **un consumidor a la vez y medir después de cada uno**, así se 
 
 Los valores de esp-sr no se toman de memoria: leerlos de su documentación oficial.
 
-## Pendiente para más adelante (fuera de este plan)
-
-- Política de captura: audio continuo vs. solo tras la wake word, y su consentimiento.
-- Seguridad: TLS, autenticación del dispositivo, aprovisionamiento de WiFi, OTA.
-- Pérdida de datos: buffer circular, rol de la SD.
-- Puntos abiertos del vault: tamaño de chunk (`f_stop`), `audio_play` interrumpido, heartbeat global, clips de error.
-- Estados que faltan en la FSM: falla de `audio_init`, login NFC, apagado.
-- Actualizar el vault: la tabla de `dev_wake_word()` todavía dice "WakeNet" (ahora es Edge Impulse).
-- Verificar: separación de mics (50 mm) vs. lo que soporta el beamforming de esp-sr; licencia comercial y continuidad de Edge Impulse; ley de datos personales y de historia clínica digital.
-- Crear `GOTCHA.md` (incluir: GPIO 26–32 flash, 33–37 PSRAM, strapping; dos puertos USB; OneDrive y builds; 32 bits por slot del INMP441 vs. 24 útiles).
+Pendientes de producto (política de captura, seguridad, pérdida de datos, estados que faltan) en `arquitectura.md`.
