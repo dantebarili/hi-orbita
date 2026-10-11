@@ -24,10 +24,16 @@ Todo compila; nada se probó todavía en el chip.
 
 ## Dónde quedamos — retomar acá
 
-**Probar en el labo:**
-- Log de arranque con `SPI Mode : QIO` (si no arranca, volver la flash a DIO).
-- Captura de 60 s con `overruns=0` y `dma_overflows=0`.
-- Forzar la falla (`vTaskDelay(200)` en `tarea_captura`): el contador tiene que subir.
+**Checklist del labo** (poner `STREAM_SECONDS` en 60 para empezar; flashear con `idf.py -p COMx flash monitor`):
+- [ ] Log de arranque: `SPI Mode : QIO`, `cpu freq: 240000000 Hz`, `Flash size: 16MB` y las particiones `ota_0`, `ota_1`, `model`, `clips` en los offsets de `arquitectura.md` §1. Si no arranca: `idf.py erase-flash`, o volver a DIO.
+- [ ] Toma de 60 s: `Fin:` con bytes completos, `overruns=0`, `dma_overflows=0` y `stack libre captura` > ~500 B.
+- [ ] Dos tomas seguidas (`'g'`, esperar `Fin:`, `'g'`): la segunda da igual que la primera.
+- [ ] Reposo de 2–3 min y después `'g'`: `dma_overflows=0`.
+- [ ] Forzar la falla: `vTaskDelay(pdMS_TO_TICKS(200))` después del `i2s_read` en `tarea_captura`; `dma_overflows` tiene que ser > 0 y el WAV tener saltos. Después sacar la línea.
+- [ ] Tono conocido: el WAV no tiene clicks ni saltos y mantiene el nivel de antes.
+- [ ] `ring maximo` parecido al de una grabación anterior a los cambios.
+- [ ] Toma larga de 10 min (A12) con ambos contadores en 0.
+- La PC no debe mandar un segundo `'g'` durante la toma: arrancaría otra apenas termine.
 
 **Antes de pushear:** avisarle al compañero. Tiene que copiar su `.vscode/settings.json` (ahora es `settings.example.json`), borrar su `sdkconfig` y reconfigurar, y saber que la tabla de particiones nueva borra el `nvs` del DevKit y que cambiaron los nombres de eventos de la FSM.
 

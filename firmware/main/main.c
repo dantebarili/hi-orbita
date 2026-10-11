@@ -20,7 +20,7 @@ static const char *TAG = "orbita_main";
 #define CHANNELS            2                  // mics (L y R); tras el AFE la salida sera mono
 #define BYTES_PER_SAMPLE    2                  // 16 bit en el cable
 #define FRAME_BYTES         (CHANNELS * BYTES_PER_SAMPLE)       // un frame = una muestra por canal
-#define FRAMES_PER_CHUNK    1600               // frames por i2s_read (100 ms); pasara a ser el chunk del AFE
+#define FRAMES_PER_CHUNK    1600               // frames por i2s_read = chunk AFE
 #define CHUNK_BYTES         (FRAMES_PER_CHUNK * FRAME_BYTES)    // un chunk ya en 16 bit
 
 // --- Ring (el tamaño se redefine segun la politica de perdida) ---
@@ -28,7 +28,7 @@ static const char *TAG = "orbita_main";
 #define RING_SIZE_BYTES     (RING_SECONDS * ORBITA_SAMPLE_RATE_HZ * FRAME_BYTES)
 
 // --- TEST por UART (desaparecen o pasan al sink UART) ---
-#define STREAM_SECONDS      600                // 10 para probar, 600 para la grabacion larga
+#define STREAM_SECONDS      10                // 10 para probar, 600 para la grabacion larga
 #define UART_SEND_BYTES    4096               // maximo que se pide al ring por vuelta
 #define ORBITA_UART_DATA_NUM     UART_NUM_0
 #define ORBITA_UART_DATA_BAUD    921600        // durante la grabacion (audio)
@@ -46,6 +46,7 @@ _Static_assert(UART_SEND_BYTES % FRAME_BYTES == 0, "UART_SEND_BYTES debe ser mul
 //  ESTADO COMPARTIDO ENTRE TAREAS
 // =============================================================================
 static RingbufHandle_t ring_handle;            // captura -> envio
+static TaskHandle_t captura_handle;            // para medir el stack de la captura
 
 // Control de la toma
 static volatile bool grabando;                 // app_main -> captura: hay toma en curso (si es false, la captura tira los datos)
@@ -140,6 +141,7 @@ static void tarea_captura(void *arg)
             vTaskDelay(pdMS_TO_TICKS(10));  // no girar al maximo si el error persiste
             continue;
         }
+        //vTaskDelay(pdMS_TO_TICKS(200));
 
         if (!graba) {
             continue;  // sin toma: el chunk se descarta
@@ -199,7 +201,7 @@ void app_main(void)
     // Captura desde el arranque, fija al core 1 (WiFi usa el 0 por defecto).
     // Parametros: funcion, nombre, stack (bytes), argumento, prioridad, handle, core.
     // Prioridad 6: mayor que envio (5) y que app_main (1).
-    xTaskCreatePinnedToCore(tarea_captura, "captura", 4096, NULL, 6, NULL, 1);
+    xTaskCreatePinnedToCore(tarea_captura, "captura", 4096, NULL, 6, &captura_handle, 1);
 
     uint8_t *wav_header = malloc(WAV_HEADER_SIZE);
     if (wav_header == NULL) {
@@ -262,10 +264,11 @@ void app_main(void)
             uart_set_baudrate(ORBITA_UART_DATA_NUM, ORBITA_UART_CONSOLE_BAUD);
             esp_log_level_set("*", ESP_LOG_INFO);
 
-            ESP_LOGI(TAG, "Fin: mandados %u de %u bytes, overruns=%u, dma_overflows=%u, ring maximo=%u de %u bytes",
+            ESP_LOGI(TAG, "Fin: mandados %u de %u bytes, overruns=%u, dma_overflows=%u, ring maximo=%u de %u bytes, stack libre captura=%u bytes",
                      (unsigned)bytes_sent, (unsigned)wav_data_size, (unsigned)overruns,
                      (unsigned)orbita_audio_get_dma_overflows(),
-                     (unsigned)max_ocupado, (unsigned)RING_SIZE_BYTES);
+                     (unsigned)max_ocupado, (unsigned)RING_SIZE_BYTES,
+                     (unsigned)uxTaskGetStackHighWaterMark(captura_handle));
         } else {
             // Sin comando: la captura ya vacia el I2S; aca solo se espera para no girar al maximo.
             vTaskDelay(pdMS_TO_TICKS(10));
