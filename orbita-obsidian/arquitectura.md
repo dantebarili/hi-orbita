@@ -158,46 +158,44 @@ Puntos abiertos:
 | `version` | u8 | Versión del formato. |
 | (reservado) | u32 | Futuro. |
 
-- Cómo llega `lost_samples`: el callback de overflow del DMA (A1) suma a un contador atómico; la tarea `fetch` lo lee, lo pone en 0 y lo copia al chunk. Es aproximado por la latencia del AFE: alcanza para detectar y contar.
-- Es **interno**: no viaja al backend. El sink lo usa para armar el header del cable de cada mensaje (que resume `seq`, `lost_samples`, etc.) y manda solo el audio de los chunks.
-- No lleva inicio/fin de segmento ni "urgente": se deciden después de guardar el chunk y los pre-roll se solapan.
-- Alineación: con ese orden de campos no hay relleno; verificar con `_Static_assert(sizeof == 16)`, sin `__attribute__((packed))`. Con 16 B el payload queda alineado a 16 B. El costo en PSRAM es despreciable aunque el chunk baje a 10 ms (6000 slots, 2 MB).
-- Dónde se codea: struct, ring y tabla en `firmware/components/orbita_audio/` (A5–A6); lo llena la tarea `fetch` y lo lee el sink. **Todavía no hay código.**
+- `lost_samples` llega así: el callback de overflow del DMA (A1) suma a un contador atómico; la tarea `fetch` lo lee, lo pone en 0 y lo copia al chunk (aproximado por la latencia del AFE: alcanza para detectar y contar).
+- Es **interno**: no viaja al backend. El sink lo usa para armar el header del cable de cada mensaje y manda solo el audio.
+- No lleva inicio/fin de segmento ni "urgente": se deciden después de guardar el chunk y los pre-roll se solapan; eso vive en la tabla.
+- Sin relleno entre campos; verificar con `_Static_assert(sizeof == 16)` y sin `__attribute__((packed))`. El payload queda alineado a 16 B. Costo en PSRAM despreciable aunque el chunk baje a 10 ms (6000 slots, 2 MB).
+- Se codea en `firmware/components/orbita_audio/` (A5–A6). **Todavía no hay código.**
 
-**Tabla de segmentos (ring 2).** Una entrada por segmento: `seq_inicio`, `seq_fin`, tipo (fondo / urgente), estado (pendiente / enviando / enviado / confirmado) y hueco previo (chunks descartados). La wake word crea una entrada **urgente** con `seq_inicio = seq_detección − pre-roll`: ese es su marcador. Dos segmentos pueden compartir chunks (el pre-roll del urgente incluye la cola del resumen de fondo).
+**Tabla de segmentos (ring 2).** Una entrada por segmento: `seq_inicio`, `seq_fin`, tipo (fondo / urgente), estado (pendiente / enviando / enviado / confirmado) y hueco previo (chunks descartados). Es el índice de la cinta: dice qué partes mandar, en qué orden y en qué estado están. Reemplaza al ring de FreeRTOS (lo leído desaparece y todo sale en orden), a las banderas de la toma de estudio (`grabando`, `capture_done`, "ring vacío = fin") y a los flags de segmento en el chunk. La wake word crea una entrada **urgente** con `seq_inicio = seq_detección − pre-roll`; dos segmentos pueden compartir chunks.
 
-**Cómo lee el sink.** Los slots son de tamaño fijo y el de un chunk sale de `seq % cantidad_de_slots`, así que el sink lee un rango por posición sin sacar nada; leer no libera. Elige el segmento por la tabla (el urgente primero); dentro de un segmento va en orden. El espacio se libera al confirmarse el segmento.
+Quién la toca (con mutex; son pocas filas):
+- Tarea `fetch`, por chunk (~31/s): antes de pisar un slot, mira si su segmento se necesita.
+- Wake word: agrega la fila urgente. Corte por tiempo o VAD (`dev_fin_segmento`): cierra una fila y abre otra.
+- Sink, en cada ciclo: elige el pendiente más prioritario (urgente primero) y lo marca "enviando" / "enviado".
+- Confirmación del backend: "confirmado" y libera. Timeout o error: vuelve a "pendiente".
+
+El sink lee por posición: el slot de un chunk es `seq % cantidad_de_slots`. Leer no libera; el espacio se libera al confirmarse el segmento.
+
+Alternativas (el patrón es habitual: TCP guarda lo enviado sin confirmar en una cola de retransmisión): (2) ring FIFO de tres punteros (escritura / envío / confirmación) + buffer aparte para el urgente con el pre-roll copiado: sin solapes, pero un buffer extra con tope de duración; (3) un buffer por segmento: dueño claro, pero el urgente no tiene largo fijo y copia todo. Cualquiera con confirmación por segmento necesita igual una lista de segmentos en vuelo. **Plan incremental:** v1 = ring de tres punteros para el fondo y lista de segmentos consecutivos, sin urgente ni pre-roll; la tabla con prioridad crece desde ahí (v2).
 
 **Reglas de implementación**
 - El mutex protege solo la tabla y los índices, nunca el `send` de red (bloquearía al productor y el DMA perdería audio).
 - Un segmento "enviando" no se descarta.
 - El espacio se libera por rangos (el pre-roll solapado puede necesitar un chunk de otro segmento).
 - El callback del DMA solo incrementa un contador (sin mutex, `malloc` ni logs).
-- Mutex alcanza: son ~31 slots por segundo.
 
 ### 3.5 Sink, mensajes y contrato con Comunicación
 
 | Decisión | Estado | Nota |
 |---|---|---|
-| Sink intercambiable (empezar / recibir chunk / cerrar) | Provisoria | Falta definir quién es dueño del chunk y si puede bloquear. El sink UART de estudio puede leer en orden; la lógica de elegir segmentos va solo en el sink del socket (compañero). |
+| Sink intercambiable (empezar / recibir chunk / cerrar) | Provisoria | Falta definir quién es dueño del chunk y si puede bloquear. El sink UART de estudio lee en orden; elegir segmentos va solo en el sink del socket (compañero). |
 | Audio aislado en `firmware/components/orbita_audio/`; `main` solo integra | Provisoria | Hecho para `audio_capture`, `wav_writer` y `esp-sr`. Faltan captura, constantes y rings (A5–A8). |
-| Mensaje de WebSocket | Abierta | ~100–130 ms (4 chunks, ~4 KB), binario (base64 suma 33 %), múltiplo de un chunk. Header del cable por mensaje, definido por Comunicación (sugerido: id de segmento, `seq` del primer chunk, cantidad de chunks, tipo, `lost_samples` total, hueco previo). Cada mensaje agrega ~70–100 B de cabeceras (WebSocket + TLS + TCP/IP, estimado): ~12 % a 20 ms, ~5 % a 100 ms, ~0,5 % a 1 s; el costo real es CPU y radio por mensaje. Medir ventana TCP (lwIP, buffer de ~5,7 KB limita a ~28 KB/s con 200 ms de latencia) y RAM de TLS. |
-| Tamaño del segmento (`dev_fin_segmento`) | Abierta | Provisorio 1–2 s; depende de la latencia aceptable para "¿qué hora es?". |
-| Recibir mientras se envía (WebSocket full-duplex) | Abierta | La FSM es secuencial; para que el backend interrumpa en plena conversación, los `srv_` deberían poder llegar durante `server_send`. Decide Comunicación; impacta la FSM. |
+| Mensaje de WebSocket | Abierta | ~100–130 ms (4 chunks, ~4 KB), binario (base64 suma 33 %), múltiplo de un chunk. Header del cable por mensaje, definido por Comunicación (sugerido: id de segmento, `seq` del primer chunk, cantidad de chunks, tipo, `lost_samples` total, hueco previo). Cada mensaje agrega ~70–100 B de cabeceras (WebSocket + TLS + TCP/IP, estimado): ~12 % a 20 ms, ~5 % a 100 ms, ~0,5 % a 1 s; el costo real es CPU y radio por mensaje. Medir ventana TCP (buffer de lwIP ~5,7 KB limita a ~28 KB/s con 200 ms de latencia) y RAM de TLS. |
+| Mensajes del backend | Propuesta | (1) confirmación de recepción por mensaje/segmento, rápida; (2) el LLM procesa mensaje a mensaje mientras se envía; (3) la respuesta con contenido sale al recibir el fin del pedido (`dev_fin_segmento` del urgente, por silencio con `VOZ`, por ahora). Tras el fin, la latencia es la del último tramo + generación del LLM. |
+| Pipelining: **C, híbrido** | Propuesta | El **fondo** se manda sin esperar respuesta, solo confirmación de recepción ("enviado" → "confirmado", libera memoria). El **urgente** espera su respuesta con contenido (FSM secuencial). Máximo 1–2 segmentos de fondo en vuelo, para que el urgente no quede detrás en el buffer del socket (~180 ms). Supuestos sin confirmar con Comunicación: el backend confirma recepción por separado y rápido (<1 s). |
+| Recibir mientras se envía (WebSocket full-duplex) | Abierta | Necesario para C. La FSM es secuencial; los `srv_` deberían poder llegar durante `server_send`. Decide Comunicación; impacta la FSM. |
 | Mono vs. estéreo hacia el backend | Abierta | Con AFE sale mono (ver 3.3). |
-| Política de captura: continua vs. solo tras la wake word | Abierta | Con escucha continua ya definida para la consulta, queda decidir fuera de sesión. |
+| Política de captura: continua vs. solo tras la wake word | Abierta | Dentro de la consulta ya es continua; falta decidir fuera de sesión. |
 
-Puntos abiertos del flujo:
-- **FSM:** `dev_fin_segmento` incluye "buffer lleno" como motivo de corte; con esta política ring lleno es pérdida. Propuesta: solo tiempo o VAD. Falta actualizar `órbita..md`.
-- Pipelining: ¿se envía el siguiente segmento sin esperar la respuesta? Si la respuesta tarda más que un segmento, el backlog crece y el ring descarta.
-- Id de segmento y de sesión; `srv_respuesta_recibida` debe decir a qué segmento responde.
-- "Retomar donde quedó" (FSM) vs. reenviar el segmento entero (reintento idempotente: el backend deduplica).
-- Largo máximo de una respuesta de `audio_play`.
-- A verificar en el chip: tamaño real del chunk del AFE, unidad de `event->size` (en bytes, a 8 B por frame son `size/8` muestras) y si `feed()` bloquea.
-
-### 3.6 Para retomar: cierre del segmento y latencia (decidir con calma)
-
-**Cómo se anidan** (el header interno de 16 B no viaja al backend: el sink lo usa para armar el header del cable):
+### 3.6 Cierre del segmento, latencia y decisiones a retomar
 
 ```
 segmento (1-2 s)   = [mensaje][mensaje] ... [mensaje]        ← unidad de la FSM
@@ -205,27 +203,21 @@ mensaje (~100 ms)  = [header del cable] + audio de ~4 chunks  ← lo que sale po
 chunk en ring 2    = [header interno 16 B] + audio (32 ms)    ← solo dentro del ESP32
 ```
 
-**Velocidades:** 128 KB/s en el I2S (32 bit × 2 mics) → 64 KB/s al pasar a 16 bit → 32 KB/s con el AFE mono. 256 kbit/s es lo normal para voz a 16 kHz/16 bit; para WiFi es poco.
+- **`VOZ` es un bit por chunk** (32 ms). Fin de frase = N chunks seguidos sin `VOZ` (silencio de ~0,5–1 s: valor típico, sin medir).
+- **El tamaño del segmento es decisión de producto y backend, no de sockets.** Corto: más llamadas, riesgo de cortar una frase, libera y reenvía poco. Largo: más contexto, pero el resumen sale más tarde y se reenvía más. Un segmento de tiempo fijo largo es inviable para el urgente (si el médico termina al empezar, se espera el resto), por eso el **urgente se cierra por silencio**; el de fondo tolera demora y conviene cortarlo en una pausa con un máximo.
+- **Latencia del urgente** = silencio de fin de frase (~0,5–1 s) + proceso del backend + respuesta. El largo del segmento no suma: los mensajes salen antes de cerrarlo.
+- **Aviso de wake word:** los ~100 ms del mensaje son tiempo de *juntar* audio, no de enviar. El aviso ("urgente, pausá el resumen") es un mensaje de control de pocos bytes que sale apenas se detecta; luego sale el pre-roll (~1 s ya guardado, 32 KB, decenas de ms) y después el audio en vivo. Desde que termina "Órbita": detección en el ESP32 ~0,1–0,4 s (depende de la ventana y las inferencias por ventana del modelo de Edge Impulse; es el tramo más grande) + red decenas de ms ≈ 0,2–0,5 s. Estimado; medir en la Fase B. Al saltar la wake word, la FSM corta el segmento de fondo, así que un fondo largo no afecta al urgente.
 
-**`VOZ` es un bit por chunk** (32 ms), no por segmento ni por mensaje. Fin de frase = N chunks seguidos sin `VOZ` (silencio de ~0,5–1 s: valor típico, sin medir).
-
-**El tamaño del segmento no es un tema de sockets** (eso es el mensaje). Es una decisión de producto y de backend:
-- Corto: más llamadas (más costo), riesgo de cortar una frase, libera memoria rápido, reenvía poco si falla.
-- Largo: más contexto para el backend, pero el resumen sale más tarde y se reenvía más si falla.
-- **Un segmento de tiempo fijo largo es inviable para el pedido urgente:** si el médico termina de hablar justo al empezar el segmento, se espera todo el tiempo restante. Por eso el urgente **no** tiene largo fijo: se cierra por silencio (VAD).
-- El segmento de fondo (resumen) tolera demora; conviene cortarlo en una pausa de voz con un máximo.
-
-**Latencia del pedido urgente** = silencio que se espera para dar por terminada la frase (~0,5–1 s) + proceso del backend + respuesta. El largo del segmento no suma si el audio ya viaja mientras se habla (los mensajes salen antes de cerrar el segmento).
-
-**Aviso de wake word al backend.** Los ~100 ms del mensaje son el tiempo de *juntar* audio, no de enviar. El aviso ("urgente, pausá el resumen") es un mensaje de control de pocos bytes que sale apenas se detecta, sin esperar el ritmo del audio; después sale el pre-roll (~1 s ya guardado, 32 KB, decenas de ms) y luego el audio en vivo. Estimado desde que termina "Órbita": detección en el ESP32 ~0,1–0,4 s (depende de la ventana y las inferencias por ventana del modelo de Edge Impulse; es el tramo más grande) + red decenas de ms ≈ 0,2–0,5 s. Medir en la Fase B. Al saltar la wake word, la FSM corta el segmento de fondo en ese momento, así que un segmento de fondo largo no afecta la latencia del urgente.
-
-**Decisiones al retomar (en orden de importancia)**
-1. **¿Quién cierra el segmento urgente?** (a) el equipo, cuando ve ≥ X ms sin `VOZ` (`dev_fin_segmento`); o (b) el backend, con ASR en streaming, que detecta el fin de frase sobre el audio que ya recibió y puede **responder antes** de que el equipo cierre. Hoy la FSM espera el cierre del equipo para pasar a `server_back`. Propuesta: (a) como cierre formal más (b) permitido; depende de que los `srv_` puedan llegar durante `server_send` (punto 2).
-2. **Recibir mientras se envía / pipelining:** hoy la FSM es secuencial; el WebSocket no lo es. Impacta la FSM y el ring.
-3. **Tamaño y criterio del segmento de fondo** (pausa de voz con máximo; el número hay que acordarlo con quien arme el backend).
-4. **Qué resumen de `VOZ` lleva el header del cable** (p. ej. "hay voz", "ms de silencio final" por mensaje), para que el backend pueda decidir sin recalcular.
+**Decisiones a retomar (en orden de importancia)**
+1. **¿Quién cierra el urgente?** *(provisorio: (a))* (a) el equipo, tras ≥ X ms sin `VOZ` (`dev_fin_segmento`); o (b) el backend, con ASR en streaming, que detecta el fin de frase y puede **responder antes** de que el equipo cierre. Propuesta: (a) como cierre formal y (b) permitido; requiere que los `srv_` lleguen durante `server_send`.
+2. **Recibir mientras se envía** (necesario para C). Impacta la FSM.
+3. **Tamaño y criterio del segmento de fondo** (pausa de voz con máximo; el número lo acuerda quien arme el backend).
+4. **Qué resumen de `VOZ` lleva el header del cable** (p. ej. "hay voz", "ms de silencio final" por mensaje).
 5. **Falsos negativos/positivos de la wake word:** eventos `srv_` para "el backend detectó un Órbita que el ESP32 perdió" y "no era un pedido" (ver 3.3).
-6. Id de segmento y de sesión; `srv_respuesta_recibida` con el id; retomar vs. reenviar entero; sacar "buffer lleno" de `dev_fin_segmento` en el vault.
+6. Id de segmento y de sesión; `srv_respuesta_recibida` con el id; "retomar donde quedó" vs. reenviar el segmento entero (el backend deduplica).
+7. **FSM:** sacar "buffer lleno" de los motivos de `dev_fin_segmento` (ring lleno es pérdida, no corte: solo tiempo o VAD) y definir el arco de la wake word en `server_back` (hoy solo existen `_durante_envio` y `_durante_playback`). Falta actualizar `órbita..md`.
+8. Largo máximo de una respuesta de `audio_play` (afina el tamaño del ring 2).
+9. A verificar en el chip: tamaño real del chunk del AFE, unidad de `event->size` (si son bytes, a 8 B por frame son `size/8` muestras) y si `feed()` bloquea.
 
 ## 4. Depuración en producto
 

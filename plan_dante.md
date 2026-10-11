@@ -1,25 +1,39 @@
 # TODO — Frente Audio: flujo de audio primero, AFE después
 
-Actualizado 2026-10-08.
+Actualizado 2026-10-10.
 
-## Cambio de prioridad (2026-10-08)
+## Prioridad (2026-10-08)
 
-Antes: el plan giraba en torno al experimento "¿con qué entrenamos?" (celu vs ESP crudo vs AFE).
-Ahora: **primero un flujo de audio confiable captura → ring → consumidor**, después integrar y medir el AFE, y dejar todo listo para enchufar los sockets cuando el compañero los tenga. El entrenamiento de la wake word tarda de todos modos, así que corre en paralelo y no bloquea nada.
+Primero un flujo de audio confiable captura → ring → consumidor, después integrar y medir el AFE, y dejar todo listo para enchufar los sockets. El entrenamiento de la wake word tarda de todos modos, así que corre en paralelo y no bloquea nada.
 
-Orden: **A (flujo perfecto) → B (AFE integrado y medido) → C (listo para sockets)**. A+B = H1 (experimento), A+B+C = H2 (mergeable). El experimento de las tres fuentes pasa a ser un entregable de B, no el eje del plan.
+Orden: **A (flujo perfecto) → B (AFE integrado y medido) → C (listo para sockets)**. A+B = H1 (experimento), A+B+C = H2 (mergeable). El experimento de las tres fuentes es un entregable de B.
 
-## Dónde quedamos (2026-10-08) — retomar acá
+**Orden de ejecución (2026-10-10):** A0–A4 y pruebas del labo → Fase B (AFE + grabador de estudio, con el ring simple actual) → recién ahí A5–A8 (ring de slots, header, sink, control), con el chunk del AFE ya medido. H1 desbloquea el entrenamiento de la wake word; A5–A8 solo hacen falta para los sockets (H2).
 
-**Estado:** VS Code listo (F12 anda). No se tocó código del firmware desde el reviewer (2026-10-06). Próximo paso: **A0 y A1**.
+## Hecho (2026-10-10)
 
-**Antes de pushear:** avisar al compañero. Al hacer pull se le borra su `.vscode/settings.json` (ahora es `settings.example.json`); que lo copie antes. Sin commitear: `plan_dante.md`, `main.c.old`, cambios del vault.
+Todo compila; nada se probó todavía en el chip.
 
-**Retomar:** `arquitectura.md` §3.6 (cómo se cierra el segmento urgente y la latencia; decisiones en orden). Falta commitear lo del 2026-10-10.
+- **A0** `sdkconfig.defaults` + `partitions.csv`: flash 16 MB en QIO a 80 MHz, CPU 240 MHz, tick 1 ms, stack de `app_main` 8 KB, particiones con 2 slots OTA, `model` y `clips` (`arquitectura.md` §1).
+- **A1** Contador de overflows del DMA (`orbita_audio_get_dma_overflows()`), impreso en la línea "Fin:".
+- **A2** Captura en tarea propia (core 1, prioridad 6), controlada con `grabando` y `frames_objetivo`.
+- **A3** `audio_capture` y `wav_writer` movidos a `firmware/components/orbita_audio/` (la tarea de captura y el ring siguen en `main.c`).
+- Constantes de `main.c` agrupadas, con `_Static_assert` de las relaciones entre tamaños.
+- **A5/A6 (solo diseño):** políticas del ring, dos rings, header de 16 B, tabla de segmentos, pipelining híbrido (`arquitectura.md` §3.4–3.6).
+- Vocabulario fijo (chunk / mensaje / segmento) y FSM renombrada en todos los archivos: `dev_fin_segmento`, `srv_fin_conversacion`, `srv_sigue_conversacion`.
 
-**A0 hecho (2026-10-10), falta probar en el chip:** al flashear, el log de arranque tiene que decir `SPI Mode : QIO`; si no arranca, volver la flash a DIO (ver `arquitectura.md`, §1). Hay que borrar el `sdkconfig` local y reconfigurar al hacer pull.
+## Dónde quedamos — retomar acá
 
-**Por verificar (no confirmado):** chunk del AFE = 512 muestras/canal (del reviewer, de memoria); ICS-43434 a 16 kHz (datasheet).
+**Probar en el labo:**
+- Log de arranque con `SPI Mode : QIO` (si no arranca, volver la flash a DIO).
+- Captura de 60 s con `overruns=0` y `dma_overflows=0`.
+- Forzar la falla (`vTaskDelay(200)` en `tarea_captura`): el contador tiene que subir.
+
+**Antes de pushear:** avisarle al compañero. Tiene que copiar su `.vscode/settings.json` (ahora es `settings.example.json`), borrar su `sdkconfig` y reconfigurar, y saber que la tabla de particiones nueva borra el `nvs` del DevKit y que cambiaron los nombres de eventos de la FSM.
+
+**Siguiente:** pruebas del labo, A4 y Fase B. A5 v1 queda para después (con tiempo acotado). Las decisiones de `arquitectura.md` §3.6 se hablan con el compañero.
+
+**Por verificar (no confirmado):** chunk del AFE = 512 muestras/canal (del reviewer, de memoria); ICS-43434 a 16 kHz (A11).
 
 ## Dos hitos
 
@@ -44,24 +58,9 @@ Orden: **A (flujo perfecto) → B (AFE integrado y medido) → C (listo para soc
 
 Pasos (fixes del `embedded-reviewer` del 2026-10-06 más lo que salió de revisar el código el 2026-10-08):
 
-- [x] **A0. `sdkconfig.defaults` del repo — hecho 2026-10-10** (build limpio verificado; decisiones y consecuencias en `arquitectura.md`; el stack de las tareas nuevas se revisa en A2; el `sdkconfig` local hay que borrarlo para que tome los cambios) (antes: hoy el build usa defaults que no sirven y `sdkconfig` está ignorado por git, así que el compañero no los tendría):
-  - Flash **16 MB** (`CONFIG_ESPTOOLPY_FLASHSIZE_16MB`; hoy dice 2 MB). Con 2 MB no entran app + modelos de `esp-sr`.
-  - Tabla de particiones **custom** (`partitions.csv`) con partición `model` para los modelos del AFE; hoy está `SINGLE_APP` y el archivo custom no existe. Tamaño de la partición: verificar en la doc de `esp-sr`.
-  - CPU a **240 MHz** (hoy 160) y `CONFIG_FREERTOS_HZ=1000` (hoy 100: ticks de 10 ms).
-  - Stack de `app_main` y de cada tarea nueva: revisar (hoy 3584 bytes en `app_main`).
-  - Cambiar esto invalida mediciones previas de CPU; hacerlo antes de medir el AFE.
-- [ ] **A1. Contador de overflows del DMA.** *(código escrito y compilado 2026-10-10; falta la prueba con `vTaskDelay(200)` en el labo)* Hoy `overruns` solo cuenta ring lleno: el DMA puede perder muestras sin que nadie lo sepa, así que `overruns=0` **no garantiza** audio sin huecos.
-  - Firma (`i2s_types.h:139`): `bool cb(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx)`, retorna `false` si no despertó ninguna tarea.
-  - Registro (`i2s_common.h:241`): `i2s_channel_register_event_callback(handle, &cbs, NULL)` con `cbs.on_recv_q_ovf = cb`. Falla con `ESP_ERR_INVALID_STATE` si el canal ya está habilitado: **registrar antes de `i2s_channel_enable`**.
-  - Callback `static IRAM_ATTR`, contador `static volatile uint32_t` en `audio_capture.c`, getter público `orbita_audio_get_dma_overflows()` en `audio_capture.h`. Reiniciar a 0 en cada grabación e imprimirlo junto a `overruns` en la línea "Fin: ...".
-  - `event->size` = bytes sobrescritos: opcional sumarlo para saber cuánto audio se perdió.
-  - Prueba: `vTaskDelay(200)` en el loop de captura; el contador tiene que subir.
-- [ ] **A2. Captura en tarea propia** *(código escrito y compilado 2026-10-10, core 1, prioridad 6; falta probar en el labo: 60 s con `overruns=0` y `dma_overflows=0`)* (hoy corre en `app_main`, prioridad 1), con prioridad mayor que las del AFE y fijada a un core.
-- [x] **A3. Estructura en componente — hecho 2026-10-10** *(solo se movieron `audio_capture`, `wav_writer` y la dependencia `esp-sr`; `tarea_captura`, constantes y ring siguen en `main.c` hasta A5–A8; build idéntico, 0x3b7c0)*: mover `audio_capture`, `wav_writer` y lo que se sume a `firmware/components/orbita_audio/` (con su `CMakeLists.txt`); `main/` queda fino. Mover ahí también la dependencia `esp-sr` del `idf_component.yml`. Es barato ahora y caro cuando el compañero ya tenga código en `main.c`.
 - [ ] **A4. Chunk de captura = chunk del AFE** (`get_feed_chunksize()`, a verificar; el reviewer estima 512 muestras/canal a 16 kHz). Hoy 1600 no es múltiplo. Un solo parámetro que B ajusta a lo que devuelva el AFE en runtime, sin rehacer el ring.
-- [ ] **A5. Ring** *(políticas decididas 2026-10-10, ver `arquitectura.md` §3.4; falta implementar el ring de slots y verificar si `feed()` bloquea)* (decisiones de producto en `orbita-obsidian/arquitectura.md`; Claude sugiere dos rings, Dante investiga cómo se suele hacer antes de cerrar): **primero definir las políticas** (reintentos de la FSM, pre-roll, qué pasa al llenarse) y recién ahí el tipo: el ring de FreeRTOS es de consumo único y no permite releer para reintentar. En PSRAM (`xRingbufferCreateWithCaps` existe en 5.5.5, pero el struct de control también cae en PSRAM; alternativa `xRingbufferCreateStatic`). Antes de armar ring 1, ver si `feed()` bloquea y qué hace `afe_ringbuf_size`. Hoy el ring es `BYTEBUF` y su memoria la decide `malloc` (con `SPIRAM_USE_MALLOC` y umbral de 16 KB probablemente ya cae en PSRAM: confirmarlo).
-  - **Dimensionar para sockets:** cuántos segundos de corte de WiFi tiene que absorber (a 64 KB/s, 10 s = 640 KB; si el ring largo es mono procesado, la mitad) y qué pasa cuando se llena.
-- [ ] **A6. Contrato del chunk (lo que ve cualquier consumidor).** Encabezado de 16 B por chunk del ring 2 y tabla de segmentos: diseño en `arquitectura.md` §3.4; falta revisarlo con el compañero y codearlo junto con el ring (A5).
+- [ ] **A5. Ring de slots** (diseño en `arquitectura.md` §3.4). v1: slots en PSRAM + 3 cursores (escritura / envío / confirmación) + cola de segmentos consecutivos, sin urgente ni pre-roll (no hay wake word aún); probar con `uart_sink` y `throttled_sink`. v2: urgente y pre-roll. Antes de armar el ring 1, verificar si `feed()` bloquea.
+- [ ] **A6. Header de 16 B + tabla de segmentos** (diseño en §3.4): codearlo junto con A5 y revisarlo con el compañero.
 - [ ] **A7. Interfaz del consumidor ("sink")** con operaciones mínimas: abrir/empezar, recibir chunk, cerrar. Implementaciones: `uart_sink` (estudio, lo que hoy hace `tarea_envio`) y, para probar sin red, `throttled_sink` (consume a ritmo configurable y se puede "cortar" N segundos). El socket del compañero será una tercera implementación.
 - [ ] **A8. Interfaz de control** (arrancar/parar el flujo): hoy lo dispara el comando `'g'`; mañana lo dispara la FSM (`dev_wake_word`, `dev_fin_segmento`). `main.c` solo traduce comandos a esas llamadas. Sin wake word entrenada todavía, el disparo manual (o el VAD del AFE) hace de stub.
 - [ ] **A9.** `CONFIG_I2S_ISR_IRAM_SAFE` y más descriptores DMA (`dma_desc_num` 8–12).
@@ -70,7 +69,7 @@ Pasos (fixes del `embedded-reviewer` del 2026-10-06 más lo que salió de revisa
 - [ ] **A12. Pruebas de validación:**
   - Captura larga (10 min, en el labo): línea "Fin: ..." con ambos contadores en 0 y WAV sin saltos (un tono conocido ayuda a ver huecos).
   - **Corte simulado con `throttled_sink`:** parar el consumidor 5, 10 y 20 s. Verificar que el ring absorbe lo prometido en A5 y que, al llenarse, la discontinuidad llega marcada al consumidor y los contadores lo reflejan. Valida el tamaño del ring sin necesitar sockets.
-- [ ] **A13. Menores:** borrar `wav_pack_chunk_24bit` (muerto), comentarios desactualizados, `FRAME_SIZE` → `CHANNELS`, capacidad de `out_buf` en `wav_pack_chunk_16bit`.
+- [ ] **A13. Menores:** borrar `wav_pack_chunk_24bit` (muerto), comentarios desactualizados, capacidad de `out_buf` en `wav_pack_chunk_16bit`.
 
 **No tocar la ganancia/shift de captura** una vez que se graba: los picos andan en −25 a −30 dBFS (margen cómodo contra clipping) y cambiarlo invalida lo grabado con la ESP.
 
