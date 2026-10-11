@@ -10,6 +10,13 @@ Orden: **A (flujo perfecto) → B (AFE integrado y medido) → C (listo para soc
 
 **Orden de ejecución (2026-10-10):** A0–A4 y pruebas del labo → Fase B (AFE + grabador de estudio, con el ring simple actual) → recién ahí A5–A8 (ring de slots, header, sink, control), con el chunk del AFE ya medido. H1 desbloquea el entrenamiento de la wake word; A5–A8 solo hacen falta para los sockets (H2).
 
+## Dos hitos
+
+| Hito | Qué significa | Fases |
+|---|---|---|
+| **H1 — Listo para el experimento** | Se puede grabar la sesión de las tres fuentes: crudo + AFE en un mismo WAV, sin huecos, con duración variable. | A + B |
+| **H2 — Mergeable y listo para sockets** | El audio vive aislado en su propio componente, entrega chunks numerados con discontinuidades marcadas, y el transporte se enchufa sin tocar captura ni ring. | A + B + C |
+
 ## Hecho (2026-10-10)
 
 Todo compila; nada se probó todavía en el chip.
@@ -35,24 +42,16 @@ Todo compila; nada se probó todavía en el chip.
 - [ ] Toma larga de 10 min (A12) con ambos contadores en 0.
 - La PC no debe mandar un segundo `'g'` durante la toma: arrancaría otra apenas termine.
 
-**Antes de pushear:** avisarle al compañero. Tiene que copiar su `.vscode/settings.json` (ahora es `settings.example.json`), borrar su `sdkconfig` y reconfigurar, y saber que la tabla de particiones nueva borra el `nvs` del DevKit y que cambiaron los nombres de eventos de la FSM.
-
-**Siguiente:** pruebas del labo, A4 y Fase B. A5 v1 queda para después (con tiempo acotado). Las decisiones de `arquitectura.md` §3.6 se hablan con el compañero.
-
-**Por verificar (no confirmado):** chunk del AFE = 512 muestras/canal (del reviewer, de memoria); ICS-43434 a 16 kHz (A11).
-
-## Dos hitos
-
-| Hito | Qué significa | Fases |
-|---|---|---|
-| **H1 — Listo para el experimento** | Se puede grabar la sesión de las tres fuentes: crudo + AFE en un mismo WAV, sin huecos, con duración variable. | A + B |
-| **H2 — Mergeable y listo para sockets** | El audio vive aislado en su propio componente, entrega chunks numerados con discontinuidades marcadas, y el transporte se enchufa sin tocar captura ni ring. | A + B + C |
-
-**"Mergeable" =** (todo se cumple)
-- Compila limpio desde cero con el `sdkconfig.defaults` del repo (no depende de tu `sdkconfig` local, que está en `.gitignore`).
-- El audio vive en `firmware/components/orbita_audio/`; `main.c` queda como integrador fino (inicia módulos, atiende comandos). El compañero agrega su componente de comunicación sin tocar `main.c` más que para enchufar el sink.
-- Ningún parámetro del estudio (10 min, `'g'`, baud, markers) vive dentro de captura/ring/AFE.
-- Pasaron `embedded-reviewer` y `fsm-consistency-reviewer`; `arquitectura.md` actualizado.
+**Decisiones por hablar con el compañero** (en orden de importancia; contexto en `arquitectura.md` §3.4–3.6):
+1. ¿Quién cierra el pedido urgente? Provisorio: el equipo, tras ≥ X ms sin `VOZ` (`dev_fin_segmento`); el backend puede responder antes si procesa en streaming.
+2. Recibir mientras se envía (necesario para el pipelining híbrido). Impacta la FSM.
+3. Tamaño y criterio del segmento de fondo (pausa de voz con máximo; el número lo define el backend).
+4. Qué resumen de `VOZ` lleva el header del cable (p. ej. "hay voz", "ms de silencio final" por mensaje).
+5. Eventos `srv_` nuevos para falsos negativos y positivos de la wake word.
+6. Id de segmento y de sesión; `srv_respuesta_recibida` con el id; retomar donde quedó vs. reenviar el segmento entero (el backend deduplica).
+7. FSM: sacar "buffer lleno" de los motivos de `dev_fin_segmento` (ring lleno es pérdida; solo tiempo o VAD) y definir el arco de la wake word en `server_back`. Actualizar `órbita..md`.
+8. Largo máximo de una respuesta de `audio_play` (afina el ring 2).
+9. A verificar en el chip: chunk real del AFE, unidad de `event->size` (si son bytes, a 8 B por frame son `size/8` muestras) y si `feed()` bloquea.
 
 ## Fase A — Flujo de audio perfecto (PRIORIDAD)
 
