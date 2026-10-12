@@ -26,38 +26,51 @@
 #define ORBITA_SAMPLE_RATE_HZ 16000
 
 /**
- * @brief  Inicializacion del canal I2S
+ * @brief  Inicializa y enciende el canal I2S de captura.
  *
- * @details Inicializacion del canal I2S en modo
- *          estandar, RX (receptor), estereo (x2 mics,L y R), 32 bits por slot 
+ * @details Modo estandar (Philips), solo RX, la ESP32 como master, estereo
+ *          (L y R: un mic por slot), 32 bits por slot, 16 kHz. Buffer DMA de
+ *          6 descriptores x 240 frames = 1440 frames (~90 ms): es el maximo
+ *          que puede pasar entre dos orbita_audio_i2s_read() sin perder audio.
+ *          Registra el contador de overflows del DMA antes de encender el canal.
+ *          Llamar UNA vez, antes de cualquier lectura.
  *
- * @return  X con error, Y por confirmacion
- *         
+ * @return  ESP_OK si el canal quedo encendido.
+ *          Si no, el codigo de error del driver (i2s_new_channel, init_std_mode,
+ *          register_event_callback o enable) y se loguea cual fallo.
  */
 esp_err_t orbita_audio_i2s_init(void);
 
 /**
- * @brief  
+ * @brief  Lee `frame_count` frames estereo del mic.
  *
- * @details 
- *          
+ * @details Cada frame = 1 muestra L + 1 muestra R, de 32 bits crudos tal como los
+ *          entrega el mic. BLOQUEA hasta tener todos los frames pedidos, asi que
+ *          la lectura dura frame_count / 16000 s (1024 frames = 64 ms) y marca el
+ *          ritmo del que la llama. Entre dos llamadas no pueden pasar mas de ~90 ms.
  *
- * @param [in]   out_buf     puntero a la posicion de memoria donde queremos copiar los datos del mic
- * @param [in]   frame_count     cuantos frames queremos leer
- * @param [in]   frame_read    puntero a la direccion donde queremos guardar cuantos frames consiguio leer
+ * @param [out]  out_buf       destino; con espacio para frame_count * 2 * sizeof(int32_t) bytes
+ * @param [in]   frame_count   cuantos frames se piden
+ * @param [out]  frames_read   frames realmente leidos; puede ser NULL si no interesa
  *
- * @return  err
- *         
+ * @return  ESP_OK, o el error de i2s_channel_read (se loguea).
  */
-// Lee `frame_count` frames estereo (cada frame = 1 muestra L + 1 muestra R,
-// cada una de 32 bits crudos tal como los entrega el mic).
-// `out_buf` debe tener espacio para frame_count * 2 * sizeof(int32_t).
 esp_err_t orbita_audio_i2s_read(int32_t *out_buf, size_t frame_count, size_t *frames_read);
 
-// Cuantas veces el DMA del I2S piso audio que nadie habia leido todavia
-// (la tarea de lectura llego tarde). Cada cuenta = un hueco en el audio.
-// Es distinto de `overruns` de main.c, que cuenta el ring lleno.
+/**
+ * @brief  Cuantas veces el DMA piso audio que nadie habia leido (lectura llego tarde).
+ *
+ * @details Cada cuenta = un buffer de DMA (240 frames, 15 ms) perdido: un hueco en el audio.
+ *          Lo incrementa una interrupcion. Es distinto de `overruns` de main.c,
+ *          que cuenta chunks que no entraron a un ring lleno.
+ *
+ * @return  Cantidad acumulada desde el ultimo reset.
+ */
 uint32_t orbita_audio_get_dma_overflows(void);
 
-// Pone el contador en 0. Llamar al empezar cada grabacion.
+/**
+ * @brief  Pone el contador de overflows del DMA en 0.
+ *
+ * @details Llamar al empezar cada grabacion.
+ */
 void orbita_audio_reset_dma_overflows(void);

@@ -43,10 +43,10 @@ def parse_args():
     parser.add_argument("cmd_port", help="Puerto COM del USB-Serial-JTAG nativo (Puerto B)")
     parser.add_argument("data_port", help="Puerto COM del UART0/chip puente (Puerto A), sin monitor abierto")
     parser.add_argument("--cmd-baud", type=int, default=115200)
-    parser.add_argument("--out-dir", type=Path, default=Path(__file__).parent / "ruido_labo",
-                        help="carpeta donde se guardan las grabaciones (default: tools/ruido_labo)")
-    parser.add_argument("--prefix", default="ruido_labo",
-                        help="prefijo del nombre: <prefix>1.wav, <prefix>2.wav, ... (default: ruido_labo)")
+    parser.add_argument("--out-dir", type=Path, default=Path(__file__).parent / "prueba_espectrogramas",
+                        help="carpeta donde se guardan las grabaciones (default: tools/prueba_espectrogramas)")
+    parser.add_argument("--prefix", default="toma_espectrograma_",
+                        help="prefijo del nombre: <prefix>1.wav, <prefix>2.wav, ... (default: toma_espectrograma_)")
     return parser.parse_args()
 
 
@@ -101,7 +101,7 @@ def wait_for_marker(ser_cmd: serial.Serial, timeout_s: float = 10.0) -> bool:
     return False
 
 
-def read_firmware_summary(ser_data: serial.Serial) -> None:
+def read_firmware_summary(ser_data: serial.Serial, ser_cmd: serial.Serial) -> None:
     # Tras el stream el firmware baja a 115200 y loguea. Cambiamos el baud
     # de este lado y buscamos la linea "Fin:". Es best-effort: puede llegar
     # algo de basura justo en el cambio de baud.
@@ -118,7 +118,15 @@ def read_firmware_summary(ser_data: serial.Serial) -> None:
         if "Fin:" in line:
             print("Firmware:", line[line.index("Fin:"):].strip())
             return
-    print("No se vio la linea final del firmware (no implica error; mira el tamano recibido).")
+    # No se vio por el UART (el firmware la imprimio antes de que cambiaramos el baud).
+    # El firmware la guarda: se la pedimos por el puerto de comandos con 's'.
+    ser_cmd.reset_input_buffer()
+    ser_cmd.write(b"s")
+    linea = ser_cmd.readline().decode("ascii", errors="ignore").strip()
+    if "Fin:" in linea:
+        print("Firmware (pedida con 's'):", linea[linea.index("Fin:"):])
+    else:
+        print("No se pudo leer la linea final del firmware (mira el tamano recibido).")
 
 
 def record(ser_cmd: serial.Serial, ser_data: serial.Serial, out_dir: Path, prefix: str) -> None:
@@ -167,7 +175,7 @@ def record(ser_cmd: serial.Serial, ser_data: serial.Serial, out_dir: Path, prefi
     else:
         print(f"Completo: {received} bytes en {elapsed:.1f}s. Guardado: {filename}")
 
-    read_firmware_summary(ser_data)
+    read_firmware_summary(ser_data, ser_cmd)
 
 
 def main():
@@ -178,9 +186,14 @@ def main():
 
     try:
         while True:
-            line = input("Escribi 'g' + Enter para grabar (q para salir): ").strip().lower()
+            line = input("Escribi 'g' grabar, 's' stats de la ultima toma, 'q' salir: ").strip().lower()
             if line == "g":
                 record(ser_cmd, ser_data, args.out_dir, args.prefix)
+            elif line == "s":
+                # Stats de la ultima toma, pedidas por el puerto de comandos.
+                ser_cmd.reset_input_buffer()
+                ser_cmd.write(b"s")
+                print(ser_cmd.readline().decode("ascii", errors="ignore").strip() or "Sin respuesta.")
             elif line == "q":
                 break
     except (KeyboardInterrupt, EOFError):

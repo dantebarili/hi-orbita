@@ -1,2 +1,5 @@
 pyserial
 matplotlib
+numpy
+scipy
+soundfile

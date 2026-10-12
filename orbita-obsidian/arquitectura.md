@@ -10,7 +10,7 @@ Estado: **Cerrada** · **Provisoria** (vale hasta medir/verificar) · **Propuest
 |---|---|---|
 | Muestra | Un número de un mic | 2 bytes (16 bit) |
 | Frame de I2S | Un par L+R | 4 bytes (8 B en crudo de 32 bit) |
-| **Chunk** | Lo que consume y entrega el AFE (`feed`/`fetch`); cada slot del ring 2 guarda uno | ~512 muestras por canal = 32 ms (a verificar). Hoy `FRAMES_PER_CHUNK` = 1600 (100 ms) |
+| **Chunk** | Lo que consume y entrega el AFE (`feed`/`fetch`); cada slot del ring 2 guarda uno | Medido en el chip (2 mics, SE+VAD WebRTC): `feed` = 1024 muestras/canal × 2 canales = 64 ms (4 KB); `fetch` = 512 muestras mono = 32 ms (1 KB). Salen 2 `fetch` por cada `feed` (medido, sin pérdida). El ring 2 guarda los de `fetch`. Latencia de la tubería del AFE: 64 ms |
 | **Mensaje** | Lo que el sink escribe al socket de una vez; un segmento viaja en varios | ~100 ms (a definir con Comunicación) |
 | **Segmento** | Lo que se manda al backend entre un `dev_fin_segmento` y el siguiente (unidad de la FSM) | 1–2 s, provisorio |
 
@@ -57,7 +57,7 @@ Puntos abiertos:
 ## 2. Memoria
 
 - RAM interna (~512 KB): la escasa. PSRAM (8 MB): sobra. Audio y tensores de modelos en PSRAM; DMA del I2S y stacks críticos en RAM interna.
-- Falta medir WiFi + TLS (compañero) y `memory_alloc_mode` del AFE, que decide cuánta RAM interna toma.
+- Falta medir WiFi + TLS (compañero) y la RAM interna libre con el AFE andando (`memory_alloc_mode` del AFE = más PSRAM).
 
 ## 3. DSP y pipeline de audio
 
@@ -73,25 +73,25 @@ mics ─▶ I2S/DMA ─▶ tarea de captura ─▶ RING 1 ─▶ tarea feed ─�
 |---|---|---|---|---|
 | 1 | Mics (INMP441 / ICS-43434, L y R) | Audio digital I2S | 24 bit útiles en slot de 32; 16 kHz; BCLK 1,024 MHz | hardware |
 | 2 | I2S + DMA | Frames estéreo crudos | 8 B por frame, 128 KB/s; buffer DMA 6 × 240 frames ≈ 90 ms (RAM interna) | hardware; la interrupción queda en el core desde donde se inicializó el driver (hoy core 0, de `app_main`; sin verificar qué función la reserva) |
-| 3 | Tarea de captura | Convierte 32→16 bit (shift fijo), arma chunks | Estéreo 16 bit, 64 KB/s; chunk de 512 frames = 2 KB | **core 1, prioridad 6** (A2) |
+| 3 | Tarea de captura | Convierte 32→16 bit (shift fijo), arma chunks | Estéreo 16 bit, 64 KB/s; chunk de 1024 frames = 4 KB (64 ms, el de `feed`) | **core 1, prioridad 6** (A2) |
 | 4 | Ring 1 | Chunks de entrada, sin header | ~16 chunks ≈ 32 KB (~0,5 s) | memoria |
-| 5 | Tarea feed | Canales intercalados (mic, mic; con AEC, también la referencia) | int16 a 16 kHz, 64 KB/s | core 1 (propuesta), prioridad menor que la captura |
-| 6 | AFE (`esp-sr`) | Beamforming + NS + VAD (AGC y WakeNet apagados): audio **mono**, `vad_state`, `raw_data` | Chunk de salida (`get_fetch_chunksize`) ≈ 1 KB, 32 KB/s | tareas del AFE (`afe_perferred_core` / `_priority`): core 1 (propuesta) |
+| 5 | Tarea feed | Canales intercalados (mic, mic; con AEC, también la referencia) | int16 a 16 kHz, 64 KB/s | **core 1, prioridad 5** (hecho) |
+| 6 | AFE (`esp-sr`) | Beamforming (BSS) + VAD (sin NS con 2 mics; AGC y WakeNet apagados): audio **mono**, `vad_state`, `raw_data`. Con la config por defecto la salida era el mic 0 crudo, sin procesar (medido); se prueba `fixed_first_channel=false` | Chunk de salida (`get_fetch_chunksize`) ≈ 1 KB, 32 KB/s | tareas internas del AFE: **core 0, prioridad 5** (`afe_perferred_core`, medido); `tarea_fetch` en core 1 |
 | 7 | Wake word (Edge Impulse) | Consume **todos** los chunks, con su propia ventana | 32 KB/s | core 1 (propuesta); si no entra con el AFE, pasa al core 0 |
 | 8 | Ring 2 | Chunk + header de 16 B, y la tabla de segmentos | ~1040 B por slot; 60 s ≈ 1875 slots ≈ 1,9 MB en PSRAM | memoria |
-| 9 | Sink | Elige un segmento y lo parte en mensajes | Mensaje ≈ 4 chunks ≈ 4 KB; ≈ 270 kbit/s con TLS | core 0 (propuesta); hoy `tarea_envio` sin core fijo, prioridad 5 |
+| 9 | Sink | Elige un segmento y lo parte en mensajes | Mensaje ≈ 4 chunks ≈ 4 KB; ≈ 270 kbit/s con TLS | core 0 (propuesta); hoy `tarea_envio` (prueba de test), core 0, prioridad 5 |
 | 10 | Backend | Audio mono 16 kHz / 16 bit por segmento | — | — |
 
 - **Reparto de cores (propuesta):** core 0 = red y control (WiFi va fijo al core 0 por defecto; `esp_timer`, `app_main`, sink, TLS); core 1 = audio en tiempo real. Motivo: las ráfagas de WiFi/TLS no deben quitarle CPU a la captura (el DMA da ~90 ms de margen). Riesgo: AFE (~46 % de un núcleo, estimado) + wake word + captura podrían no entrar en el core 1: medir en la Fase B. La tarea de lwIP no tiene core fijo.
-- **Hoy:** I2S → captura (core 1) → un ring de FreeRTOS → `tarea_envio` → UART0 (estudio). Sin AFE, sin ring 2, sin tabla.
-- **Estudio:** WAV de 2 canales (ch0 mic crudo, ch1 salida del AFE) = 64 KB/s por UART a 921600 baud (~1,44× el audio); 3 canales no entran.
+- **Hoy:** I2S → captura (core 1) → ring 1 → `feed` → AFE → `fetch` (core 1); en la prueba de test `fetch` y la captura copian a dos rings y `tarea_envio` (core 0) los intercala hacia UART0. Sin ring 2 ni tabla.
+- **Test:** WAV de 2 canales (ch0 mic crudo L, ch1 salida del AFE) = 64 KB/s por UART a 921600 baud (~1,44× el audio); 3 canales no entran. El ch1 llega 64 ms después del ch0 (se corrige en el script con `--alinear`).
 
 ### 3.2 Captura (I2S → tarea de captura)
 
 | Decisión | Estado | Nota |
 |---|---|---|
 | Formato 16 kHz / 16 bit en todo el sistema | Provisoria | Falta el datasheet del ICS-43434 (muestreo y rango de reloj, BCLK 1,024 MHz). Si no lo cubre, cambia el mic o el formato. |
-| Captura en tarea propia, de mayor prioridad que el AFE | Cerrada | Hecho en A2 (core 1, prioridad 6); falta probar. Reparto de cores en 3.1; se confirma en la Fase B. |
+| Captura en tarea propia, de mayor prioridad que el AFE | Cerrada | Hecho en A2 y probado (core 1, prioridad 6). Reparto de cores en 3.1; el AFE interno quedó en core 0 por defecto: se confirma con CPU medida en la Fase B. |
 | La captura convierte 32→16 bit y escribe en el ring 1; otra tarea hace `feed` | Cerrada | Así el DMA nunca se atrasa. |
 | Chunk de captura = chunk de entrada del AFE, leído en runtime | Cerrada | No hardcodear: lo fija la librería. |
 | Ganancia/shift de captura fijos en firmware | Provisoria | Calibrado con INMP441 en DevKit; con el mic, puerto acústico y carcasa de producción hay que re-medir y reentrenar. |
@@ -111,7 +111,7 @@ El INMP441 entrega 32 bits por slot pero solo 24 son útiles.
 Puntos abiertos:
 - La wake word necesita su propio búfer de ventana (Edge Impulse): consume cada chunk siempre.
 - `vad_cache`: cuando el VAD recorta el inicio del habla, `fetch` entrega ese cache; si el ring 2 lo ignora, se pierde el comienzo de la frase.
-- Para el WAV de estudio: `afe_fetch_result_t` trae `raw_data`; verificar que sea el crudo y esté alineado.
+- Para el WAV de test: `afe_fetch_result_t` trae `raw_data`; verificar que sea el crudo y esté alineado.
 - **Falsos negativos y positivos de la wake word (hay que lidiar con los dos):** *negativo*: el backend, que recibe todo el audio de la consulta, debe poder detectar un "Órbita" que el ESP32 perdió y avisar (evento `srv_` nuevo; el ring 2 conserva el audio hasta la confirmación). *Positivo*: el backend debe poder descartar un urgente de más y devolver al equipo al resumen (otro `srv_`). Métricas: FRR y falsas activaciones por hora.
 
 ### 3.4 Rings, header y tabla de segmentos
@@ -140,7 +140,7 @@ Puntos abiertos:
 | Campo | Tipo | Qué hace |
 |---|---|---|
 | `seq` | u32 | Nº de chunk, sube de a 1. Comparar con `(int32_t)(a - b)` (vale al dar la vuelta, ~4,4 años a 32 ms). Se reinicia en cada arranque: el backend necesita además un id de sesión. |
-| `lost_samples` | u32 | Muestras que perdió el DMA justo antes de este chunk (0 = ninguna). Reconstruye el tiempo y alinea el WAV de estudio; no se rellena con ceros. |
+| `lost_samples` | u32 | Muestras que perdió el DMA justo antes de este chunk (0 = ninguna). Reconstruye el tiempo y alinea el WAV de test; no se rellena con ceros. |
 | `n_samples` | u16 | Muestras por canal (el `vad_cache` puede traer otro tamaño). |
 | `flags` | u8 | bit 0 `VOZ` (el VAD detectó voz); resto reservado. |
 | `version` | u8 | Versión del formato. |
@@ -151,7 +151,7 @@ Puntos abiertos:
 - Sin relleno: `_Static_assert(sizeof == 16)`, sin `__attribute__((packed))`. Costo en PSRAM despreciable aunque el chunk baje a 10 ms (6000 slots, 2 MB).
 - Se codea en `firmware/components/orbita_audio/` (A5–A6). **Todavía no hay código.**
 
-**Tabla de segmentos (ring 2).** Una entrada por segmento: `seq_inicio`, `seq_fin`, tipo (fondo / urgente), estado (pendiente / enviando / enviado / confirmado) y hueco previo (chunks descartados). Es el índice de la cinta: qué mandar, en qué orden y en qué estado. Reemplaza al ring de FreeRTOS, a las banderas de la toma de estudio (`grabando`, `capture_done`) y a los flags de segmento en el chunk. La wake word crea una entrada **urgente** con `seq_inicio = seq_detección − pre-roll`; dos segmentos pueden compartir chunks.
+**Tabla de segmentos (ring 2).** Una entrada por segmento: `seq_inicio`, `seq_fin`, tipo (fondo / urgente), estado (pendiente / enviando / enviado / confirmado) y hueco previo (chunks descartados). Es el índice de la cinta: qué mandar, en qué orden y en qué estado. Reemplaza al ring de FreeRTOS, a las banderas de la toma de test (`grabando`, `capture_done`) y a los flags de segmento en el chunk. La wake word crea una entrada **urgente** con `seq_inicio = seq_detección − pre-roll`; dos segmentos pueden compartir chunks.
 
 Quién la toca (con mutex; son pocas filas):
 - Tarea `fetch`, por chunk (~31/s): antes de pisar un slot, mira si su segmento se necesita.
@@ -170,7 +170,7 @@ Alternativas (el patrón es habitual: TCP guarda lo enviado sin confirmar): (2) 
 
 | Decisión | Estado | Nota |
 |---|---|---|
-| Sink intercambiable (empezar / recibir chunk / cerrar) | Provisoria | Falta definir quién es dueño del chunk y si puede bloquear. El sink UART de estudio lee en orden; elegir segmentos va solo en el sink del socket (compañero). |
+| Sink intercambiable (empezar / recibir chunk / cerrar) | Provisoria | Falta definir quién es dueño del chunk y si puede bloquear. El sink UART de test lee en orden; elegir segmentos va solo en el sink del socket (compañero). |
 | Audio aislado en `firmware/components/orbita_audio/`; `main` solo integra | Provisoria | Hecho para `audio_capture`, `wav_writer` y `esp-sr`. Faltan captura, constantes y rings (A5–A8). |
 | Mensaje de WebSocket | Abierta | ~100–130 ms (4 chunks, ~4 KB), binario (base64 suma 33 %), múltiplo de un chunk. Header del cable por mensaje, de Comunicación (sugerido: id de segmento, `seq` del primer chunk, cantidad de chunks, tipo, `lost_samples` total, hueco previo). Overhead de cabeceras (estimado): ~12 % a 20 ms, ~5 % a 100 ms, ~0,5 % a 1 s; el costo real es CPU y radio. Medir ventana TCP (el buffer de lwIP de ~5,7 KB limita a ~28 KB/s con 200 ms de latencia) y RAM de TLS. |
 | Mensajes del backend | Propuesta | (1) confirmación de recepción, rápida; (2) el LLM procesa mensaje a mensaje mientras se envía; (3) la respuesta sale al recibir el fin del pedido (`dev_fin_segmento` del urgente, por silencio con `VOZ`, por ahora). |
@@ -197,7 +197,7 @@ chunk en ring 2    = [header interno 16 B] + audio (32 ms)    ← solo dentro de
 | Decisión | Estado | Nota |
 |---|---|---|
 | Logs por UART0 (GPIO 43/44); USB-Serial-JTAG (19/20) libre para uso propio | Provisoria | Hoy asume el chip puente USB-UART del DevKit. En la PCB: CP2102/CH340 o conector de programación; alternativa más barata: USB nativo, sin puente. Decisión de BOM y ruteo. |
-| Streaming de estudio por UART0 con `esp_log_level_set(NONE)` | Solo estudio | No frena los logs de ROM al arrancar ni el handler de pánico. No es para producción. |
+| Streaming de test por UART0 con `esp_log_level_set(NONE)` | Solo test | No frena los logs de ROM al arrancar ni el handler de pánico. No es para producción. |
 
 ## 5. Pendientes de producto (sin dueño todavía)
 
