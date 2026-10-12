@@ -48,6 +48,9 @@ esp_err_t orbita_afe_init(void)
     cfg->se_init = true;
     cfg->ns_init = false;
     cfg->vad_init = true;
+    cfg->fixed_output_channel = false;   // probado: solo, no cambio nada (salida = mic 0)
+    cfg->fixed_first_channel = false;    // prueba: el canal lo elige el VAD, no queda fijo en el mic
+    cfg->vad_enable_channel_trigger = true;
 
     // Revisa conflictos entre opciones y las corrige solo (ver el log).
     // OJO: con 2 mics, beamforming (SE) tiene prioridad sobre NS.
@@ -57,8 +60,9 @@ esp_err_t orbita_afe_init(void)
     ESP_LOGI(TAG, "Config final (despues de afe_config_check):");
     afe_config_print(cfg);
     // Por la ROM, para verlo aunque los logs normales no salgan en el monitor.
-    esp_rom_printf("AFE config final: se=%d vad=%d ns=%d wakenet=%d aec=%d\n",
-                   cfg->se_init, cfg->vad_init, cfg->ns_init, cfg->wakenet_init, cfg->aec_init);
+    esp_rom_printf("AFE config final: se=%d vad=%d ns=%d wakenet=%d aec=%d fixed_out=%d fixed_first=%d vad_trig=%d\n",
+                   cfg->se_init, cfg->vad_init, cfg->ns_init, cfg->wakenet_init, cfg->aec_init,
+                   cfg->fixed_output_channel, cfg->fixed_first_channel, cfg->vad_enable_channel_trigger);
 
     // --- Instancia ---
     // create_from_config reserva memoria y crea las tareas internas del AFE.

@@ -43,8 +43,8 @@ def parse_args():
     parser.add_argument("cmd_port", help="Puerto COM del USB-Serial-JTAG nativo (Puerto B)")
     parser.add_argument("data_port", help="Puerto COM del UART0/chip puente (Puerto A), sin monitor abierto")
     parser.add_argument("--cmd-baud", type=int, default=115200)
-    parser.add_argument("--out-dir", type=Path, default=Path(__file__).parent / "prueba_espectrogramas",
-                        help="carpeta donde se guardan las grabaciones (default: tools/prueba_espectrogramas)")
+    parser.add_argument("--out-dir", type=Path, default=Path(__file__).parent / "prueba_afe",
+                        help="carpeta donde se guardan las grabaciones (default: tools/prueba_afe)")
     parser.add_argument("--prefix", default="toma_espectrograma_",
                         help="prefijo del nombre: <prefix>1.wav, <prefix>2.wav, ... (default: toma_espectrograma_)")
     return parser.parse_args()
