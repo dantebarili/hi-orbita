@@ -3,6 +3,7 @@
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "audio_afe.h"
 #include "audio_capture.h"
 #include "wav_writer.h"
@@ -183,12 +184,16 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
     if (feed_frames != ORBITA_CHUNK_FRAMES) {
         ESP_LOGE(TAG, "ORBITA_CHUNK_FRAMES=%d no coincide con los frames que pide feed (%d)",
                  ORBITA_CHUNK_FRAMES, feed_frames);
+        esp_rom_printf("pipeline: ORBITA_CHUNK_FRAMES=%d, feed pide %d
+", ORBITA_CHUNK_FRAMES, feed_frames);
         return ESP_ERR_INVALID_SIZE;
     }
     int fetch_frames = orbita_afe_fetch_chunk_frames();
     if (fetch_frames != ORBITA_AFE_FETCH_FRAMES) {
         ESP_LOGE(TAG, "ORBITA_AFE_FETCH_FRAMES=%d no coincide con lo que entrega fetch (%d)",
                  ORBITA_AFE_FETCH_FRAMES, fetch_frames);
+        esp_rom_printf("pipeline: ORBITA_AFE_FETCH_FRAMES=%d, fetch entrega %d
+", ORBITA_AFE_FETCH_FRAMES, fetch_frames);
         return ESP_ERR_INVALID_SIZE;
     }
 

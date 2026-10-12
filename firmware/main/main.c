@@ -1,5 +1,6 @@
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "audio_capture.h"
@@ -13,6 +14,9 @@ static void arranque_fallo(const char *que, esp_err_t err)
 {
     while (1) {
         ESP_LOGE("main", "ARRANQUE DETENIDO: %s fallo con %s", que, esp_err_to_name(err));
+        // Mismo aviso por la ROM: sale aunque los logs normales no se esten viendo.
+        esp_rom_printf("ARRANQUE DETENIDO: %s fallo con %s
+", que, esp_err_to_name(err));
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
