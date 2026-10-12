@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "esp_afe_sr_models.h"
 #include "model_path.h"
 #include "audio_afe.h"
@@ -55,6 +56,9 @@ esp_err_t orbita_afe_init(void)
     cfg = afe_config_check(cfg);
     ESP_LOGI(TAG, "Config final (despues de afe_config_check):");
     afe_config_print(cfg);
+    // Por la ROM, para verlo aunque los logs normales no salgan en el monitor.
+    esp_rom_printf("AFE config final: se=%d vad=%d ns=%d wakenet=%d aec=%d\n",
+                   cfg->se_init, cfg->vad_init, cfg->ns_init, cfg->wakenet_init, cfg->aec_init);
 
     // --- Instancia ---
     // create_from_config reserva memoria y crea las tareas internas del AFE.
@@ -74,6 +78,9 @@ esp_err_t orbita_afe_init(void)
     ESP_LOGI(TAG, "fetch: %d muestras, %d canal(es)",
              s_afe->get_fetch_chunksize(s_data), s_afe->get_fetch_channel_num(s_data));
     s_afe->print_pipeline(s_data);
+    esp_rom_printf("AFE listo: feed %d muestras x %d canales, fetch %d muestras x %d canal(es)\n",
+                   s_afe->get_feed_chunksize(s_data), s_afe->get_feed_channel_num(s_data),
+                   s_afe->get_fetch_chunksize(s_data), s_afe->get_fetch_channel_num(s_data));
     return ESP_OK;
 }
 
