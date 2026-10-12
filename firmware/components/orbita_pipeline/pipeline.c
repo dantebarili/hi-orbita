@@ -13,7 +13,13 @@ static const char *TAG = "pipeline";
 static orbita_pipeline_cfg_t s_cfg;
 static TaskHandle_t s_captura_handle;
 
-// Contadores: cada uno lo escribe UNA sola tarea (volatile alcanza para leerlos desde otra).
+// Buffers de la captura, fijos (sin malloc: no hay nada que pueda fallar al arrancar ni que liberar).
+// s_crudo_buf: chunk tal cual sale del mic (32 bit por muestra). s_chunk_buf: el mismo en 16 bit.
+// Los usa solo tarea_captura.
+static int32_t s_crudo_buf[ORBITA_CHUNK_FRAMES * ORBITA_CHANNELS];
+static int16_t s_chunk_buf[ORBITA_CHUNK_FRAMES * ORBITA_CHANNELS];
+
+// Contadores: cada uno lo escribe UNA sola tarea.
 static volatile uint32_t s_i2s_errores;
 
 // Cada feed tiene que producir un numero entero de fetch (hoy 2).
@@ -51,36 +57,41 @@ static volatile uint32_t s_bloques_voz;
 // Corre siempre y nunca termina. Hay que leer siempre para vaciar el DMA (90 ms de margen).
 static void tarea_captura(void *arg)
 {
-    // chunk_buf: chunk tal cual sale del mic (32 bit por muestra).
-    // pack_buf:  el mismo chunk en 16 bit, listo para entregar.
-    int32_t *chunk_buf = malloc(ORBITA_CHUNK_FRAMES * ORBITA_CHANNELS * sizeof(int32_t));
-    int16_t *pack_buf = malloc(ORBITA_CHUNK_BYTES);
-    if (chunk_buf == NULL || pack_buf == NULL) {
-        ESP_LOGE(TAG, "No se pudieron reservar los buffers de captura");
-        vTaskDelete(NULL);  // una tarea nunca hace return: se borra a si misma
-    }
+    // Hueco: se perdio audio antes del proximo chunk que se entregue (lectura fallida u
+    // overflow del DMA). Se avisa al callback y se baja despues de entregar.
+    uint32_t dma_prev = orbita_audio_get_dma_overflows();
+    bool hueco = false;
 
     while (1) {
         size_t frames_leidos = 0;
-        esp_err_t err = orbita_audio_i2s_read(chunk_buf, ORBITA_CHUNK_FRAMES, &frames_leidos);
-        if (err != ESP_OK || frames_leidos != ORBITA_CHUNK_FRAMES) {
+        esp_err_t err = orbita_audio_i2s_read(s_crudo_buf, ORBITA_CHUNK_FRAMES, &frames_leidos);
+        if (err != ESP_OK || (frames_leidos != ORBITA_CHUNK_FRAMES)) {
             s_i2s_errores++;
+            hueco = true;
             vTaskDelay(pdMS_TO_TICKS(10));  // no girar al maximo si el error persiste
             continue;
         }
 
-        wav_pack_chunk_16bit(chunk_buf, frames_leidos, (uint8_t *)pack_buf);   // 32 -> 16 bit
+        uint32_t dma_ahora = orbita_audio_get_dma_overflows();
+        if (dma_ahora != dma_prev) {
+            hueco = true;
+            dma_prev = dma_ahora;
+        }
+
+        wav_pack_chunk_16bit(s_crudo_buf, frames_leidos, (uint8_t *)s_chunk_buf);   // 32 -> 16 bit
 
 #if ORBITA_PIPELINE_USA_AFE
         // El AFE escucha todo el tiempo. Timeout 0: si no hay lugar, se pierde y queda contado.
-        if (xRingbufferSend(s_ring1, pack_buf, ORBITA_CHUNK_BYTES, 0) != pdTRUE) {
+        if (xRingbufferSend(s_ring1, s_chunk_buf, ORBITA_CHUNK_BYTES, 0) != pdTRUE) {
             s_overruns_ring1++;
         }
 #endif
-
-        if (s_cfg.on_chunk != NULL) {
-            s_cfg.on_chunk(pack_buf, frames_leidos);
+        // Se entrega el chunk solo si alguien se registro (on_crudo != NULL). Si no, se descarta.
+        // s_chunk_buf se reescribe en la vuelta siguiente: el callback tiene que copiar lo que necesite.
+        if (s_cfg.on_crudo != NULL) {
+            s_cfg.on_crudo(s_chunk_buf, frames_leidos, hueco);
         }
+        hueco = false;
     }
 }
 
@@ -112,7 +123,7 @@ static void tarea_feed(void *arg)
 }
 
 // =============================================================================
-//  TAREA DE FETCH  -  AFE -> callback on_afe_block
+//  TAREA DE FETCH  -  AFE -> callback on_afe
 // =============================================================================
 static void tarea_fetch(void *arg)
 {
@@ -139,18 +150,23 @@ static void tarea_fetch(void *arg)
         // `audio` es memoria del AFE y vale hasta el proximo fetch: el callback copia lo que
         // necesite, sin esperar. Si fetch se atrasa, el AFE llena su buffer interno (1,6 s) y
         // sobrescribe audio sin avisar: no se puede contar esa perdida.
-        if (s_cfg.on_afe_block != NULL) {
-            s_cfg.on_afe_block(audio, bytes / ORBITA_BYTES_PER_SAMPLE, voz);
+        if (s_cfg.on_afe != NULL) {
+            s_cfg.on_afe(audio, bytes / ORBITA_BYTES_PER_SAMPLE, voz);
         }
     }
 }
 #endif  // ORBITA_PIPELINE_USA_AFE
 
 // =============================================================================
-//  API
+//  INICIA CONFIG: se lo llama con orbita_pipeline_start(cfg)
+//  no se elige la opcion desde el arfgumento pero la constante hara q se inicie 
+//  con / sin AFE y de ahi sale el pipeline que esta en uso
 // =============================================================================
 esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
 {
+    if (s_captura_handle != NULL) {
+        return ESP_ERR_INVALID_STATE;   // ya arrancado: una segunda llamada duplicaria tareas y rings
+    }
     if (cfg != NULL) {
         s_cfg = *cfg;
     }
@@ -191,7 +207,7 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
     }
 #endif
 
-    // Captura desde el arranque, fija al core 1 (WiFi usa el 0 por defecto).
+    // Captura todo el tiempo, desde el arranque, fija al core 1 (WiFi usa el 0 por defecto).
     if (xTaskCreatePinnedToCore(tarea_captura, "captura", 4096, NULL, 6, &s_captura_handle, 1) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
@@ -202,6 +218,7 @@ void orbita_pipeline_get_stats(orbita_pipeline_stats_t *out)
 {
     *out = (orbita_pipeline_stats_t){0};
     out->i2s_errores = s_i2s_errores;
+    out->dma_overflows = orbita_audio_get_dma_overflows();
     if (s_captura_handle != NULL) {
         out->stack_libre_captura = uxTaskGetStackHighWaterMark(s_captura_handle);
     }
@@ -213,7 +230,11 @@ void orbita_pipeline_get_stats(orbita_pipeline_stats_t *out)
     out->fetch_vacios = s_fetch_vacios;
     out->fetch_invalidos = s_fetch_invalidos;
     out->bloques_voz = s_bloques_voz;
-    out->stack_libre_feed = uxTaskGetStackHighWaterMark(s_feed_handle);
-    out->stack_libre_fetch = uxTaskGetStackHighWaterMark(s_fetch_handle);
+    if (s_feed_handle != NULL) {
+        out->stack_libre_feed = uxTaskGetStackHighWaterMark(s_feed_handle);
+    }
+    if (s_fetch_handle != NULL) {
+        out->stack_libre_fetch = uxTaskGetStackHighWaterMark(s_fetch_handle);
+    }
 #endif
 }

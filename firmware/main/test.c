@@ -53,8 +53,9 @@ static char s_ultima_toma[640] = "Fin: sin tomas todavia";   // resumen de la ul
 // =============================================================================
 // Se llaman desde la tarea de captura / fetch: rapidos, sin esperar (timeout 0).
 
-static void test_on_chunk(const int16_t *estereo, size_t frames)
+static void test_on_crudo(const int16_t *chunk_ini, size_t frames, bool hueco)
 {
+    (void)hueco;                                   // el test no usa hueco (los huecos ya salen en la linea Fin:)
     static int16_t canal_l[ORBITA_CHUNK_FRAMES];   // static: no ocupan el stack de la captura
     static uint32_t bloques_ch0;                   // bloques ya entregados en la toma actual
 #if !ORBITA_PIPELINE_USA_AFE
@@ -74,9 +75,9 @@ static void test_on_chunk(const int16_t *estereo, size_t frames)
     }
 
     for (int i = 0; i < ORBITA_CHUNK_FRAMES; i++) {
-        canal_l[i] = estereo[2 * i];
+        canal_l[i] = chunk_ini[2 * i];
 #if !ORBITA_PIPELINE_USA_AFE
-        canal_r[i] = estereo[2 * i + 1];
+        canal_r[i] = chunk_ini[2 * i + 1];
 #endif
     }
 
@@ -100,11 +101,11 @@ static void test_on_chunk(const int16_t *estereo, size_t frames)
 #endif
     }
 
-#if ORBITA_PIPELINE_USA_AFE
-    if (bloques_ch0 >= TOMA_BLOQUES) {
-#else
-    if (bloques_ch0 >= TOMA_BLOQUES && bloques_ch1 >= TOMA_BLOQUES) {
+    bool toma_completa = (bloques_ch0 >= TOMA_BLOQUES);
+#if !ORBITA_PIPELINE_USA_AFE
+    toma_completa = toma_completa && (bloques_ch1 >= TOMA_BLOQUES);   // sin AFE hay que juntar los dos canales
 #endif
+    if (toma_completa) {
         s_graba_ch0 = false;
         bloques_ch0 = 0;
 #if !ORBITA_PIPELINE_USA_AFE
@@ -114,13 +115,13 @@ static void test_on_chunk(const int16_t *estereo, size_t frames)
 }
 
 #if ORBITA_PIPELINE_USA_AFE
-static void test_on_afe_block(const int16_t *mono, size_t muestras, bool voz)
+static void test_on_afe(const int16_t *mono_ini, size_t muestras, bool voz)
 {
     static uint32_t bloques_afe;                   // bloques del AFE ya entregados en la toma actual
 
     if (!s_graba_afe) {
         bloques_afe = 0;
-    } else if (xRingbufferSend(s_ring_ch1, mono, muestras * ORBITA_BYTES_PER_SAMPLE, 0) == pdTRUE) {
+    } else if (xRingbufferSend(s_ring_ch1, mono_ini, muestras * ORBITA_BYTES_PER_SAMPLE, 0) == pdTRUE) {
         if (bloques_afe < VAD_LOG_BLOQUES) {
             s_vad_toma[bloques_afe] = voz ? '1' : '0';
         }
@@ -134,10 +135,16 @@ static void test_on_afe_block(const int16_t *mono, size_t muestras, bool voz)
 }
 #endif
 
+// =============================================================================
+// Configuracion de callback - TEST
+// =============================================================================
+// Se crea la struct de cfg pipeline para el test por UART. test_pipeline_cfg() le pasa esta cfg a orbita_pipeline_start() asi
+// se usa test_on_crudo como callback. Cuando sea el final para mi se tiene que hacer un if y que se inicialize la otra con NULL en funcion
+// de si es con o sin afe
 static const orbita_pipeline_cfg_t s_pipeline_cfg = {
-    .on_chunk = test_on_chunk,
+    .on_crudo = test_on_crudo,
 #if ORBITA_PIPELINE_USA_AFE
-    .on_afe_block = test_on_afe_block,
+    .on_afe = test_on_afe,
 #endif
 };
 
@@ -244,7 +251,6 @@ static void test_tomar(void)
     s_bytes_enviados = 0;
     s_max_items_ch0 = 0;
     s_max_items_ch1 = 0;
-    orbita_audio_reset_dma_overflows();
     vaciar_ring(s_ring_ch0);                       // restos de una toma abortada
     vaciar_ring(s_ring_ch1);
     memset(s_vad_toma, '.', VAD_LOG_BLOQUES);
@@ -304,7 +310,7 @@ static void test_tomar(void)
              (unsigned)s_bytes_enviados, (unsigned)wav_data_size,
              (unsigned)(s_overruns_ch0 - ch0_ini), (unsigned)(s_overruns_ch1 - ch1_ini),
              (unsigned)(fin.overruns_ring1 - ini.overruns_ring1),
-             (unsigned)orbita_audio_get_dma_overflows(),
+             (unsigned)(fin.dma_overflows - ini.dma_overflows),
              (unsigned)(fin.i2s_errores - ini.i2s_errores),
              (unsigned)s_max_items_ch0, (unsigned)s_max_items_ch1, (unsigned)TEST_BLOQUES,
              (unsigned)fin.stack_libre_captura,

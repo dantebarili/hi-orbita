@@ -1,6 +1,6 @@
 # TODO — Frente Audio
 
-Actualizado 2026-10-11.
+Actualizado 2026-10-12.
 
 Orden: **A (flujo de audio confiable) → B (AFE integrado y medido) → C (listo para sockets)**. A+B = H1 (experimento de las tres fuentes), A+B+C = H2 (mergeable, transporte enchufable). El entrenamiento de la wake word corre en paralelo y no bloquea. A5–A8 solo hacen falta para los sockets (H2).
 
@@ -22,16 +22,30 @@ Sin wake word ni AFE: el equipo manda **todo el tiempo**. Camino mínimo, en ord
 - Buffer interno 50 frames = 1,6 s: si no se hace `fetch`, **sobrescribe sin frenar** y solo avisa por log. Memoria mayormente en PSRAM. Pipeline SE(BSS) + VAD WebRTC, **sin NS** (con 2 mics el beamforming desplaza a NS).
 - **Hallazgo:** con la config por defecto la salida del AFE era **el mic 0 sin procesar** (idéntico bit a bit al crudo, solo 64 ms después; SNR igual). Con micrófono cerca y cuarto silencioso, celu y ESP dieron espectrogramas casi iguales (SNR 41,6 vs 40,2 dB, una toma).
 - Probado: `fixed_first_channel=false` + VAD como disparador → **sigue idéntico** (31170 de 31744 muestras iguales; solo difieren los últimos 36 ms, artefacto fijo del cierre de toma). VAD WebRTC modo 0 marca voz en el 100 % de los bloques (en un tramo de 0,5 s había mucho grave bajo 50 Hz; el offset de continua de tomas de 20 s resultó despreciable: la hipótesis del filtro de continua no se sostiene). `AFE_TYPE_VC` trabaja con frames de 10 ms (feed de 160). NS en `AFE_TYPE_SR` no se activa (pipeline vacío; `feed` baja a 512): el NS del AFE solo existe en VC.
-- El código del AFE sigue en `audio_afe.c` (config del experimento NS-solo); se activa con `ORBITA_PIPELINE_USA_AFE 1` en `pipeline.h`.
+- El código del AFE sigue en `audio_afe.c` (config del experimento NS-solo); se activa con `idf.py menuconfig` → Orbita pipeline → Usar el AFE (`CONFIG_ORBITA_PIPELINE_USA_AFE`).
 
 ## Retomar acá
 
 **Decisión (2026-10-11): el AFE y el NS quedan en pausa.** El AFE entregó el mic 0 sin procesar en todas las configs probadas; `esp-sr` desaconsulta el NS para reconocimiento de voz; y no hay evidencia de que el ruido dañe la detección. Se decide con datos de la wake word, no en el chip.
 
-1. **Grabar con el firmware en `ORBITA_PIPELINE_USA_AFE=0`** (WAV de 2 canales: mic L y mic R crudos, 2,048 s) junto con el celu: distancias, con y sin ruido continuo, varias voces. Es lo que necesita la comparación de las tres fuentes (hoy: celu, ESP-L, ESP-R).
+1. **Grabar con el firmware con el AFE apagado en menuconfig** (WAV de 2 canales: mic L y mic R crudos, 2,048 s) junto con el celu: distancias, con y sin ruido continuo, varias voces. Es lo que necesita la comparación de las tres fuentes (hoy: celu, ESP-L, ESP-R).
 2. **Entrenar y evaluar la wake word con audio crudo** (ruido mezclado como aumento): falsas activaciones por hora y rechazos.
 3. **Solo si el ruido resulta un problema:** probar NS y beamforming **offline en la PC** sobre las tomas L+R, y portar a la placa lo que ayude. Alternativas ya relevadas: NS WebRTC directo (`esp_ns.h`, 10 ms, sin AFE), `mase_process` (BSS directo, mics a 50 mm), NSNet; plan B: crudo a Edge Impulse.
 4. Medir CPU por core y RAM interna/PSRAM con el pipeline que quede (hoy sin AFE sobra margen), y que el WAV no tenga texto adentro.
+
+## Propuesta (2026-10-12): VAD como compuerta de envío, AFE desactivable
+
+**Idea:** no mandar todo el tiempo; el VAD decide qué se manda. Con el AFE apagado, el crudo va directo al ring 2.
+
+**Alcance (decidido 12/10):** para el prototipo, sin wake word, el VAD es la compuerta del resumen de fondo. Orden: (1) continuo sin AFE, (2) compuerta por VAD cuando el VAD ande, como interruptor (continuo / por `VOZ`) para comparar ahorro vs. audio perdido. Segmento mínimo para no mandar mensajes de una palabra.
+
+**Veredicto:** el AFE desactivable es correcto y ya casi está. El VAD sirve como compuerta del fondo, **no reemplaza la wake word** (el urgente, "Órbita, ¿qué hora es?", se distingue por la palabra, no por haber voz; en un consultorio hay voz todo el día). Y no se puede diseñar sobre un VAD que hoy marca 100 % de voz.
+
+1. **Debuggear el VAD primero** (hoy WebRTC modo 0 = el más permisivo): probar modo 3, `vad_min_speech_ms` / `vad_min_noise_ms` / `vad_delay_ms` de `afe_config` (verificar nombres), VADNet, y el VAD WebRTC suelto (`esp_vad.h`, verificar) sobre mono sin el AFE. Medir con silencio puro y con voz: % de bloques con `VOZ`. Criterio: ~0 % en silencio.
+2. **AFE desactivable en compilación** (Kconfig `CONFIG_ORBITA_PIPELINE_USA_AFE`; en runtime no: llevaría ambos caminos en el binario). Con AFE=0 un adaptador convierte el chunk estéreo de 1024 frames en 2 bloques mono de 512 (L o mezcla, a decidir) para que el ring 2 reciba siempre lo mismo.
+3. **`VOZ` necesita 3 valores:** sí / no / sin VAD. Sin AFE no hay VAD: la compuerta queda **abierta** (continuo), no cerrada.
+4. **Compuerta = pre-roll corto + hangover:** el VAD tarda en detectar el inicio y marca fin con retraso. Sin ~300–500 ms previos se pierde el comienzo de la frase, así que A5 v1 necesita un pre-roll chico, y el `vad_cache` hay que conservarlo.
+5. **Privacidad:** mandar todo lo que suene a voz es una política de captura (Fase C). Con la wake word, solo se envía lo pedido. Decidirlo con el compañero y el cliente, no por ancho de banda (32 KB/s mono es poco para el WiFi; el costo real es el procesamiento del backend).
 
 ## Decisiones por hablar con el compañero (contexto en `arquitectura.md` §3.4–3.6)
 
@@ -49,7 +63,7 @@ Sin wake word ni AFE: el equipo manda **todo el tiempo**. Camino mínimo, en ord
 
 **Terminado =** `overruns=0` y `dma_overflows=0` en toda captura; el consumidor se entera de un hueco (discontinuidad marcada, nunca se rellena en silencio); el consumidor es intercambiable (UART hoy, socket mañana) sin tocar captura ni ring. No tocar la ganancia/shift de captura (picos en −25 a −30 dBFS): invalida lo grabado.
 
-- [ ] **A5. Ring 2 de slots** (§3.4): slots en PSRAM + 3 cursores + cola de segmentos; v1 sin urgente ni pre-roll. **A6.** Header de 16 B + tabla de segmentos, revisado con el compañero.
+- [ ] **A5. Ring 2 de slots** (§3.4): slots en PSRAM + 3 cursores + cola de segmentos; v1 sin urgente ni pre-roll. **Config de callbacks:** AFE off → `.on_crudo` = adaptador a mono → ring 2 y `.on_afe` = NULL; AFE on → `.on_afe` = escritor → ring 2 y `.on_crudo` = **NULL** (si no, el ring 2 recibe crudo estéreo + procesado mono mezclados). Se arma en una función del ring 2 con el mismo `#if` del Kconfig (como hoy `test_pipeline_cfg()`); `orbita_pipeline_start` devuelve error si AFE on y `on_crudo != NULL`. **A6.** Header de 16 B + tabla de segmentos, revisado con el compañero.
 - [ ] **A7. Sink:** abrir / recibir chunk / cerrar. `uart_sink` (lo que hace hoy `tarea_envio`), `throttled_sink` (consumo a ritmo configurable, se puede "cortar") y luego el socket. En `fetch` la copia al ring es siempre con timeout 0 (nunca bloquear).
 - [ ] **A8. Control:** `main.c` traduce comandos (`'g'`, luego la FSM) a llamadas; la captura hace solo I2S → ring 1.
 - [ ] **A9.** `CONFIG_I2S_ISR_IRAM_SAFE` (escrituras a flash pueden bloquear la ISR del I2S) y más descriptores DMA (8–12). Verificar en qué core queda la ISR del I2S cuando entre WiFi.
@@ -57,7 +71,11 @@ Sin wake word ni AFE: el equipo manda **todo el tiempo**. Camino mínimo, en ord
 - [ ] **A11.** ICS-43434 soporta 16 kHz (verificar en datasheet; el reviewer duda).
 - [ ] **A12. Validación:** captura de 10 min con contadores en 0; corte simulado con `throttled_sink` de 5/10/20 s (valida el tamaño del ring 2).
 - [ ] **A13. Menores:** borrar `wav_pack_chunk_24bit`, capacidad de `out_buf` en `wav_pack_chunk_16bit`, contadores `volatile` → `stdatomic`.
-- [x] **A14 (2026-10-12, compila; falta probar en el chip).** `main.c` quedó en 17 líneas. Captura (+ AFE opcional con `ORBITA_PIPELINE_USA_AFE` en `pipeline.h`) vive en `components/orbita_pipeline/` y entrega chunks por callback (`on_chunk`, `on_afe_block`). La prueba de test quedó aislada en `main/test.c/.h` (se borra sacando esos dos archivos, la línea de `CMakeLists.txt` y 3 llamadas de `app_main`).
+- [x] **A14 (2026-10-12, compila; falta probar en el chip).** `main.c` quedó en 17 líneas. Captura (+ AFE opcional con `CONFIG_ORBITA_PIPELINE_USA_AFE`, Kconfig) vive en `components/orbita_pipeline/` y entrega chunks por callback (`on_crudo`, `on_afe`). La prueba de test quedó aislada en `main/test.c/.h` (se borra sacando esos dos archivos, la línea de `CMakeLists.txt` y 3 llamadas de `app_main`).
+
+- [ ] **A15. Tiempos del pipeline refactorizado (falta medir, no sabemos cuánto tardan):** con `esp_timer_get_time()`, duración de `test_on_crudo` y `test_on_afe` (con y sin toma) y del loop de captura (lectura + conversión + callback). Presupuesto: cada chunk llega cada 64 ms y la captura no debe pasarse; guardar el máximo, no solo el promedio. Repetir una toma de 60 s y comparar contra la anterior a A14 (`overruns`, `dma_overflows`, `i2s_errores` en 0 y stacks libres).
+
+- [ ] **A16. Pendientes de la revisión de `embedded-reviewer` (2026-10-12).** Hecho: buffers de captura fijos (sin `malloc`), guarda de doble `start`, AFE por Kconfig, `hueco` en `on_crudo`. Falta: `tarea_fetch` con `vTaskDelay(1)` si el AFE devuelve error rápido (al reactivar el AFE); `orbita_audio_reset_dma_overflows()` o encender el I2S después de crear el AFE (el primer chunk puede traer audio viejo); `ESP_LOGE` en cada fallo de lectura I2S (hasta ~100 logs/s); `#define` nombrados para stack/prioridad/core de las tareas; ring 1 con `heap_caps` explícito; liberar `afe_config` en `audio_afe.c`; `REQUIRES` de `main` al borrar `test.c`.
 
 ## Fase B — AFE medido (cierra H1)
 

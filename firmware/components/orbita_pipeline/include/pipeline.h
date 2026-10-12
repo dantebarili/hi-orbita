@@ -8,10 +8,10 @@
  * @copyright Copyright (c) 2026 - Proyecto Orbita
  *
  * @details La tarea de captura lee el I2S de a ORBITA_CHUNK_FRAMES frames (64 ms), los pasa a
- *          16 bit y llama al callback `on_chunk`. Quien consume (hoy el modulo de test de
+ *          16 bit y llama al callback `on_crudo`. Quien consume (hoy el modulo de test de
  *          main/, manana el sink de sockets) se engancha ahi y no toca la captura.
- *          Opcional (ORBITA_PIPELINE_USA_AFE=1): ring 1 -> tarea feed -> AFE -> tarea fetch,
- *          que entrega la salida procesada por `on_afe_block`. Hoy esta en pausa (ver plan).
+ *          Opcional (CONFIG_ORBITA_PIPELINE_USA_AFE, en menuconfig): ring 1 -> tarea feed -> AFE -> tarea fetch,
+ *          que entrega la salida procesada por `on_afe`. Hoy esta en pausa (ver plan).
  */
 
 #pragma once
@@ -20,6 +20,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
+#include "sdkconfig.h"
 
 // --- Formato del audio (16 kHz, 16 bit) ---
 #define ORBITA_CHANNELS          2                                   // mics L y R
@@ -30,43 +31,51 @@
 #define ORBITA_AFE_FETCH_FRAMES  512                                 // salida del AFE: 32 ms, mono
 #define ORBITA_AFE_FETCH_BYTES   (ORBITA_AFE_FETCH_FRAMES * ORBITA_BYTES_PER_SAMPLE)
 
-// 1: se crea el AFE y sus tareas feed/fetch; 0: sin AFE (hoy). Se puede pisar con -D.
-#ifndef ORBITA_PIPELINE_USA_AFE
+// 1: se crea el AFE y sus tareas feed/fetch; 0: sin AFE. Se elige con `idf.py menuconfig`
+// (Orbita pipeline -> Usar el AFE): vale igual en todos los componentes.
+#ifdef CONFIG_ORBITA_PIPELINE_USA_AFE
+#define ORBITA_PIPELINE_USA_AFE  1
+#else
 #define ORBITA_PIPELINE_USA_AFE  0
 #endif
 
 /**
- * @brief  Callback por cada chunk capturado.
+ * @brief   Callback por cada chunk capturado.
  *
- * @details Se llama desde la tarea de captura (core 1, prioridad alta): tiene que ser rapido y
- *          NO bloquear (nada de esperas largas, logs ni UART). Si hay que conservar el audio, se
- *          copia aca y sin esperar. `estereo` vale solo durante la llamada.
+ * @details Se llama desde la tarea de captura (core 1, prioridad 6, stack de 4 KB). Tiene que
+ *          ser rapido y no bloquear: lo normal es copiar el chunk a un ring y volver. Nada de
+ *          snprintf, red ni logs largos. `chunk_ini` apunta a un buffer que se reescribe en la
+ *          vuelta siguiente: solo vale durante la llamada.
  *
- * @param [in]  estereo  ORBITA_CHUNK_FRAMES frames int16 entrelazados (L R L R ...)
- * @param [in]  frames   frames del chunk (siempre ORBITA_CHUNK_FRAMES)
+ * @param [in]  chunk_ini   primer frame del chunk
+ * @param [in]  frames      frames del chunk (siempre ORBITA_CHUNK_FRAMES)
+ * @param [in]  hueco       true si antes de este chunk se perdio audio (lectura I2S fallida o
+ *                          overflow del DMA): el audio NO es continuo con el chunk anterior
  */
-typedef void (*orbita_chunk_cb_t)(const int16_t *estereo, size_t frames);
+typedef void (*orbita_crudo_cb_t)(const int16_t *chunk_ini, size_t frames, bool hueco);
 
 /**
- * @brief  Callback por cada bloque que entrega el AFE (solo con ORBITA_PIPELINE_USA_AFE=1).
+ * @brief   Callback por cada bloque que entrega el AFE.
  *
- * @details Se llama desde la tarea fetch. Mismas reglas que orbita_chunk_cb_t: rapido, sin
- *          bloquear (si fetch se atrasa, el AFE sobrescribe audio sin avisar).
+ * @details Se llama desde la tarea fetch. Mismas reglas que orbita_crudo_cb_t: rapido, sin
+ *          bloquear (si fetch se atrasa, el AFE sobrescribe audio sin avisar). Aca no hay
+ *          indicador de hueco: esa perdida no se puede detectar (ver pipeline.c, tarea_fetch).
  *
- * @param [in]  mono      ORBITA_AFE_FETCH_FRAMES muestras int16; memoria del AFE, vale solo durante la llamada
- * @param [in]  muestras  cantidad de muestras
- * @param [in]  voz       true si el VAD marca voz en este bloque
+ * @param [in]  mono_ini    primer frame del bloque de salida del AFE
+ * @param [in]  muestras    cantidad de muestras
+ * @param [in]  voz         true si el VAD marca voz en este bloque
  */
-typedef void (*orbita_afe_cb_t)(const int16_t *mono, size_t muestras, bool voz);
+typedef void (*orbita_afe_cb_t)(const int16_t *mono_ini, size_t muestras, bool voz);
 
 typedef struct {
-    orbita_chunk_cb_t on_chunk;      // puede ser NULL
-    orbita_afe_cb_t   on_afe_block;  // puede ser NULL; solo se usa con el AFE
+    orbita_crudo_cb_t on_crudo;      // puede ser NULL
+    orbita_afe_cb_t   on_afe;        // puede ser NULL; solo se usa con el AFE
 } orbita_pipeline_cfg_t;
 
 /** Contadores acumulados desde el arranque: para medir una toma, restar dos lecturas (uint32_t sin signo). */
 typedef struct {
     uint32_t i2s_errores;            // lecturas del I2S que fallaron o vinieron incompletas
+    uint32_t dma_overflows;          // veces que el DMA del I2S pisó audio sin leer (hueco real en la captura)
     uint32_t overruns_ring1;         // chunks que no entraron al ring 1 (feed no sigue el ritmo)
     uint32_t chunks_alimentados;     // chunks entregados al AFE
     uint32_t chunks_invalidos;       // chunks del ring 1 con tamano inesperado
@@ -80,15 +89,18 @@ typedef struct {
 } orbita_pipeline_stats_t;
 
 /**
- * @brief  Arranca el pipeline: crea la tarea de captura (y el AFE con sus tareas si esta activado).
+ * @brief   Arranca el pipeline: crea la tarea de captura (y/o el AFE con sus tareas si esta activado).
  *
- * @details Antes hay que haber llamado a orbita_audio_i2s_init(). Llamar UNA vez.
+ * @details Antes hay que haber llamado a orbita_audio_i2s_init(). Llamar UNA vez: una segunda
+ *          llamada devuelve ESP_ERR_INVALID_STATE. Si start() falla a mitad, pueden quedar
+ *          tareas y memoria creadas: el llamador debe reiniciar el equipo (no reintentar).
  *          La captura corre en el core 1, prioridad 6; feed y fetch, core 1, prioridad 5.
  *
  * @param [in]  cfg  callbacks (copiados); puede ser NULL
  *
- * @return  ESP_OK, ESP_ERR_INVALID_SIZE si el AFE pide otro chunk que el configurado,
- *          ESP_ERR_NO_MEM si falto memoria, o el error de orbita_afe_init().
+ * @return  ESP_OK, ESP_ERR_INVALID_STATE si ya se arranco, ESP_ERR_INVALID_SIZE si el AFE pide
+ *          otro chunk que el configurado, ESP_ERR_NO_MEM si falto memoria, o el error de
+ *          orbita_afe_init().
  */
 esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg);
 
