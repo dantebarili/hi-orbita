@@ -40,18 +40,20 @@ esp_err_t orbita_afe_init(void)
     cfg->wakenet_init = false;
     cfg->aec_init = false;
 
-    // MEDIDO: con SE (beamforming) activo y sin WakeNet, la salida del AFE era el mic 0 SIN
-    // procesar (identica bit a bit al crudo, 64 ms mas tarde), con SR y con distintos ajustes
-    // de canal/VAD. EXPERIMENTO: sin beamforming ni VAD, solo el NS de WebRTC sobre el mic 0
-    // (segun el header, con SE apagado el AFE usa solo el primer mic).
-    cfg->se_init = false;
-    cfg->ns_init = true;
-    cfg->afe_ns_mode = AFE_NS_MODE_WEBRTC;
-    cfg->vad_init = false;
+    // Config objetivo: beamforming (SE) + VAD, sin NS (decision del 12/10). El NS queda afuera.
+    // MEDIDO antes: con SE activo y sin WakeNet la salida era el mic 0 SIN procesar (identica bit a
+    // bit al crudo, 64 ms mas tarde). Ahora se vuelve a probar mirando el log de afe_config_print
+    // (antes y despues de afe_config_check) para ver si el AFE apaga algo por su cuenta.
+    cfg->se_init = true;
+    cfg->ns_init = false;
+    cfg->vad_init = true;
 
     // Revisa conflictos entre opciones y las corrige solo (ver el log).
     // OJO: con 2 mics, beamforming (SE) tiene prioridad sobre NS.
+    ESP_LOGI(TAG, "Config pedida (antes de afe_config_check):");
+    afe_config_print(cfg);
     cfg = afe_config_check(cfg);
+    ESP_LOGI(TAG, "Config final (despues de afe_config_check):");
     afe_config_print(cfg);
 
     // --- Instancia ---
