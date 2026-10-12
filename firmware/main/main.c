@@ -15,8 +15,7 @@ static void arranque_fallo(const char *que, esp_err_t err)
     while (1) {
         ESP_LOGE("main", "ARRANQUE DETENIDO: %s fallo con %s", que, esp_err_to_name(err));
         // Mismo aviso por la ROM: sale aunque los logs normales no se esten viendo.
-        esp_rom_printf("ARRANQUE DETENIDO: %s fallo con %s
-", que, esp_err_to_name(err));
+        esp_rom_printf("ARRANQUE DETENIDO: %s fallo con %s\n", que, esp_err_to_name(err));
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }

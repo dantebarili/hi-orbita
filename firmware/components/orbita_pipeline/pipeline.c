@@ -184,16 +184,14 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
     if (feed_frames != ORBITA_CHUNK_FRAMES) {
         ESP_LOGE(TAG, "ORBITA_CHUNK_FRAMES=%d no coincide con los frames que pide feed (%d)",
                  ORBITA_CHUNK_FRAMES, feed_frames);
-        esp_rom_printf("pipeline: ORBITA_CHUNK_FRAMES=%d, feed pide %d
-", ORBITA_CHUNK_FRAMES, feed_frames);
+        esp_rom_printf("pipeline: ORBITA_CHUNK_FRAMES=%d, feed pide %d\n", ORBITA_CHUNK_FRAMES, feed_frames);
         return ESP_ERR_INVALID_SIZE;
     }
     int fetch_frames = orbita_afe_fetch_chunk_frames();
     if (fetch_frames != ORBITA_AFE_FETCH_FRAMES) {
         ESP_LOGE(TAG, "ORBITA_AFE_FETCH_FRAMES=%d no coincide con lo que entrega fetch (%d)",
                  ORBITA_AFE_FETCH_FRAMES, fetch_frames);
-        esp_rom_printf("pipeline: ORBITA_AFE_FETCH_FRAMES=%d, fetch entrega %d
-", ORBITA_AFE_FETCH_FRAMES, fetch_frames);
+        esp_rom_printf("pipeline: ORBITA_AFE_FETCH_FRAMES=%d, fetch entrega %d\n", ORBITA_AFE_FETCH_FRAMES, fetch_frames);
         return ESP_ERR_INVALID_SIZE;
     }
 
