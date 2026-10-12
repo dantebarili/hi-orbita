@@ -6,21 +6,31 @@
 #include "pipeline.h"
 #include "test.h"
 
+// Falla de arranque: en laboratorio el equipo NO se reinicia (un reinicio en bucle tapa el
+// motivo). Queda parado repitiendo el error, para leerlo en el monitor. En producto esto
+// cambia: ahi si corresponde reiniciar (ver A10 del plan).
+static void arranque_fallo(const char *que, esp_err_t err)
+{
+    while (1) {
+        ESP_LOGE("main", "ARRANQUE DETENIDO: %s fallo con %s", que, esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+}
+
 void app_main(void)
 {
     // Drivers y rings del modulo de laboratorio (se borra cuando exista el sink de sockets).
     test_init();
 
     // --- Audio: I2S y pipeline de captura ---
-    // Cualquier falla de arranque reinicia el equipo.
-    ESP_ERROR_CHECK(orbita_audio_i2s_init());
-    esp_err_t err = orbita_pipeline_start(test_pipeline_cfg());     // Se carga el callback del test (test_on_crudo) en la configuracion
+    esp_err_t err = orbita_audio_i2s_init();
     if (err != ESP_OK) {
-        // Con el driver de UART instalado los logs quedan en un buffer: si se reinicia enseguida
-        // se pierden. La espera deja que salgan antes del reinicio de ESP_ERROR_CHECK.
-        ESP_LOGE("main", "orbita_pipeline_start fallo: %s", esp_err_to_name(err));
-        vTaskDelay(pdMS_TO_TICKS(500));
-        ESP_ERROR_CHECK(err);
+        arranque_fallo("orbita_audio_i2s_init", err);
+    }
+
+    err = orbita_pipeline_start(test_pipeline_cfg());     // Se carga el callback del test (test_on_crudo) en la configuracion
+    if (err != ESP_OK) {
+        arranque_fallo("orbita_pipeline_start", err);
     }
 
     // Loop de comandos de laboratorio ('g' graba una toma, 's' pide el resumen). No vuelve.
