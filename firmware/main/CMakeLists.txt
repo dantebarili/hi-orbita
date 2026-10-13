@@ -1,4 +1,5 @@
-idf_component_register(
-    SRCS "test.c" "main.c"
-    INCLUDE_DIRS "."
-)
+set(app_sources "main.c")
+if(CONFIG_ORBITA_LAB_UART)
+    list(APPEND app_sources "test.c")
+endif()
+idf_component_register(SRCS ${app_sources} INCLUDE_DIRS ".")

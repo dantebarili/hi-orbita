@@ -1,0 +1,34 @@
+menu "Orbita integration"
+    choice ORBITA_LAB_MODE
+        prompt "Prueba de laboratorio"
+        default ORBITA_LAB_UART
+        config ORBITA_LAB_UART
+            bool "Audio UART original (Dante)"
+        config ORBITA_LAB_WEBSOCKET
+            bool "Audio mono por WebSocket a WAV"
+            select ESP_WS_CLIENT_SEPARATE_TX_LOCK
+    endchoice
+
+    config ORBITA_WIFI_SSID
+        string "Wi-Fi SSID"
+        default ""
+        depends on ORBITA_LAB_WEBSOCKET
+    config ORBITA_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default ""
+        depends on ORBITA_LAB_WEBSOCKET
+        help
+            Credenciales locales: sdkconfig y firmware las contienen. No compartirlos.
+    config ORBITA_WS_URI
+        string "WebSocket URI (ws://IP-PC:8765/)"
+        default ""
+        depends on ORBITA_LAB_WEBSOCKET
+    config ORBITA_WS_CAPTURE_SECONDS
+        int "Segundos nominales por toma"
+        range 1 600
+        default 60
+        depends on ORBITA_LAB_WEBSOCKET
+        help
+            Se termina con el primer mensaje completo que alcance esta cantidad
+            de muestras. Puede sumar hasta 127.94 ms. Sin VAD como compuerta.
+endmenu
