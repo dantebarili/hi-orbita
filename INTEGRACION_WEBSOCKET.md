@@ -20,7 +20,7 @@ La captura, AFE, pines, ring y `audio_sink.h` no cambian. `send(ctx,msg)` corre 
    ```
 
    En esta computadora también sirve el Python ya instalado en el laboratorio:
-
+c
    ```powershell
    & ..\websocket-lab\.venv\Scripts\python.exe tools/ws_audio_server.py
    ```
@@ -28,7 +28,7 @@ La captura, AFE, pines, ring y `audio_sink.h` no cambian. `send(ctx,msg)` corre 
 2. En **IDF PowerShell v5.5.5**, entrar en `hi-orbita\firmware`:
 
    ```powershell
-   $env:PYTHONUTF8 = "1"
+   la
    idf.py menuconfig
    ```
 
