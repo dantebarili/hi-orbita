@@ -152,7 +152,19 @@ Puntos abiertos:
 - `lost_samples` suma lectura fallida, overflow del DMA (A1), ring in lleno y, con AFE, `fetch` inválido y deriva: contadores que la tarea que escribe el slot (`feed` o `fetch`) lee, pone en 0 y copia (aproximado con AFE por su latencia).
 - No lleva inicio/fin de segmento ni "urgente": se deciden después de guardar el slot y los pre-roll se solapan; eso vive en la tabla.
 - Sin relleno: `_Static_assert(sizeof == 16)`, sin `__attribute__((packed))`. Costo en PSRAM despreciable aunque el slot baje a 10 ms (6000 slots, 2 MB).
-- Hecho: el formato del slot (`audio_ring_out.h`, 1040 B con `_Static_assert`). En curso (A5): el ring (almacén, cursores, escritura, lectura, descarte). Después (A6): tabla de segmentos y header del cable.
+- Hecho: el formato del slot (`audio_ring_out.h`, 1040 B con `_Static_assert`) y el **ring v1** (`audio_ring_out.c`, compila; sin usar todavía ni probado en el chip). Después (A6): tabla de segmentos y header del cable.
+
+**Ring out v1 (A5, 2026-10-13)**
+
+| Tema | Decisión |
+|---|---|
+| Estructura | Cola FIFO circular de `ORBITA_RING_SLOTS` (313 = 10 s, 325 KB) slots en PSRAM (`heap_caps_calloc`). Dos índices (`write_idx`, `read_idx`) y `ocupados`; el índice avanza con `(i+1) % N`. Sin confirmación ni pre-roll: leer **saca** el slot. Hoy 10 s, no los ~60 s de la tabla de arriba; cambiar `ORBITA_RING_SLOTS` (el `max_ocupados` de las stats dice cuánto hace falta). |
+| Protección | Spinlock (`portMUX`, interrupciones apagadas ~20–50 µs) sobre índices, contadores y el `memcpy`. Sin mutex (revisión 13/10): con prio 5 en core 0, WiFi/TLS podían desalojar al sink con el mutex tomado y el productor esperar o perder el slot. `write` siempre entra, sin espera ni timeout. Nunca en la ISR ni durante el `send` de red. A medir: duración real con PSRAM y flash activos. |
+| Escritura | `orbita_ring_out_write(audio, n, flags, lost)`: copia el audio (el buffer del productor se reutiliza al volver), completa `seq` y `version`. Ring lleno: descarta el slot **más viejo** y suma sus muestras (`n_samples + lost_samples`) a `lost_samples` del nuevo más viejo. |
+| Lectura | `orbita_ring_out_read(dst)`: copia header + `n_samples` muestras (no el slot entero: la cola es audio viejo de otra vuelta, y no debe llegar al backend) al `dst` del sink y lo libera. El sink manda `2*n_samples` bytes, nunca 1024. Vacío → `ESP_ERR_NOT_FOUND` (el sink espera y reintenta: v1 sin notificación). Que el sink tenga su copia resuelve quién es dueño del slot. |
+| Arranque | `orbita_ring_out_init` va **antes de crear las tareas** productora y sink (no es seguro contra uso en paralelo) y **antes de iniciar el AFE** (reserva un bloque contiguo de 325 KB, ~1,9 MB a 60 s: con la PSRAM fragmentada por `esp-sr` puede fallar). |
+| Para el sink | Detecta pérdidas por `hdr.lost_samples` y saltos de `hdr.seq`. `orbita_ring_out_get_stats`: ocupados, máximo, escritos, descartados (A12). |
+| Pendiente (A6) | Cursor de confirmación (3er puntero) para retener hasta `srv_respuesta_recibida`; tabla de segmentos; pre-roll. Esto cambia `read` a "mirar + liberar". No direccionar por `seq % N` (2³² no es múltiplo de 313: al dar la vuelta salta de slot): usar el índice físico o N potencia de 2. Con el ring lleno hay que decidir si se descarta el nuevo o el más viejo ya enviado sin confirmar.
 
 **Tabla de segmentos (ring out).** Una entrada por segmento: `seq_inicio`, `seq_fin`, tipo (fondo / urgente), estado (pendiente / enviando / enviado / confirmado) y hueco previo (slots descartados). Es el índice de la cinta: qué mandar, en qué orden y en qué estado. Reemplaza al ring de FreeRTOS, a las banderas de la toma de test (`grabando`, `capture_done`) y a los flags de segmento en el slot. La wake word crea una entrada **urgente** con `seq_inicio = seq_detección − pre-roll`; dos segmentos pueden compartir slots.
 
