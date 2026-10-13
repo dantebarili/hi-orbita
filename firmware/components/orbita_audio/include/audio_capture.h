@@ -25,12 +25,18 @@
 
 #define ORBITA_SAMPLE_RATE_HZ 16000
 
+// Buffer DMA del I2S: ORBITA_DMA_DESC_NUM descriptores de ORBITA_DMA_FRAME_NUM frames (15 ms c/u).
+// 8 x 240 = 1920 frames = 120 ms (antes 6 = 90 ms): es lo maximo que puede pasar sin perder audio
+// entre dos lecturas, o mientras una escritura a flash frena a la captura. RAM interna: 8 x 240 x 8 B = 15 KB.
+#define ORBITA_DMA_DESC_NUM   8
+#define ORBITA_DMA_FRAME_NUM  240
+
 /**
  * @brief  Inicializa y enciende el canal I2S de captura.
  *
  * @details Modo estandar (Philips), solo RX, la ESP32 como master, estereo
  *          (L y R: un mic por slot), 32 bits por slot, 16 kHz. Buffer DMA de
- *          6 descriptores x 240 frames = 1440 frames (~90 ms): es el maximo
+ *          ORBITA_DMA_DESC_NUM x ORBITA_DMA_FRAME_NUM = 1920 frames (~120 ms): es el maximo
  *          que puede pasar entre dos orbita_audio_i2s_read() sin perder audio.
  *          Registra el contador de overflows del DMA antes de encender el canal.
  *          Llamar UNA vez, antes de cualquier lectura.
@@ -47,7 +53,7 @@ esp_err_t orbita_audio_i2s_init(void);
  * @details Cada frame = 1 muestra L + 1 muestra R, de 32 bits crudos tal como los
  *          entrega el mic. BLOQUEA hasta tener todos los frames pedidos, asi que
  *          la lectura dura frame_count / 16000 s (1024 frames = 64 ms) y marca el
- *          ritmo del que la llama. Entre dos llamadas no pueden pasar mas de ~90 ms.
+ *          ritmo del que la llama. Entre dos llamadas no pueden pasar mas de ~120 ms.
  *
  * @param [out]  out_buf       destino; con espacio para frame_count * 2 * sizeof(int32_t) bytes
  * @param [in]   frame_count   cuantos frames se piden

@@ -35,9 +35,6 @@ static int16_t s_mono_buf[BLOQUES_POR_CHUNK][ORBITA_SLOT_SAMPLES];
 // Contadores: cada uno lo escribe UNA sola tarea.
 static volatile uint32_t s_i2s_errores;
 
-// Frames que pierde un overflow del DMA (un descriptor; igual que dma_frame_num de audio_capture.c).
-#define ORBITA_DMA_FRAMES   240
-
 // Tiempos MAXIMOS en microsegundos (A15). Cada uno lo escribe una sola tarea. Ver orbita_pipeline_stats_t.
 static volatile uint32_t s_max_captura_us;        // captura: una vuelta sin la lectura I2S
 static volatile uint32_t s_max_ring_in_send_us;   // captura: xRingbufferSend al ring in
@@ -83,17 +80,29 @@ static volatile uint32_t s_bloques_voz;
 
 // Muestras (mono, 16 kHz) perdidas desde la ultima llamada, para el `lost_samples` del proximo slot.
 // Convierte los contadores de perdida en muestras: un error de I2S o un chunk que no entro al ring in
-// son 1024 frames; un overflow del DMA, 240. Aproximado (un overflow parcial no se mide exacto).
+// son 1024 frames; un overflow del DMA, ORBITA_DMA_FRAME_NUM (240); un chunk invalido del ring in, 1024;
+// con AFE, un fetch invalido, 512. Aproximado (un overflow parcial no se mide exacto).
 // La llama SOLO la tarea que escribe el ring out (feed sin AFE, fetch con AFE): usa estado static.
 static uint32_t muestras_perdidas_nuevas(void)
 {
-    static uint32_t i2s_prev, dma_prev, ring_in_prev;
+    static uint32_t i2s_prev, dma_prev, ring_in_prev, chunk_inv_prev;
+#if ORBITA_PIPELINE_USA_AFE
+    static uint32_t fetch_inv_prev;
+#endif
     uint32_t i2s  = s_i2s_errores;
     uint32_t dma  = orbita_audio_get_dma_overflows();
     uint32_t ring_in = s_overruns_ring_in;
+    uint32_t chunk_inv = s_chunks_invalidos;
     uint32_t perdidas = (i2s - i2s_prev) * ORBITA_CHUNK_FRAMES
-                      + (dma - dma_prev) * ORBITA_DMA_FRAMES
-                      + (ring_in - ring_in_prev) * ORBITA_CHUNK_FRAMES;
+                      + (dma - dma_prev) * ORBITA_DMA_FRAME_NUM
+                      + (ring_in - ring_in_prev) * ORBITA_CHUNK_FRAMES
+                      + (chunk_inv - chunk_inv_prev) * ORBITA_CHUNK_FRAMES;
+#if ORBITA_PIPELINE_USA_AFE
+    uint32_t fetch_inv = s_fetch_invalidos;
+    perdidas += (fetch_inv - fetch_inv_prev) * ORBITA_AFE_FETCH_FRAMES;
+    fetch_inv_prev = fetch_inv;
+#endif
+    chunk_inv_prev = chunk_inv;
     i2s_prev = i2s;
     dma_prev = dma;
     ring_in_prev = ring_in;
@@ -103,7 +112,7 @@ static uint32_t muestras_perdidas_nuevas(void)
 // =============================================================================
 //  TAREA DE CAPTURA  -  I2S -> callback (y ring in)
 // =============================================================================
-// Corre siempre y nunca termina. Hay que leer siempre para vaciar el DMA (90 ms de margen).
+// Corre siempre y nunca termina. Hay que leer siempre para vaciar el DMA (120 ms de margen).
 static void tarea_captura(void *arg)
 {
     // Hueco: se perdio audio antes del proximo chunk que se entregue (lectura fallida u

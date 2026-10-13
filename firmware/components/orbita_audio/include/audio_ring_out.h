@@ -15,7 +15,7 @@
 #define ORBITA_RING_VERSION      1                                    // Para comprobar que el sink y el ring comparten el header
 #define ORBITA_SLOT_SAMPLES      512                                  // 32 ms mono a 16 kHz (= un fetch del AFE)
 #define ORBITA_SLOT_AUDIO_BYTES  (ORBITA_SLOT_SAMPLES * 2)            // 1024 B
-#define ORBITA_RING_SLOTS        313                                  // 10s aprox, 32ms por slot
+#define ORBITA_RING_SLOTS        1024                                 // ~32,8 s (32 ms por slot), 1,04 MB en PSRAM
 
 // Bits de `flags`. Con los dos en 0 (sin VAD) la compuerta queda ABIERTA: se manda igual.
 #define ORBITA_FLAG_VAD_OK       (1u << 0)   // el VAD midio este bloque (sin AFE no hay VAD)
@@ -57,7 +57,7 @@ typedef struct {
 } orbita_ring_out_stats_t;
 
 /**
- * @brief   Reserva los 313 slots en PSRAM (~325 KB). Llamar UNA vez.
+ * @brief   Reserva los ORBITA_RING_SLOTS slots en PSRAM (~1 MB). Llamar UNA vez.
  *
  * @details ORDEN DE ARRANQUE: (1) antes de crear las tareas que usan el ring (productor y sink): no
  *          esta pensado para que `init` corra en paralelo con `write`/`read`; (2) antes de iniciar el AFE:

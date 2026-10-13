@@ -7,7 +7,7 @@
  * 
  * @copyright Copyright (c) 2026 - Proyecto Órbita
  * 
- * @details Buffer DMA del I2S: 6 descriptores de 240 frames cada uno = 1440 frames (~90ms @16kHz). Ese es el margen maximo 
+ * @details Buffer DMA del I2S: 8 descriptores de 240 frames cada uno = 1920 frames (~120ms @16kHz). Ese es el margen maximo 
  *          entre llamadas a orbita_audio_i2s_read() antes de arriesgar overrun (perder muestras).
  *          
  *          
@@ -55,11 +55,13 @@ void orbita_audio_reset_dma_overflows(void)
 esp_err_t orbita_audio_i2s_init(void)
 {
     /*  - Se crea la configuracion del canal con la ESP como el Master
-    *   - Buffer interno DMA del I2S: dma_desc_num(6) * dma_frame_num(240) = 1440
-    *      frames (~90ms @16kHz). Ese es el margen maximo entre llamadas a
+    *   - Buffer interno DMA del I2S: dma_desc_num(8) * dma_frame_num(240) = 1920
+    *      frames (~120ms @16kHz). Ese es el margen maximo entre llamadas a
     *      orbita_audio_i2s_read() antes de arriesgar overrun (perder muestras).
     */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    chan_cfg.dma_desc_num = ORBITA_DMA_DESC_NUM;     // default del driver: 6 (90 ms)
+    chan_cfg.dma_frame_num = ORBITA_DMA_FRAME_NUM;
 
   
     // Creamos el canal con la config anterior creada y en modo RX

@@ -8,7 +8,7 @@
 /* RING OUT: (SIN AFE) feed -->ring_out--> sink | (CON AFE) fetch -->ring_out--> sink
  *  Dato:        ring propio. audio en SLOTS de 512 muestras mono, 16 bit c/muestra + header de 16 B
  *  Item:        1 SLOT = 1040 B (header 16 B + 512 muestras = 1024 B = 32 ms)
- *  Capacidad:   313 SLOTS ≈ 325 KB = 10 s (en PSRAM)
+ *  Capacidad:   1024 SLOTS ≈ 1,04 MB = 32,8 s (en PSRAM)
  *  Productor:   tarea_feed (sin AFE) o tarea_fetch (con AFE), core 1, prio 5
  *  Consumidor:  sink (A7), core 0 (propuesta)
  *  Si se llena: se descarta el slot mas antiguo y sube `descartados`
@@ -37,7 +37,7 @@ static inline uint16_t siguiente(uint16_t idx)
     return (uint16_t)((idx + 1) % ORBITA_RING_SLOTS);   // vuelve a 0 despues del ultimo slot
 }
 
-// Reserva los slots en PSRAM (~325 KB). Llamar UNA vez, ANTES de crear las tareas que usan el ring
+// Reserva los slots en PSRAM (~1 MB). Llamar UNA vez, ANTES de crear las tareas que usan el ring
 // (productor y sink) y antes de iniciar el AFE (el bloque es contiguo: con la PSRAM fragmentada puede fallar).
 esp_err_t orbita_ring_out_init(void)
 {

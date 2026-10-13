@@ -38,6 +38,10 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # los timeouts: a 100 Hz no se puede esperar menos de 10 ms.
 CONFIG_FREERTOS_HZ=1000
 
+# La ISR del I2S (y su callback de overflow, ya IRAM_ATTR) vive en IRAM: sigue corriendo cuando la
+# cache de la flash esta apagada por una escritura/borrado (NVS, OTA). Sin esto, el DMA pisa audio.
+CONFIG_I2S_ISR_IRAM_SAFE=y
+
 # Stack de app_main (antes 3584 bytes, justo para un printf). Sale de la
 # RAM interna, asi que no subirlo de mas.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

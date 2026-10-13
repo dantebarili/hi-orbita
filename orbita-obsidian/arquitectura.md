@@ -75,7 +75,7 @@ mics ─▶ I2S/DMA ─▶ captura ─▶ RING IN ─▶ tarea feed ─┤      
 | # | Punto | Qué dato hay | Formato / tamaño / flujo | Corre en |
 |---|---|---|---|---|
 | 1 | Mics (INMP441 / ICS-43434, L y R) | Audio digital I2S | 24 bit útiles en slot de 32; 16 kHz; BCLK 1,024 MHz | hardware |
-| 2 | I2S + DMA | Frames estéreo crudos | 8 B por frame, 128 KB/s; buffer DMA 6 × 240 frames ≈ 90 ms (RAM interna) | hardware; la interrupción queda en el core desde donde se inicializó el driver (hoy core 0, de `app_main`; sin verificar qué función la reserva) |
+| 2 | I2S + DMA | Frames estéreo crudos | 8 B por frame, 128 KB/s; buffer DMA 8 × 240 frames ≈ 120 ms (RAM interna; ISR en IRAM) | hardware; la interrupción queda en el core desde donde se inicializó el driver (hoy core 0, de `app_main`; sin verificar qué función la reserva) |
 | 3 | Tarea de captura | Convierte 32→16 bit (shift fijo), arma chunks | Estéreo 16 bit, 64 KB/s; chunk de 1024 frames = 4 KB (64 ms, el de `feed`) | **core 1, prioridad 6** (A2) |
 | 4 | Ring in (siempre activo, con o sin AFE) | Chunks de entrada, sin header | 8 chunks de 4 KB = 32 KB (~0,5 s) | PSRAM (explícito) |
 | 5 | Tarea feed | Con AFE: canales intercalados (mic, mic; con AEC, también la referencia) al AFE. Sin AFE: reduce a mono (L por ahora), parte el chunk en 2 bloques de 512 y los escribe al ring out | int16 a 16 kHz, 64 KB/s | **core 1, prioridad 5** |
@@ -149,7 +149,7 @@ Puntos abiertos:
 | `version` | u8 | Versión del formato. |
 | (reservado) | u32 | Futuro. |
 
-- `lost_samples` suma lectura fallida, overflow del DMA (A1), ring in lleno y, con AFE, `fetch` inválido y deriva: contadores que la tarea que escribe el slot (`feed` o `fetch`) lee, pone en 0 y copia (aproximado con AFE por su latencia).
+- `lost_samples` suma lectura fallida, overflow del DMA (A1), ring in lleno, chunk inválido y, con AFE, `fetch` inválido (la deriva del AFE no se mide): contadores que la tarea que escribe el slot (`feed` o `fetch`) lee, pone en 0 y copia (aproximado con AFE por su latencia).
 - No lleva inicio/fin de segmento ni "urgente": se deciden después de guardar el slot y los pre-roll se solapan; eso vive en la tabla.
 - Sin relleno: `_Static_assert(sizeof == 16)`, sin `__attribute__((packed))`. Costo en PSRAM despreciable aunque el slot baje a 10 ms (6000 slots, 2 MB).
 - Hecho (13/10): formato del slot (`audio_ring_out.h`, 1040 B con `_Static_assert`), ring out v1 (`audio_ring_out.c`), productor en `pipeline.c` y tarea sink. Compila con y sin AFE; sin probar en el chip. Falta (A6): tabla de segmentos y header del cable.
@@ -158,11 +158,11 @@ Puntos abiertos:
 
 | Tema | Decisión |
 |---|---|
-| Estructura | Cola FIFO circular de `ORBITA_RING_SLOTS` (313 = 10 s, 325 KB) slots en PSRAM (`heap_caps_calloc`). Dos índices (`write_idx`, `read_idx`) y `ocupados`; el índice avanza con `(i+1) % N`. Sin confirmación ni pre-roll: leer **saca** el slot. El `max_ocupados` de las stats dice cuánto hace falta. |
+| Estructura | Cola FIFO circular de `ORBITA_RING_SLOTS` (1024 = 32,8 s, 1,04 MB) slots en PSRAM (`heap_caps_calloc`). Dos índices (`write_idx`, `read_idx`) y `ocupados`; el índice avanza con `(i+1) % N`. Sin confirmación ni pre-roll: leer **saca** el slot. El `max_ocupados` de las stats dice cuánto hace falta. |
 | Protección | Spinlock (`portMUX`, interrupciones apagadas ~20–50 µs) sobre índices, contadores y el `memcpy`. Sin mutex (revisión 13/10): con prio 5 en core 0, WiFi/TLS podían desalojar al sink con el mutex tomado y el productor esperar o perder el slot. `write` siempre entra, sin espera ni timeout. Nunca en la ISR ni durante el `send` de red. A medir: duración real con PSRAM y flash activos. |
 | Escritura | `orbita_ring_out_write(audio, n, flags, lost)`: copia el audio (el buffer del productor se reutiliza al volver), completa `seq` y `version`. Ring lleno: descarta el slot **más viejo** y suma sus muestras (`n_samples + lost_samples`) a `lost_samples` del nuevo más viejo. |
 | Lectura | `orbita_ring_out_read(dst)`: copia header + `n_samples` muestras (no el slot entero: la cola es audio viejo de otra vuelta, y no debe llegar al backend) al `dst` del sink y lo libera. El sink manda `2*n_samples` bytes, nunca 1024. Vacío → `ESP_ERR_NOT_FOUND` (el sink espera y reintenta: v1 sin notificación). Que el sink tenga su copia resuelve quién es dueño del slot. |
-| **Incumple hoy: capacidad** | 313 slots = **10 s**, pero la necesidad documentada es ~35 s (segmento de 2 s + reconexión de WiFi) y el diseño pide ~60 s (1875 slots, 1,9 MB). Si el sink o la red se cuelgan más de 10 s se pisa audio (queda anotado en `lost_samples`/`descartados`). No molesta mientras no haya red; hay que subir `ORBITA_RING_SLOTS` (o fijarlo según `max_ocupados`) antes de integrar los sockets. |
+| Capacidad | 1024 slots = **32,8 s**: cubre los ~35 s documentados (segmento de 2 s + reconexión de WiFi) casi justo. El diseño pide ~60 s (1875 slots, 1,9 MB): subir `ORBITA_RING_SLOTS` si `max_ocupados` o la red lo piden. Si el sink o la red se cuelgan más, se pisa audio (queda anotado en `lost_samples`/`descartados`). |
 | Arranque | `orbita_ring_out_init` va **antes de crear las tareas** productora y sink (no es seguro contra uso en paralelo) y **antes de iniciar el AFE** (reserva un bloque contiguo de 325 KB, ~1,9 MB a 60 s: con la PSRAM fragmentada por `esp-sr` puede fallar). |
 | Para el sink | Detecta pérdidas por `hdr.lost_samples` y saltos de `hdr.seq`. `orbita_ring_out_get_stats`: ocupados, máximo, escritos, descartados (A12). |
 | Pendiente (A6) | Cursor de confirmación (3er puntero) para retener hasta `srv_respuesta_recibida`; tabla de segmentos; pre-roll. Esto cambia `read` a "mirar + liberar". No direccionar por `seq % N` (2³² no es múltiplo de 313: al dar la vuelta salta de slot): usar el índice físico o N potencia de 2. Con el ring lleno hay que decidir si se descarta el nuevo o el más viejo ya enviado sin confirmar.
@@ -217,9 +217,9 @@ Sin AFE salvo que se diga. *Medido* = máximo en una toma de 20 s en el chip (13
 
 | Tramo | Tiempo | Límite | Origen |
 |---|---|---|---|
-| Descriptor del DMA (240 frames) | 15 ms | colchón total del DMA: 90 ms | config |
+| Descriptor del DMA (240 frames) | 15 ms | colchón total del DMA: 8 × 15 = 120 ms (antes 90) | config |
 | Captura: esperar un chunk (1024 frames) | 64 ms | = ritmo del sistema | config |
-| Captura: trabajo por chunk (pack + ring in + callback) | **444 µs** (`on_crudo` 209, envío al ring in 124) | 26 ms (90 − 64) | medido |
+| Captura: trabajo por chunk (pack + ring in + callback) | **444 µs** (`on_crudo` 209, envío al ring in 124) | 56 ms (120 − 64) | medido |
 | Ring in → `feed` | máx. 1 chunk esperando | colchón de 8 chunks = 512 ms | medido |
 | `feed` sin AFE (mono + 2 slots) | **189 µs** | 64 ms | medido |
 | `feed` con AFE | ~20 ms | 64 ms | medido |

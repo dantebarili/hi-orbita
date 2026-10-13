@@ -86,7 +86,7 @@ typedef struct {
     uint32_t fetch_invalidos;        // fetch con tamano inesperado
     uint32_t bloques_voz;            // fetch que el VAD marco como voz
     // Tiempos MAXIMOS desde el ultimo orbita_pipeline_reset_tiempos() (o el arranque), en us. NO se restan entre lecturas.
-    uint32_t max_captura_us;         // captura: una vuelta sin la lectura I2S (presupuesto: < 26 000)
+    uint32_t max_captura_us;         // captura: una vuelta sin la lectura I2S (presupuesto: < 56 000 = 120 - 64 ms)
     uint32_t max_ring_in_send_us;    // captura: envio del chunk al ring in
     uint32_t max_on_crudo_us;        // captura: callback on_crudo (ya cuenta dentro de max_captura_us)
     uint32_t ring_in_max_items;      // chunks esperando en el ring in, maximo (capacidad 8; si sube, feed se atrasa)

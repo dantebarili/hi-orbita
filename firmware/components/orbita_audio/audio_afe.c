@@ -8,6 +8,14 @@
 
 static const char *TAG = "afe";
 
+// Perillas del VAD: las define el Kconfig de orbita_pipeline SOLO con el AFE activado. Este archivo se
+// compila siempre, asi que sin AFE se usan los defaults del AFE (el codigo no se ejecuta).
+#ifndef CONFIG_ORBITA_AFE_VAD_MODE
+#define CONFIG_ORBITA_AFE_VAD_MODE          0
+#define CONFIG_ORBITA_AFE_VAD_MIN_SPEECH_MS 128
+#define CONFIG_ORBITA_AFE_VAD_MIN_NOISE_MS  1000
+#endif
+
 // STRUCTS del AFE:
 // `s_afe` (tabla de funciones: feed, fetch, ...)
 // `s_data` (la instancia, con su estado interno).
