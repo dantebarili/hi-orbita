@@ -13,7 +13,8 @@ typedef struct {
 // Una instancia por arranque. Llamar después de inicializar la red.
 // No llamar concurrentemente a start. Config/textos válidos durante start;
 // el certificado debe permanecer válido durante toda la vida del cliente.
-// ESP_OK significa cliente iniciado, no conexión establecida. Reintento cada 5 s.
+// ESP_OK significa cliente iniciado, no conexión establecida. Reconecta solo (backoff 1-2-4-8 s);
+// sirve llamarla sin IP todavía.
 // No ofrece stop/reconfiguración en caliente. Nunca llamar desde sus callbacks.
 esp_err_t orbita_ws_start(const orbita_ws_config_t *config);
 bool orbita_ws_is_connected(void);
@@ -37,3 +38,12 @@ esp_err_t orbita_ws_receive(orbita_ws_message_t *out, uint32_t timeout_ms);
 
 // ID local de conexión; 0 si no está conectado. No es el ID de toma del protocolo.
 uint32_t orbita_ws_connection_id(void);
+
+// Llamar periódicamente mientras no hay conexión (la usa el sink). Si la tarea de la
+// biblioteca terminó (WEBSOCKET_EVENT_FINISH), la vuelve a arrancar. No bloquea.
+void orbita_ws_keepalive(void);
+
+// El adaptador la llama cuando el servidor confirma la sesión (primer ack): la conexión es
+// estable y el backoff vuelve a 1 s. Si el servidor cierra apenas conectamos, el backoff sigue
+// creciendo. Segura desde cualquier tarea.
+void orbita_ws_backoff_reset(void);

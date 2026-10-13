@@ -10,12 +10,13 @@ static const char *TAG = "sink";
 /* SINK: ring_out --> tarea_sink --> msg (ORBITA_MSG_SLOTS slots juntos) --> sink.send
  *  Dato:        mensajes de hasta 4 x 512 muestras mono (4 KB), armados en un buffer propio
  *  Productor:   ring out (via orbita_ring_out_read)    Consumidor: sink.send (UART hoy, socket manana)
- *  Tarea:       core 0, prio 5, stack 4 KB (propuesta de arquitectura.md §3.1: red en el core 0)
+ *  Tarea:       core 0, prio 5, stack 6 KB (propuesta de arquitectura.md §3.1: red en el core 0).
+ *               Con el sink de socket, send corre aca: log_stats + abort de la biblioteca + (a futuro) TLS
  *  Ring vacio:  espera SINK_POLL_MS y reintenta (v1, sin notificacion)
  *  Si send falla: el mensaje se descarta y sube msgs_fallidos */
 
 #define SINK_POLL_MS    10
-#define SINK_STACK      4096
+#define SINK_STACK      6144
 #define SINK_PRIO       5
 #define SINK_CORE       0
 

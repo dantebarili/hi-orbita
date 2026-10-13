@@ -2,7 +2,7 @@
  * TRANSPORTE WEBSOCKET: nuestro módulo usa esp_websocket_client de Espressif.
  * No genera datos ni interpreta audio. El adaptador está en orbita_audio_ws/audio_ws_sink.c.
  *
- * MAPA: app_main -> orbita_ws_start, una vez después de obtener IP.
+ * MAPA: app_main -> orbita_ws_start, una vez (no hace falta tener IP: reconecta sola).
  * La biblioteca crea su tarea para conectar, recibir y manejar el protocolo.
  * Desde ella entrega eventos a nuestro CALLBACK on_ws_event. Este no es una tarea
  * creada por nosotros ni el callback Wi-Fi del event loop predeterminado.
@@ -55,6 +55,13 @@ static atomic_uint s_generation;
 static bool s_start_attempted;
 // Buffer/estado de reconstrucción en RAM estática, fuera de la pila del callback.
 static ws_rx_t s_rx;
+// Espera ANTES del próximo intento de reconexión: 1, 2, 4, 8 s y se queda en 8 s.
+// Vuelve a 1 s al conectar. La usa solo el callback (tarea de la biblioteca).
+#define BACKOFF_MIN_MS 1000
+#define BACKOFF_MAX_MS 8000
+static atomic_int s_backoff_ms = BACKOFF_MIN_MS;     // lo tocan el callback y el sink (backoff_reset)
+// La biblioteca terminó su tarea: lo anota el callback, lo atiende orbita_ws_keepalive.
+static atomic_bool s_needs_restart;
 // Contadores de cola llena y datos rechazados, para diagnóstico en los logs.
 static unsigned s_dropped;
 static unsigned s_rejected;
@@ -96,9 +103,17 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *even
         xEventGroupClearBits(s_events, CONNECTED_BIT);
         reset_received();
         if (id == WEBSOCKET_EVENT_FINISH) {
-            ESP_LOGE(TAG, "La tarea WebSocket termino; el cliente no esta activo");
+            // Sin tarea no hay reconexión automática: el sink la reinicia (keepalive).
+            atomic_store(&s_needs_restart, true);
+            ESP_LOGE(TAG, "La tarea WebSocket termino; se reiniciara desde keepalive");
         } else {
-            ESP_LOGW(TAG, "WebSocket desconectado; reintento automatico habilitado");
+            // Backoff: la biblioteca espera este valor antes del próximo intento. OJO: este callback
+            // corre en el hilo que provoca el corte, que puede ser la tarea de la biblioteca o la
+            // tarea que llamó a send (el sink, con su pila chica). set_reconnect_timeout no bloquea.
+            int espera = atomic_load(&s_backoff_ms);
+            esp_websocket_client_set_reconnect_timeout(s_client, espera);
+            ESP_LOGW(TAG, "WebSocket desconectado; reintento en %d ms", espera);
+            atomic_store(&s_backoff_ms, espera * 2 > BACKOFF_MAX_MS ? BACKOFF_MAX_MS : espera * 2);
         }
     // Evitamos imprimir URI/cabeceras: podrían contener credenciales.
     } else if (id == WEBSOCKET_EVENT_ERROR) {
@@ -166,22 +181,26 @@ esp_err_t orbita_ws_start(const orbita_ws_config_t *config)
         .subprotocol = config->subprotocol,
         // Conservamos verificación de identidad del servidor en TLS.
         .skip_cert_common_name_check = false,
-        // Reintentar conexión también ante cierre normal, esperando 5 segundos.
+        // Reintentar conexión también ante cierre normal; la espera la fija el backoff (1 s al inicio).
         .disable_auto_reconnect = false,
         .enable_close_reconnect = true,
-        .reconnect_timeout_ms = 5000,
+        .reconnect_timeout_ms = BACKOFF_MIN_MS,   // el callback lo sube hasta BACKOFF_MAX_MS
         // Tiempo de operaciones de red, no duración máxima de toda nuestra API.
         .network_timeout_ms = 5000,
         // Ping/Pong detecta conexión sin respuesta. La biblioteca lo gestiona;
         // no son nuestros mensajes de eco ni se entregan como texto/binario.
-        .ping_interval_sec = 20,
-        .pingpong_timeout_sec = 20,
+        // Heartbeat de la FSM del vault: ping cada 10 s, sin pong en 3 s = conexión caída.
+        .ping_interval_sec = 10,
+        .pingpong_timeout_sec = 3,
         .disable_pingpong_discon = false,
         // Buffer interno de 8192 bytes; ws_rx limita también el mensaje total a 8192.
         // La tarea de la biblioteca tiene pila propia de 6144 bytes y prioridad 4.
         .buffer_size = ORBITA_WS_MAX_MESSAGE_BYTES,
         .task_stack = 6144,
         .task_prio = 4,
+        // Toda la red en el core 0 (captura y AFE en el core 1).
+        .task_core_id_set = true,
+        .task_core_id = 0,
         .task_name = "orbita_ws",
     };
     // Crea el cliente; aún falta arrancar su tarea.
@@ -287,6 +306,23 @@ esp_err_t orbita_ws_receive(orbita_ws_message_t *out, uint32_t timeout_ms)
         return ESP_ERR_INVALID_STATE;
     }
     return ESP_OK;
+}
+
+// Si el callback anotó FINISH, intenta arrancar de nuevo la tarea de la biblioteca.
+// start puede fallar si aún está terminando: la bandera queda y se reintenta en la
+// próxima llamada.
+void orbita_ws_keepalive(void)
+{
+    if (!atomic_load(&s_started) || !atomic_load(&s_needs_restart)) return;
+    if (esp_websocket_client_start(s_client) == ESP_OK) {
+        atomic_store(&s_needs_restart, false);
+        ESP_LOGW(TAG, "Cliente WebSocket reiniciado");
+    }
+}
+
+void orbita_ws_backoff_reset(void)
+{
+    atomic_store(&s_backoff_ms, BACKOFF_MIN_MS);
 }
 
 uint32_t orbita_ws_connection_id(void)
