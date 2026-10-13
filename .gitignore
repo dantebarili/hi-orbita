@@ -18,3 +18,6 @@ tools/ruido_labo/
 # Config local de VS Code (rutas de ESP-IDF distintas en cada maquina).
 # Copiar .vscode/settings.example.json a .vscode/settings.json y ajustar rutas.
 .vscode/settings.json
+
+# Tomas y analisis de prueba del frente Audio (WAV/PNG locales)
+tools/prueba_*/

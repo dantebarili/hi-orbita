@@ -4,6 +4,7 @@
 #include "esp_afe_sr_models.h"
 #include "model_path.h"
 #include "audio_afe.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "afe";
 
@@ -12,6 +13,10 @@ static const char *TAG = "afe";
 // `s_data` (la instancia, con su estado interno).
 static const esp_afe_sr_iface_t *s_afe = NULL;
 static esp_afe_sr_data_t *s_data = NULL;
+
+// Si el VAD quedo activo DESPUES de afe_config_check (que puede apagar opciones en conflicto).
+// Sin VAD, vad_state queda siempre en silencio: no es un dato valido para el flag VAD_OK.
+static bool s_vad_activo = false;
 
 esp_err_t orbita_afe_init(void)
 {
@@ -51,6 +56,10 @@ esp_err_t orbita_afe_init(void)
     cfg->fixed_output_channel = false;   // probado: solo, no cambio nada (salida = mic 0)
     cfg->fixed_first_channel = false;    // prueba: el canal lo elige el VAD, no queda fijo en el mic
     cfg->vad_enable_channel_trigger = true;
+    // Perillas del VAD (menuconfig -> Orbita pipeline). Los defaults son los del AFE sin tocar.
+    cfg->vad_mode = (vad_mode_t)CONFIG_ORBITA_AFE_VAD_MODE;
+    cfg->vad_min_speech_ms = CONFIG_ORBITA_AFE_VAD_MIN_SPEECH_MS;
+    cfg->vad_min_noise_ms = CONFIG_ORBITA_AFE_VAD_MIN_NOISE_MS;
 
     // Revisa conflictos entre opciones y las corrige solo (ver el log).
     // OJO: con 2 mics, beamforming (SE) tiene prioridad sobre NS.
@@ -59,7 +68,10 @@ esp_err_t orbita_afe_init(void)
     cfg = afe_config_check(cfg);
     ESP_LOGI(TAG, "Config final (despues de afe_config_check):");
     afe_config_print(cfg);
+    s_vad_activo = cfg->vad_init;
     // Por la ROM, para verlo aunque los logs normales no salgan en el monitor.
+    esp_rom_printf("AFE VAD final: modo=%d min_voz=%d ms, min_silencio=%d ms\n",
+                   cfg->vad_mode, cfg->vad_min_speech_ms, cfg->vad_min_noise_ms);
     esp_rom_printf("AFE config final: se=%d vad=%d ns=%d wakenet=%d aec=%d fixed_out=%d fixed_first=%d vad_trig=%d\n",
                    cfg->se_init, cfg->vad_init, cfg->ns_init, cfg->wakenet_init, cfg->aec_init,
                    cfg->fixed_output_channel, cfg->fixed_first_channel, cfg->vad_enable_channel_trigger);
@@ -86,6 +98,11 @@ esp_err_t orbita_afe_init(void)
                    s_afe->get_feed_chunksize(s_data), s_afe->get_feed_channel_num(s_data),
                    s_afe->get_fetch_chunksize(s_data), s_afe->get_fetch_channel_num(s_data));
     return ESP_OK;
+}
+
+bool orbita_afe_vad_activo(void)
+{
+    return s_vad_activo;
 }
 
 int orbita_afe_feed_chunk_frames(void){

@@ -4,6 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "audio_capture.h"
+#include "audio_sink.h"
 #include "pipeline.h"
 #include "test.h"
 
@@ -34,6 +35,13 @@ void app_main(void)
     err = orbita_pipeline_start(test_pipeline_cfg());     // Se carga el callback del test (test_on_crudo) en la configuracion
     if (err != ESP_OK) {
         arranque_fallo("orbita_pipeline_start", err);
+    }
+
+    // Sink de laboratorio: vacia el ring out y cuenta mensajes (no envia nada). Despues del
+    // pipeline, que es quien hace orbita_ring_out_init().
+    err = orbita_sink_start(test_sink());
+    if (err != ESP_OK) {
+        arranque_fallo("orbita_sink_start", err);
     }
 
     // Loop de comandos de laboratorio ('g' graba una toma, 's' pide el resumen). No vuelve.

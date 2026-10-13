@@ -11,6 +11,8 @@
 #include "driver/uart.h"
 #include "driver/usb_serial_jtag.h"
 #include "audio_capture.h"
+#include "audio_ring_out.h"
+#include "audio_sink.h"
 #include "wav_writer.h"
 #include "pipeline.h"
 #include "test.h"
@@ -28,7 +30,7 @@ static const char *TAG = "test";
 #define BLOQUE_MUESTRAS     ORBITA_AFE_FETCH_FRAMES
 #define BLOQUE_BYTES        ORBITA_AFE_FETCH_BYTES
 #define BLOQUES_POR_CHUNK   (ORBITA_CHUNK_FRAMES / BLOQUE_MUESTRAS)
-#define TOMA_SEGUNDOS       20                 // largo de la toma (multiplo de 4 s: ver assert)
+#define TOMA_SEGUNDOS       8                 // largo de la toma (multiplo de 4 s: ver assert)
 #define TOMA_BLOQUES        ((TOMA_SEGUNDOS * ORBITA_SAMPLE_RATE_HZ) / BLOQUE_MUESTRAS)
 _Static_assert((TOMA_SEGUNDOS * ORBITA_SAMPLE_RATE_HZ) % BLOQUE_MUESTRAS == 0,
                "TOMA_SEGUNDOS debe dar un numero entero de bloques de 512 muestras (multiplo de 4 s)");
@@ -46,7 +48,36 @@ static volatile uint32_t s_bytes_enviados;
 static volatile uint32_t s_max_items_ch0;      // maximo de bloques esperando en cada ring (~ latencia del AFE / 32 ms)
 static volatile uint32_t s_max_items_ch1;
 static char s_vad_toma[VAD_LOG_BLOQUES + 1];   // por bloque de la toma: '1' voz, '0' silencio, '.' sin dato (32 ms c/u)
-static char s_ultima_toma[640] = "Fin: sin tomas todavia";   // resumen de la ultima toma (lo escribe y lo lee el loop)
+static char s_ultima_toma[1400] = "Fin: sin tomas todavia";   // resumen de la ultima toma (lo escribe y lo lee el loop)
+
+// =============================================================================
+//  SINK DE LABORATORIO: vacia el ring out y cuenta; no envia nada
+// =============================================================================
+static volatile uint32_t s_sink_bytes;         // los escribe la tarea del sink
+static volatile uint32_t s_sink_lost;          // suma de lost_antes de todos los mensajes
+static volatile uint32_t s_sink_salto_seq;     // veces que el seq no seguia al mensaje anterior (hueco por descarte del ring)
+
+static esp_err_t test_sink_send(void *ctx, const orbita_msg_t *msg)
+{
+    (void)ctx;
+    static uint32_t seq_esperado;
+    static bool hay_previo;
+    if (hay_previo && msg->seq_primero != seq_esperado) {
+        s_sink_salto_seq++;
+    }
+    seq_esperado = msg->seq_primero + msg->n_slots;
+    hay_previo = true;
+    s_sink_bytes += (uint32_t)msg->n_samples * sizeof(int16_t);
+    s_sink_lost += msg->lost_antes;
+    return ESP_OK;
+}
+
+static const orbita_sink_t s_test_sink = { .send = test_sink_send, .ctx = NULL };
+
+const orbita_sink_t *test_sink(void)
+{
+    return &s_test_sink;
+}
 
 // =============================================================================
 //  CALLBACKS DEL PIPELINE
@@ -226,7 +257,7 @@ void test_init(void)
 
     usb_serial_jtag_driver_config_t usb_cfg = {
         .rx_buffer_size = 256,
-        .tx_buffer_size = 1024,    // la linea "Fin:" mide ~420 B: con 256 el write no entra y no manda nada
+        .tx_buffer_size = 2048,    // la linea "Fin:" mide ~1000 B (max 1400): con 256 el write no entra y no manda nada
     };
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_cfg));
 
@@ -254,6 +285,9 @@ static void test_tomar(void)
     vaciar_ring(s_ring_ch0);                       // restos de una toma abortada
     vaciar_ring(s_ring_ch1);
     memset(s_vad_toma, '.', VAD_LOG_BLOQUES);
+
+    orbita_pipeline_reset_tiempos();               // los maximos de tiempo se miden POR TOMA (sin el arranque)
+    orbita_sink_reset_tiempos();
 
     // Baselines de lo que corre siempre (contadores uint32_t sin signo: la resta sirve aunque den la vuelta)
     orbita_pipeline_stats_t ini;
@@ -302,24 +336,52 @@ static void test_tomar(void)
     // Se guarda en un buffer para poder repetirlo con 's' si la PC se perdio el log.
     orbita_pipeline_stats_t fin;
     orbita_pipeline_get_stats(&fin);
-    snprintf(s_ultima_toma, sizeof(s_ultima_toma),
-             "Fin: mandados %u de %u bytes, overruns_ch0=%u, overruns_ch1=%u, overruns_ring1=%u, dma_overflows=%u, i2s_errores=%u, "
-             "bloques max ch0=%u ch1=%u de %u, stack libre captura=%u, "
-             "feed=%u, feed_invalidos=%u, stack libre feed=%u, "
-             "fetch=%u, fetch_vacios=%u, fetch_invalidos=%u, stack libre fetch=%u, bloques_voz=%u, vad=%s",
+    int n = snprintf(s_ultima_toma, sizeof(s_ultima_toma),
+             "Fin: mandados %u de %u bytes, overruns_ch0=%u, overruns_ch1=%u, overruns_ring_in=%u, dma_overflows=%u, i2s_errores=%u, "
+             "bloques max ch0=%u ch1=%u de %u, stack libre captura=%u, feed_invalidos=%u, stack libre feed=%u",
              (unsigned)s_bytes_enviados, (unsigned)wav_data_size,
              (unsigned)(s_overruns_ch0 - ch0_ini), (unsigned)(s_overruns_ch1 - ch1_ini),
-             (unsigned)(fin.overruns_ring1 - ini.overruns_ring1),
+             (unsigned)(fin.overruns_ring_in - ini.overruns_ring_in),
              (unsigned)(fin.dma_overflows - ini.dma_overflows),
              (unsigned)(fin.i2s_errores - ini.i2s_errores),
              (unsigned)s_max_items_ch0, (unsigned)s_max_items_ch1, (unsigned)TEST_BLOQUES,
              (unsigned)fin.stack_libre_captura,
+             (unsigned)(fin.chunks_invalidos - ini.chunks_invalidos), (unsigned)fin.stack_libre_feed);
+#if ORBITA_PIPELINE_USA_AFE
+    n += snprintf(s_ultima_toma + n, sizeof(s_ultima_toma) - n,
+             ", AFE: feed=%u, fetch=%u, fetch_vacios=%u, fetch_invalidos=%u, stack libre fetch=%u, bloques_voz=%u, vad=%s",
              (unsigned)(fin.chunks_alimentados - ini.chunks_alimentados),
-             (unsigned)(fin.chunks_invalidos - ini.chunks_invalidos), (unsigned)fin.stack_libre_feed,
              (unsigned)(fin.chunks_recibidos - ini.chunks_recibidos),
              (unsigned)(fin.fetch_vacios - ini.fetch_vacios),
              (unsigned)(fin.fetch_invalidos - ini.fetch_invalidos), (unsigned)fin.stack_libre_fetch,
              (unsigned)(fin.bloques_voz - ini.bloques_voz), s_vad_toma);
+#else
+    n += snprintf(s_ultima_toma + n, sizeof(s_ultima_toma) - n,
+             ", AFE: apagado (sin fetch ni VAD), bloques_mono=%u",
+             (unsigned)(fin.bloques_mono - ini.bloques_mono));
+#endif
+    // Tiempos maximos de esta toma, en us (presupuestos en arquitectura.md, tabla de tiempos)
+    n += snprintf(s_ultima_toma + n, sizeof(s_ultima_toma) - n,
+             " | us max: captura=%u (on_crudo=%u, send_ring_in=%u) feed=%u ring_out_write=%u ring_in_max_items=%u",
+             (unsigned)fin.max_captura_us, (unsigned)fin.max_on_crudo_us, (unsigned)fin.max_ring_in_send_us,
+             (unsigned)fin.max_feed_us, (unsigned)fin.max_ring_out_write_us, (unsigned)fin.ring_in_max_items);
+#if ORBITA_PIPELINE_USA_AFE
+    n += snprintf(s_ultima_toma + n, sizeof(s_ultima_toma) - n, " fetch=%u (on_afe=%u)",
+             (unsigned)fin.max_fetch_us, (unsigned)fin.max_on_afe_us);
+#endif
+    // Ring out y sink: totales desde el arranque (no por toma). descartados>0 = el sink no vacia a tiempo.
+    orbita_ring_out_stats_t ro;
+    orbita_ring_out_get_stats(&ro);
+    orbita_sink_stats_t sk;
+    orbita_sink_get_stats(&sk);
+    snprintf(s_ultima_toma + n, sizeof(s_ultima_toma) - n,
+             " | ring_out: escritos=%u descartados=%u max_ocupados=%u errores_write=%u"
+             " | sink: msgs=%u fallidos=%u slots_invalidos=%u bytes=%u lost=%u saltos_seq=%u read_us_max=%u send_us_max=%u stack libre=%u",
+             (unsigned)ro.escritos, (unsigned)ro.descartados, (unsigned)ro.max_ocupados,
+             (unsigned)fin.ring_out_errores,
+             (unsigned)sk.msgs_enviados, (unsigned)sk.msgs_fallidos, (unsigned)sk.slots_invalidos,
+             (unsigned)s_sink_bytes, (unsigned)s_sink_lost, (unsigned)s_sink_salto_seq,
+             (unsigned)sk.max_read_us, (unsigned)sk.max_send_us, (unsigned)sk.stack_libre);
     ESP_LOGI(TAG, "%s", s_ultima_toma);
 }
 

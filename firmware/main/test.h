@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "audio_sink.h"
 #include "pipeline.h"
 
 /** Instala los drivers UART0 y USB-Serial-JTAG y crea los rings de test. Va ANTES de orbita_pipeline_start(). */
@@ -17,6 +18,9 @@ void test_init(void);
 
 /** Callbacks que hay que pasarle al pipeline. Valido despues de test_init(). */
 const orbita_pipeline_cfg_t *test_pipeline_cfg(void);
+
+/** Sink de laboratorio: cuenta mensajes y bytes, no envia nada. Para ejercitar ring out y tarea sink. */
+const orbita_sink_t *test_sink(void);
 
 /** Loop de comandos: 'g' graba una toma, 's' devuelve la linea "Fin:" de la ultima. No vuelve. */
 void test_loop(void);

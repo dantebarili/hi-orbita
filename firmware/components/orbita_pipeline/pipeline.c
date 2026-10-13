@@ -2,11 +2,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/ringbuf.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "audio_afe.h"
 #include "audio_capture.h"
 #include "audio_ring_out.h"
+#include "orbita_tiempo.h"
 #include "wav_writer.h"
 #include "pipeline.h"
 
@@ -26,10 +28,30 @@ static int16_t s_chunk_buf[ORBITA_CHUNK_FRAMES * ORBITA_CHANNELS];
 
 // Buffer de tarea_feed (sin AFE): el chunk estereo reducido a mono, un bloque por fila.
 // Es static para no gastar el stack de la tarea (2 KB de 4 KB).
+#if !ORBITA_PIPELINE_USA_AFE
 static int16_t s_mono_buf[BLOQUES_POR_CHUNK][ORBITA_SLOT_SAMPLES];
+#endif
 
 // Contadores: cada uno lo escribe UNA sola tarea.
 static volatile uint32_t s_i2s_errores;
+
+// Frames que pierde un overflow del DMA (un descriptor; igual que dma_frame_num de audio_capture.c).
+#define ORBITA_DMA_FRAMES   240
+
+// Tiempos MAXIMOS en microsegundos (A15). Cada uno lo escribe una sola tarea. Ver orbita_pipeline_stats_t.
+static volatile uint32_t s_max_captura_us;        // captura: una vuelta sin la lectura I2S
+static volatile uint32_t s_max_ring_in_send_us;   // captura: xRingbufferSend al ring in
+static volatile uint32_t s_max_on_crudo_us;       // captura: el callback on_crudo
+static volatile uint32_t s_ring_in_max_items;     // captura: chunks esperando en el ring in (maximo)
+static volatile uint32_t s_max_feed_us;           // feed: una vuelta sin la espera (con AFE incluye afe_feed)
+static volatile uint32_t s_max_ring_out_write_us; // feed (sin AFE) o fetch (con AFE): ring_out_write
+#if ORBITA_PIPELINE_USA_AFE
+static volatile uint32_t s_max_fetch_us;          // fetch: una vuelta sin la espera del AFE
+static volatile uint32_t s_max_on_afe_us;         // fetch: el callback on_afe
+#endif
+
+// Errores de escritura al ring out (argumento invalido: no deberia pasar). La escribe quien produce slots.
+static volatile uint32_t s_ring_out_errores;
 
 // Cada feed tiene que producir un numero entero de fetch (hoy 2).
 _Static_assert(ORBITA_CHUNK_FRAMES % ORBITA_AFE_FETCH_FRAMES == 0, "ORBITA_CHUNK_FRAMES debe ser multiplo de ORBITA_AFE_FETCH_FRAMES");
@@ -38,14 +60,15 @@ _Static_assert(ORBITA_CHUNK_FRAMES % ORBITA_SLOT_SAMPLES == 0, "ORBITA_CHUNK_FRA
 
 /* RING IN: captura -> feed (con o sin AFE)
  *  Dato:        ring de freeRTOS, chunks estereo 16 bit, sin header (NOSPLIT, 1 chunk por item)
- *  Item:        4096 B (1024 frames = 64 ms)    Capacidad: 8 items = 512 ms
+ *  Item:        4096 B (1024 frames = 64 ms)    Capacidad: 8 items = 512 ms (~32 KB, en PSRAM)
  *  Productor:   tarea_captura (prio 6)    Consumidor: tarea_feed (prio 5), ambas core 1
- *  Si se llena: se descarta el chunk nuevo y sube s_overruns_ring1 */
-#define RING1_CHUNKS        8
+ *  Si se llena: se descarta el chunk nuevo y sube s_overruns_ring_in */
+#define RING_IN_CHUNKS        8
+#define RING_IN_ITEM_HEADER   8      // cabecera que FreeRTOS pone a cada item (ItemHeader_t: 2 x 32 bit)
 
-static RingbufHandle_t s_ring1;
+static RingbufHandle_t s_ring_in;
 static TaskHandle_t s_feed_handle;
-static volatile uint32_t s_overruns_ring1;     // la escribe la captura
+static volatile uint32_t s_overruns_ring_in;     // la escribe la captura
 static volatile uint32_t s_chunks_invalidos;   // las dos siguientes las escribe tarea_feed
 static volatile uint32_t s_bloques_mono;       // bloques mono armados (sin AFE; 2 por chunk)
 
@@ -57,6 +80,25 @@ static volatile uint32_t s_fetch_vacios;
 static volatile uint32_t s_fetch_invalidos;
 static volatile uint32_t s_bloques_voz;
 #endif
+
+// Muestras (mono, 16 kHz) perdidas desde la ultima llamada, para el `lost_samples` del proximo slot.
+// Convierte los contadores de perdida en muestras: un error de I2S o un chunk que no entro al ring in
+// son 1024 frames; un overflow del DMA, 240. Aproximado (un overflow parcial no se mide exacto).
+// La llama SOLO la tarea que escribe el ring out (feed sin AFE, fetch con AFE): usa estado static.
+static uint32_t muestras_perdidas_nuevas(void)
+{
+    static uint32_t i2s_prev, dma_prev, ring_in_prev;
+    uint32_t i2s  = s_i2s_errores;
+    uint32_t dma  = orbita_audio_get_dma_overflows();
+    uint32_t ring_in = s_overruns_ring_in;
+    uint32_t perdidas = (i2s - i2s_prev) * ORBITA_CHUNK_FRAMES
+                      + (dma - dma_prev) * ORBITA_DMA_FRAMES
+                      + (ring_in - ring_in_prev) * ORBITA_CHUNK_FRAMES;
+    i2s_prev = i2s;
+    dma_prev = dma;
+    ring_in_prev = ring_in;
+    return perdidas;
+}
 
 // =============================================================================
 //  TAREA DE CAPTURA  -  I2S -> callback (y ring in)
@@ -79,6 +121,8 @@ static void tarea_captura(void *arg)
             continue;
         }
 
+        uint32_t t_vuelta = orbita_t_us();      // desde aca hasta el final de la vuelta: trabajo sin la lectura
+
         uint32_t dma_ahora = orbita_audio_get_dma_overflows();
         if (dma_ahora != dma_prev) {
             hueco = true;
@@ -88,15 +132,25 @@ static void tarea_captura(void *arg)
         wav_pack_chunk_16bit(s_crudo_buf, frames_leidos, (uint8_t *)s_chunk_buf);   // 32 -> 16 bit
 
         // Timeout 0: si no hay lugar, el chunk se pierde y queda contado.
-        if (xRingbufferSend(s_ring1, s_chunk_buf, ORBITA_CHUNK_BYTES, 0) != pdTRUE) {
-            s_overruns_ring1++;
+        uint32_t t_send = orbita_t_us();
+        if (xRingbufferSend(s_ring_in, s_chunk_buf, ORBITA_CHUNK_BYTES, 0) != pdTRUE) {
+            s_overruns_ring_in++;
+        }
+        orbita_max_us(&s_max_ring_in_send_us, t_send);
+        UBaseType_t esperando = 0;      // chunks que esperan a feed: si sube, feed no sigue el ritmo
+        vRingbufferGetInfo(s_ring_in, NULL, NULL, NULL, NULL, &esperando);
+        if (esperando > s_ring_in_max_items) {
+            s_ring_in_max_items = esperando;
         }
         // Se entrega el chunk solo si alguien se registro (on_crudo != NULL). Si no, se descarta.
         // s_chunk_buf se reescribe en la vuelta siguiente: el callback tiene que copiar lo que necesite.
         if (s_cfg.on_crudo != NULL) {
+            uint32_t t_cb = orbita_t_us();
             s_cfg.on_crudo(s_chunk_buf, frames_leidos, hueco);
+            orbita_max_us(&s_max_on_crudo_us, t_cb);
         }
         hueco = false;
+        orbita_max_us(&s_max_captura_us, t_vuelta);
     }
 }
 
@@ -109,10 +163,11 @@ static void tarea_feed(void *arg)
         // Espera un chunk entero (hasta 100 ms). Devuelve un puntero DENTRO del
         // ring (no copia) y en `n` cuantos bytes tiene. NULL = no llego nada.
         size_t n = 0;
-        int16_t *p = xRingbufferReceive(s_ring1, &n, pdMS_TO_TICKS(100));
+        int16_t *p = xRingbufferReceive(s_ring_in, &n, pdMS_TO_TICKS(100));
         if (p == NULL) {
             continue;
         }
+        uint32_t t_feed = orbita_t_us();
 
 #if ORBITA_PIPELINE_USA_AFE
         if (n == ORBITA_CHUNK_BYTES) {
@@ -125,11 +180,20 @@ static void tarea_feed(void *arg)
         if (n == ORBITA_CHUNK_BYTES) {
             // Estereo intercalado L,R,L,R...: el frame f tiene su L en la posicion 2*f. Se descarta R.
             const int16_t *estereo = (const int16_t *)p;
+            // Lo perdido antes de este chunk va en el primer slot; el segundo es continuo con el primero.
+            uint32_t perdidas = muestras_perdidas_nuevas();
             for (size_t b = 0; b < BLOQUES_POR_CHUNK; b++) {
                 for (size_t k = 0; k < ORBITA_SLOT_SAMPLES; k++) {
                     s_mono_buf[b][k] = estereo[2 * (b * ORBITA_SLOT_SAMPLES + k)];
                 }
-                s_bloques_mono++;    // TODO (A5): entregar s_mono_buf[b] al ring out
+                s_bloques_mono++;
+                // flags = 0: sin AFE no hay VAD, compuerta abierta (se manda igual).
+                uint32_t t_w = orbita_t_us();
+                if (orbita_ring_out_write(s_mono_buf[b], ORBITA_SLOT_SAMPLES, 0, perdidas) != ESP_OK) {
+                    s_ring_out_errores++;
+                }
+                orbita_max_us(&s_max_ring_out_write_us, t_w);
+                perdidas = 0;
             }
         } else {
             s_chunks_invalidos++;
@@ -137,7 +201,8 @@ static void tarea_feed(void *arg)
 #endif
 
         // Se devuelve el lugar al ring, haya sido valido el chunk o no.
-        vRingbufferReturnItem(s_ring1, p);
+        vRingbufferReturnItem(s_ring_in, p);
+        orbita_max_us(&s_max_feed_us, t_feed);
     }
 }
 
@@ -162,17 +227,31 @@ static void tarea_fetch(void *arg)
             s_fetch_invalidos++;
             continue;
         }
+        uint32_t t_fetch = orbita_t_us();     // desde aca: trabajo sin la espera del AFE
         s_chunks_recibidos++;
         if (voz) {
             s_bloques_voz++;
         }
 
+        // Al ring out: VAD_OK solo si el VAD quedo activo tras afe_config_check (si no, voz=false
+        // no significa silencio y una compuerta cortaria todo); VOZ segun el VAD.
+        // Los `fetch` vacios/invalidos no entran en las perdidas (pendiente de decidir).
+        uint8_t flags = orbita_afe_vad_activo() ? (ORBITA_FLAG_VAD_OK | (voz ? ORBITA_FLAG_VOZ : 0)) : 0;
+        uint32_t t_w = orbita_t_us();
+        if (orbita_ring_out_write(audio, bytes / ORBITA_BYTES_PER_SAMPLE, flags, muestras_perdidas_nuevas()) != ESP_OK) {
+            s_ring_out_errores++;
+        }
+        orbita_max_us(&s_max_ring_out_write_us, t_w);
+
         // `audio` es memoria del AFE y vale hasta el proximo fetch: el callback copia lo que
         // necesite, sin esperar. Si fetch se atrasa, el AFE llena su buffer interno (1,6 s) y
         // sobrescribe audio sin avisar: no se puede contar esa perdida.
         if (s_cfg.on_afe != NULL) {
+            uint32_t t_cb = orbita_t_us();
             s_cfg.on_afe(audio, bytes / ORBITA_BYTES_PER_SAMPLE, voz);
+            orbita_max_us(&s_max_on_afe_us, t_cb);
         }
+        orbita_max_us(&s_max_fetch_us, t_fetch);
     }
 }
 #endif  // ORBITA_PIPELINE_USA_AFE
@@ -189,6 +268,13 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
     }
     if (cfg != NULL) {
         s_cfg = *cfg;
+    }
+
+    // El ring out se reserva ANTES del AFE (bloque contiguo de PSRAM; esp-sr la fragmenta) y antes
+    // de crear las tareas que lo usan. Si ya estaba iniciado (otro modulo), se sigue con ese.
+    esp_err_t ring_err = orbita_ring_out_init();
+    if (ring_err != ESP_OK && ring_err != ESP_ERR_INVALID_STATE) {
+        return ring_err;
     }
 
 #if ORBITA_PIPELINE_USA_AFE
@@ -216,9 +302,12 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
 
 #endif
 
-    s_ring1 = xRingbufferCreateNoSplit(ORBITA_CHUNK_BYTES, RING1_CHUNKS);
-    if (s_ring1 == NULL) {
-        ESP_LOGE(TAG, "No se pudo crear el ring in (%d bytes)", RING1_CHUNKS * ORBITA_CHUNK_BYTES);
+    // En PSRAM explicito (antes dependia del umbral SPIRAM_MALLOC_ALWAYSINTERNAL). Mismo tamano que
+    // xRingbufferCreateNoSplit(): (item + cabecera) x cantidad.
+    s_ring_in = xRingbufferCreateWithCaps((ORBITA_CHUNK_BYTES + RING_IN_ITEM_HEADER) * RING_IN_CHUNKS,
+                                        RINGBUF_TYPE_NOSPLIT, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_ring_in == NULL) {
+        ESP_LOGE(TAG, "No se pudo crear el ring in en PSRAM (%d bytes)", RING_IN_CHUNKS * (ORBITA_CHUNK_BYTES + RING_IN_ITEM_HEADER));
         return ESP_ERR_NO_MEM;
     }
 
@@ -234,11 +323,31 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
         return ESP_ERR_NO_MEM;
     }
 
+    // Linea de base de las perdidas: el I2S esta encendido desde orbita_audio_i2s_init() y nadie lo
+    // leyo hasta ahora (con AFE, orbita_afe_init() tarda segundos y el DMA acumula overflows). Eso es
+    // anterior al stream: se descarta el resultado para que el primer slot no traiga ese numero.
+    // Seguro: feed/fetch estan esperando datos y todavia no llaman a la funcion.
+    (void)muestras_perdidas_nuevas();
+
     // Captura todo el tiempo, desde el arranque, fija al core 1 (WiFi usa el 0 por defecto).
     if (xTaskCreatePinnedToCore(tarea_captura, "captura", 4096, NULL, 6, &s_captura_handle, 1) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
+}
+
+void orbita_pipeline_reset_tiempos(void)
+{
+    s_max_captura_us = 0;
+    s_max_ring_in_send_us = 0;
+    s_max_on_crudo_us = 0;
+    s_ring_in_max_items = 0;
+    s_max_feed_us = 0;
+    s_max_ring_out_write_us = 0;
+#if ORBITA_PIPELINE_USA_AFE
+    s_max_fetch_us = 0;
+    s_max_on_afe_us = 0;
+#endif
 }
 
 void orbita_pipeline_get_stats(orbita_pipeline_stats_t *out)
@@ -249,9 +358,16 @@ void orbita_pipeline_get_stats(orbita_pipeline_stats_t *out)
     if (s_captura_handle != NULL) {
         out->stack_libre_captura = uxTaskGetStackHighWaterMark(s_captura_handle);
     }
-    out->overruns_ring1 = s_overruns_ring1;
+    out->overruns_ring_in = s_overruns_ring_in;
     out->chunks_invalidos = s_chunks_invalidos;
     out->bloques_mono = s_bloques_mono;
+    out->ring_out_errores = s_ring_out_errores;
+    out->max_captura_us = s_max_captura_us;
+    out->max_ring_in_send_us = s_max_ring_in_send_us;
+    out->max_on_crudo_us = s_max_on_crudo_us;
+    out->ring_in_max_items = s_ring_in_max_items;
+    out->max_feed_us = s_max_feed_us;
+    out->max_ring_out_write_us = s_max_ring_out_write_us;
     if (s_feed_handle != NULL) {
         out->stack_libre_feed = uxTaskGetStackHighWaterMark(s_feed_handle);
     }
@@ -261,6 +377,8 @@ void orbita_pipeline_get_stats(orbita_pipeline_stats_t *out)
     out->fetch_vacios = s_fetch_vacios;
     out->fetch_invalidos = s_fetch_invalidos;
     out->bloques_voz = s_bloques_voz;
+    out->max_fetch_us = s_max_fetch_us;
+    out->max_on_afe_us = s_max_on_afe_us;
     if (s_fetch_handle != NULL) {
         out->stack_libre_fetch = uxTaskGetStackHighWaterMark(s_fetch_handle);
     }

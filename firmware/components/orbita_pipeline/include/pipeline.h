@@ -76,14 +76,24 @@ typedef struct {
 typedef struct {
     uint32_t i2s_errores;            // lecturas del I2S que fallaron o vinieron incompletas
     uint32_t dma_overflows;          // veces que el DMA del I2S pisó audio sin leer (hueco real en la captura)
-    uint32_t overruns_ring1;         // chunks que no entraron al ring in (feed no sigue el ritmo)
+    uint32_t overruns_ring_in;         // chunks que no entraron al ring in (feed no sigue el ritmo)
     uint32_t chunks_alimentados;     // chunks entregados al AFE
     uint32_t chunks_invalidos;       // chunks del ring in con tamano inesperado
     uint32_t bloques_mono;           // bloques mono de 512 armados por feed (sin AFE; 2 por chunk)
+    uint32_t ring_out_errores;       // escrituras al ring out rechazadas (argumento invalido: no deberia pasar)
     uint32_t chunks_recibidos;       // fetch que devolvieron audio valido
     uint32_t fetch_vacios;           // fetch sin audio (vencio el tiempo)
     uint32_t fetch_invalidos;        // fetch con tamano inesperado
     uint32_t bloques_voz;            // fetch que el VAD marco como voz
+    // Tiempos MAXIMOS desde el ultimo orbita_pipeline_reset_tiempos() (o el arranque), en us. NO se restan entre lecturas.
+    uint32_t max_captura_us;         // captura: una vuelta sin la lectura I2S (presupuesto: < 26 000)
+    uint32_t max_ring_in_send_us;    // captura: envio del chunk al ring in
+    uint32_t max_on_crudo_us;        // captura: callback on_crudo (ya cuenta dentro de max_captura_us)
+    uint32_t ring_in_max_items;      // chunks esperando en el ring in, maximo (capacidad 8; si sube, feed se atrasa)
+    uint32_t max_feed_us;            // feed: una vuelta sin la espera (presupuesto: < 64 000; con AFE incluye afe_feed ~20 000)
+    uint32_t max_ring_out_write_us;  // ring_out_write, desde feed (sin AFE) o fetch (con AFE)
+    uint32_t max_fetch_us;           // fetch: una vuelta sin la espera del AFE (solo AFE; presupuesto: < 32 000)
+    uint32_t max_on_afe_us;          // fetch: callback on_afe (solo AFE)
     uint32_t stack_libre_captura;    // bytes minimos libres de stack (0 si la tarea no existe)
     uint32_t stack_libre_feed;
     uint32_t stack_libre_fetch;
@@ -104,6 +114,9 @@ typedef struct {
  *          orbita_afe_init().
  */
 esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg);
+
+/** Pone en 0 los tiempos maximos (el arranque ensucia el maximo): llamar al empezar una medicion. */
+void orbita_pipeline_reset_tiempos(void);
 
 /** Copia los contadores actuales (ver orbita_pipeline_stats_t). */
 void orbita_pipeline_get_stats(orbita_pipeline_stats_t *out);

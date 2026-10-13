@@ -35,6 +35,14 @@
 esp_err_t orbita_afe_init(void);
 
 /**
+ * @brief  true si el VAD quedo activo despues de la validacion de la config (afe_config_check).
+ *
+ * @details El pipeline la usa para poner el flag VAD_OK del ring out: si el VAD esta apagado, el
+ *          `voz` de orbita_afe_fetch() es siempre false y no significa "silencio". Valida despues de init.
+ */
+bool orbita_afe_vad_activo(void);
+
+/**
  * @brief  Entrega un chunk de audio al AFE.
  *
  * @details El chunk tiene orbita_afe_feed_chunk_frames() frames, 2 canales entrelazados

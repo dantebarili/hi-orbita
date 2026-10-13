@@ -77,16 +77,16 @@ mics ─▶ I2S/DMA ─▶ captura ─▶ RING IN ─▶ tarea feed ─┤      
 | 1 | Mics (INMP441 / ICS-43434, L y R) | Audio digital I2S | 24 bit útiles en slot de 32; 16 kHz; BCLK 1,024 MHz | hardware |
 | 2 | I2S + DMA | Frames estéreo crudos | 8 B por frame, 128 KB/s; buffer DMA 6 × 240 frames ≈ 90 ms (RAM interna) | hardware; la interrupción queda en el core desde donde se inicializó el driver (hoy core 0, de `app_main`; sin verificar qué función la reserva) |
 | 3 | Tarea de captura | Convierte 32→16 bit (shift fijo), arma chunks | Estéreo 16 bit, 64 KB/s; chunk de 1024 frames = 4 KB (64 ms, el de `feed`) | **core 1, prioridad 6** (A2) |
-| 4 | Ring in (siempre activo, con o sin AFE) | Chunks de entrada, sin header | 8 chunks de 4 KB = 32 KB (~0,5 s) | memoria |
-| 5 | Tarea feed | Con AFE: canales intercalados (mic, mic; con AEC, también la referencia) al AFE. Sin AFE: reduce a mono (L por ahora) y parte el chunk en 2 bloques de 512 (hecho; la entrega al ring out es A5) | int16 a 16 kHz, 64 KB/s | **core 1, prioridad 5** (hecho) |
+| 4 | Ring in (siempre activo, con o sin AFE) | Chunks de entrada, sin header | 8 chunks de 4 KB = 32 KB (~0,5 s) | PSRAM (explícito) |
+| 5 | Tarea feed | Con AFE: canales intercalados (mic, mic; con AEC, también la referencia) al AFE. Sin AFE: reduce a mono (L por ahora), parte el chunk en 2 bloques de 512 y los escribe al ring out | int16 a 16 kHz, 64 KB/s | **core 1, prioridad 5** |
 | 6 | AFE (`esp-sr`), opcional | VAD (sin NS con 2 mics; AGC y WakeNet apagados): audio **mono**, `vad_state`, `raw_data`. **El beamforming (BSS) no actúa** (medido 12/10 con todas las combinaciones de canal fijo y disparo por VAD: la salida es el mic 0 idéntico) | `fetch` (`get_fetch_chunksize`) = 512 muestras mono = 32 ms (1 KB), 32 KB/s; 2 `fetch` por cada `feed`; latencia de la tubería 64 ms | tareas internas del AFE: **core 0, prioridad 5** (`afe_perferred_core`, medido); `tarea_fetch` en core 1 |
 | 7 | Wake word (Edge Impulse) | Consume **todo** el audio de `fetch`, con su propia ventana | 32 KB/s | core 1 (propuesta); si no entra con el AFE, pasa al core 0 |
 | 8 | Ring out | Slots (header de 16 B + 512 muestras mono) y la tabla de segmentos | 1040 B por slot; 60 s ≈ 1875 slots ≈ 1,9 MB en PSRAM | memoria |
-| 9 | Sink | Elige un segmento y lo parte en mensajes | Mensaje ≈ 4 slots ≈ 4 KB; ≈ 270 kbit/s con TLS | core 0 (propuesta); hoy `tarea_envio` (prueba de test), core 0, prioridad 5 |
+| 9 | Sink | Saca slots del ring out, los junta en mensajes de 4 slots y los pasa al `send` registrado. Elegir segmentos: A6 (v1: en orden de llegada) | Mensaje = 4 slots ≈ 4 KB; ≈ 270 kbit/s con TLS (estimado) | **core 0, prioridad 5** (`audio_sink.c`) |
 | 10 | Backend | Audio mono 16 kHz / 16 bit por segmento | — | — |
 
 - **Reparto de cores (propuesta):** core 0 = red y control (WiFi va fijo al core 0 por defecto; `esp_timer`, `app_main`, sink, TLS); core 1 = audio en tiempo real. Motivo: las ráfagas de WiFi/TLS no deben quitarle CPU a la captura (el DMA da ~90 ms de margen). Riesgo: AFE (~46 % de un núcleo, estimado) + wake word + captura podrían no entrar en el core 1: medir en la Fase B. La tarea de lwIP no tiene core fijo.
-- **Hoy:** I2S → captura (core 1) → ring in → `feed` (core 1) → (AFE → `fetch`, opcional). Sin AFE, `feed` ya arma los bloques mono de 512 y los cuenta; falta entregarlos al ring out (A5). La prueba de test (`test.c`) copia a sus propios buffers y `tarea_envio` (core 0) los manda por UART0. Sin ring out ni tabla.
+- **Hoy:** I2S → captura (core 1) → ring in → `feed` (core 1) → [AFE → `fetch`] → ring out → tarea sink (core 0) → `send` del sink registrado (hoy `test_sink`, que solo cuenta). En paralelo, la prueba de test (`test.c`) copia a sus propios rings y `tarea_envio` (core 0) los manda por UART0 sin pasar por el ring out.
 - **Test:** WAV de 2 canales (ch0 mic crudo L, ch1 salida del AFE) = 64 KB/s por UART a 921600 baud (~1,44× el audio); 3 canales no entran. El ch1 llega 64 ms después del ch0 (se corrige en el script con `--alinear`).
 
 ### 3.2 Captura (I2S → tarea de captura)
@@ -152,16 +152,17 @@ Puntos abiertos:
 - `lost_samples` suma lectura fallida, overflow del DMA (A1), ring in lleno y, con AFE, `fetch` inválido y deriva: contadores que la tarea que escribe el slot (`feed` o `fetch`) lee, pone en 0 y copia (aproximado con AFE por su latencia).
 - No lleva inicio/fin de segmento ni "urgente": se deciden después de guardar el slot y los pre-roll se solapan; eso vive en la tabla.
 - Sin relleno: `_Static_assert(sizeof == 16)`, sin `__attribute__((packed))`. Costo en PSRAM despreciable aunque el slot baje a 10 ms (6000 slots, 2 MB).
-- Hecho: el formato del slot (`audio_ring_out.h`, 1040 B con `_Static_assert`) y el **ring v1** (`audio_ring_out.c`, compila; sin usar todavía ni probado en el chip). Después (A6): tabla de segmentos y header del cable.
+- Hecho (13/10): formato del slot (`audio_ring_out.h`, 1040 B con `_Static_assert`), ring out v1 (`audio_ring_out.c`), productor en `pipeline.c` y tarea sink. Compila con y sin AFE; sin probar en el chip. Falta (A6): tabla de segmentos y header del cable.
 
 **Ring out v1 (A5, 2026-10-13)**
 
 | Tema | Decisión |
 |---|---|
-| Estructura | Cola FIFO circular de `ORBITA_RING_SLOTS` (313 = 10 s, 325 KB) slots en PSRAM (`heap_caps_calloc`). Dos índices (`write_idx`, `read_idx`) y `ocupados`; el índice avanza con `(i+1) % N`. Sin confirmación ni pre-roll: leer **saca** el slot. Hoy 10 s, no los ~60 s de la tabla de arriba; cambiar `ORBITA_RING_SLOTS` (el `max_ocupados` de las stats dice cuánto hace falta). |
+| Estructura | Cola FIFO circular de `ORBITA_RING_SLOTS` (313 = 10 s, 325 KB) slots en PSRAM (`heap_caps_calloc`). Dos índices (`write_idx`, `read_idx`) y `ocupados`; el índice avanza con `(i+1) % N`. Sin confirmación ni pre-roll: leer **saca** el slot. El `max_ocupados` de las stats dice cuánto hace falta. |
 | Protección | Spinlock (`portMUX`, interrupciones apagadas ~20–50 µs) sobre índices, contadores y el `memcpy`. Sin mutex (revisión 13/10): con prio 5 en core 0, WiFi/TLS podían desalojar al sink con el mutex tomado y el productor esperar o perder el slot. `write` siempre entra, sin espera ni timeout. Nunca en la ISR ni durante el `send` de red. A medir: duración real con PSRAM y flash activos. |
 | Escritura | `orbita_ring_out_write(audio, n, flags, lost)`: copia el audio (el buffer del productor se reutiliza al volver), completa `seq` y `version`. Ring lleno: descarta el slot **más viejo** y suma sus muestras (`n_samples + lost_samples`) a `lost_samples` del nuevo más viejo. |
 | Lectura | `orbita_ring_out_read(dst)`: copia header + `n_samples` muestras (no el slot entero: la cola es audio viejo de otra vuelta, y no debe llegar al backend) al `dst` del sink y lo libera. El sink manda `2*n_samples` bytes, nunca 1024. Vacío → `ESP_ERR_NOT_FOUND` (el sink espera y reintenta: v1 sin notificación). Que el sink tenga su copia resuelve quién es dueño del slot. |
+| **Incumple hoy: capacidad** | 313 slots = **10 s**, pero la necesidad documentada es ~35 s (segmento de 2 s + reconexión de WiFi) y el diseño pide ~60 s (1875 slots, 1,9 MB). Si el sink o la red se cuelgan más de 10 s se pisa audio (queda anotado en `lost_samples`/`descartados`). No molesta mientras no haya red; hay que subir `ORBITA_RING_SLOTS` (o fijarlo según `max_ocupados`) antes de integrar los sockets. |
 | Arranque | `orbita_ring_out_init` va **antes de crear las tareas** productora y sink (no es seguro contra uso en paralelo) y **antes de iniciar el AFE** (reserva un bloque contiguo de 325 KB, ~1,9 MB a 60 s: con la PSRAM fragmentada por `esp-sr` puede fallar). |
 | Para el sink | Detecta pérdidas por `hdr.lost_samples` y saltos de `hdr.seq`. `orbita_ring_out_get_stats`: ocupados, máximo, escritos, descartados (A12). |
 | Pendiente (A6) | Cursor de confirmación (3er puntero) para retener hasta `srv_respuesta_recibida`; tabla de segmentos; pre-roll. Esto cambia `read` a "mirar + liberar". No direccionar por `seq % N` (2³² no es múltiplo de 313: al dar la vuelta salta de slot): usar el índice físico o N potencia de 2. Con el ring lleno hay que decidir si se descarta el nuevo o el más viejo ya enviado sin confirmar.
@@ -185,8 +186,11 @@ Alternativas (el patrón es habitual: TCP guarda lo enviado sin confirmar): (2) 
 
 | Decisión | Estado | Nota |
 |---|---|---|
-| Sink intercambiable (empezar / recibir slot / cerrar) | Provisoria | Falta definir quién es dueño del slot y si puede bloquear. El sink UART de test lee en orden; elegir segmentos va solo en el sink del socket (compañero). |
-| Audio aislado en `firmware/components/orbita_audio/`; `main` solo integra | Provisoria | Hecho para `audio_capture`, `wav_writer` y `esp-sr`. Hechos captura y pipeline (A14). Faltan ring out (A5), sink (A7) y control (A8). |
+| Sink intercambiable (`orbita_sink_t`: `send` + `ctx`) | Provisoria | Hecho. Cada destino define su `send` (lab: `test_sink` en `main/test.c`; UART: `uart_sink`, A7; socket: compañero). `read` copia el slot al sink: no hay dueño compartido ni bloqueo. Falta `open/close` para reconectar. |
+| Audio aislado en `orbita_audio/` y `orbita_pipeline/`; `main` solo integra | Cerrada | Hechos captura, pipeline, ring out y sink. Falta el control (A8). |
+| Tarea sink (`audio_sink.c`, 13/10) | Provisoria | Core 0, prio 5. Saca slots del ring out, junta `ORBITA_MSG_SLOTS` (4 = 128 ms) en un `orbita_msg_t` y llama a `send(ctx, msg)`. Un slot con `lost_samples > 0` cierra el mensaje en curso: cada mensaje es audio continuo y el hueco queda en `lost_antes` del siguiente. `send` con error: mensaje descartado y contado (reintentos: A6). Ring vacío: espera 10 ms y reintenta (**polling, se deja por ahora**; con el socket, pasar a notificación una vez por mensaje). Compila y arranca en `main` con `test_sink`; sin probar en el chip. |
+| Productor del ring out | Provisoria | `pipeline.c`: sin AFE, `tarea_feed` escribe los 2 bloques de 512 con `flags = 0`; con AFE, `tarea_fetch` escribe con `VAD_OK` (+`VOZ`). `lost_samples` = errores de I2S y chunks que no entraron al ring in (1024 c/u) + overflows del DMA (240 c/u), desde el slot anterior. `orbita_ring_out_init` se llama dentro de `orbita_pipeline_start`, antes del AFE. |
+| Velocidad mínima del sink | Cálculo | Entrada: 16 000 muestras/s × 2 B = **32 000 B/s** de audio (256 kbit/s) = **31,25 slots/s** = **7,8 mensajes/s** de 4 slots (4096 B de audio c/u, uno cada 128 ms). Para "cumplir justo" cada `send` debe tardar **< 128 ms en promedio**, y el cable tiene que mover ≥ 32 KB/s de audio **más** header y TLS (estimado ~270 kbit/s con TLS). Para vaciar un atraso hay que ir más rápido que el tiempo real: con 10 s acumulados (313 slots, 320 KB) a 2× (64 KB/s) tarda 10 s en alcanzar al vivo. UART0 a 921 600 baud (8N1) ≈ 92 KB/s = 2,9× el audio mono. La espera del sink entre lecturas (hoy `vTaskDelay` de 10 ms) no pesa: es 1/3 de un slot. |
 | Mensaje de WebSocket | Abierta | ~100–130 ms (4 slots, ~4 KB), binario (base64 suma 33 %), múltiplo de un slot. Header del cable por mensaje, de Comunicación (sugerido: id de segmento, `seq` del primer slot, cantidad de slots, tipo, `lost_samples` total, hueco previo). Overhead de cabeceras (estimado): ~12 % a 20 ms, ~5 % a 100 ms, ~0,5 % a 1 s; el costo real es CPU y radio. Medir ventana TCP (el buffer de lwIP de ~5,7 KB limita a ~28 KB/s con 200 ms de latencia) y RAM de TLS. |
 | Mensajes del backend | Propuesta | (1) confirmación de recepción, rápida; (2) el LLM procesa mensaje a mensaje mientras se envía; (3) la respuesta sale al recibir el fin del pedido (`dev_fin_segmento` del urgente, por silencio con `VOZ`, por ahora). |
 | Pipelining: **C, híbrido** | Propuesta | El **fondo** se manda sin esperar respuesta, solo confirmación de recepción ("enviado" → "confirmado", libera memoria). El **urgente** espera su respuesta (FSM secuencial). Máximo 1–2 segmentos de fondo en vuelo, para que el urgente no quede detrás en el buffer del socket (~180 ms). Sin confirmar con Comunicación: que el backend confirme recepción por separado y en <1 s. |
@@ -206,6 +210,28 @@ slot en ring out     = [header interno 16 B] + audio (32 ms)    ← solo dentro 
 - **El tamaño del segmento es decisión de producto y backend.** Corto: más llamadas y riesgo de cortar una frase, pero libera y reenvía poco. Largo: más contexto, pero el resumen sale más tarde y se reenvía más. Un tiempo fijo largo es inviable para el urgente, por eso el **urgente se cierra por silencio**; el de fondo tolera demora y conviene cortarlo en una pausa con un máximo.
 - **Latencia del urgente** = silencio de fin de frase (~0,5–1 s) + proceso del backend + respuesta. El largo del segmento no suma: los mensajes salen antes de cerrarlo.
 - **Aviso de wake word:** los ~100 ms del mensaje son tiempo de *juntar* audio, no de enviar. El aviso ("urgente, pausá el resumen") es un mensaje de control de pocos bytes que sale apenas se detecta; luego el pre-roll (~1 s ya guardado, decenas de ms) y después el audio en vivo. Desde que termina "Órbita": detección en el ESP32 ~0,1–0,4 s (depende de la ventana y las inferencias por ventana del modelo; es el tramo más grande) + red decenas de ms ≈ 0,2–0,5 s. Estimado; medir en la Fase B. La FSM corta el segmento de fondo al saltar la wake word, así que un fondo largo no afecta al urgente.
+
+### 3.7 Tiempos y latencia del pipeline
+
+Sin AFE salvo que se diga. *Medido* = máximo en una toma de 20 s en el chip (13/10), en reposo: sin WiFi, sin escrituras a flash. *Estimado* = sin medir. A15 imprime los máximos en la línea `Fin:`.
+
+| Tramo | Tiempo | Límite | Origen |
+|---|---|---|---|
+| Descriptor del DMA (240 frames) | 15 ms | colchón total del DMA: 90 ms | config |
+| Captura: esperar un chunk (1024 frames) | 64 ms | = ritmo del sistema | config |
+| Captura: trabajo por chunk (pack + ring in + callback) | **444 µs** (`on_crudo` 209, envío al ring in 124) | 26 ms (90 − 64) | medido |
+| Ring in → `feed` | máx. 1 chunk esperando | colchón de 8 chunks = 512 ms | medido |
+| `feed` sin AFE (mono + 2 slots) | **189 µs** | 64 ms | medido |
+| `feed` con AFE | ~20 ms | 64 ms | medido |
+| Latencia de la tubería del AFE | 64 ms | — | medido |
+| `ring_out_write` / `read` (interrupciones apagadas en ese core) | **62 µs** / **5 µs** | ≪ 15 ms | medido |
+| Sink: espera por polling | ≤ 10 ms | — | diseño |
+| Sink: juntar un mensaje (4 slots) | 128 ms | — | diseño |
+| `send` de un mensaje | UART: 4 KB a ~92 KB/s ≈ 45 ms | < 128 ms promedio | cálculo |
+
+**Mic → fin del `send`** (audio más viejo del mensaje): ≈ 128 + 10 + 45 ≈ **180 ms** con UART; con AFE, +64 ms. La latencia del urgente (§3.6) es otra cuenta.
+
+Toma de 20 s sin AFE (13/10): 0 pérdidas en todos los contadores; ring out 1538 slots escritos, 0 descartados, máximo 2 ocupados; sink 384 mensajes y 0 saltos (el audio completo pasó). Stacks libres: captura 3192, feed 3220, sink 3396 B. Falta: con AFE, y bajo carga (WiFi y escrituras a flash) cuando esté el socket de Juani.
 
 ## 4. Depuración en producto
 
