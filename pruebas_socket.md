@@ -5,7 +5,7 @@ Registro corto de lo probado en la placa. Plan y criterios: `plan_prototipo_alfa
 | # | Prueba | Fecha | Resultado |
 |---|---|---|---|
 | 1 | Corte corto de Wi-Fi (~10 s) con la sesión en curso | 13/10 | **OK** (detalle abajo) |
-| 2 | Toma de 10 min (RAM, pila, `sin_ack`) | — | pendiente |
+| 2 | Toma de 10 min (RAM, pila, `sin_ack`) | 13/10 | **parcial**: 7,7 min perfectos; a los 476 s el proceso del **servidor** se congeló ~173 s (sospecha: carpeta de salida en OneDrive). Repetir con `--output` fuera de OneDrive |
 | 3 | Arranque sin servidor y conexión > 40 s después (descarte del mensaje retenido) | 13/10 | **OK**. Con timeout de 1 s se cayó 4 veces al drenar; con 5 s + ventana de acks, **0 caídas** (detalle abajo) |
 | 4 | Corte largo > 40 s (watchdog) | — | pendiente |
 | 5 | Prueba larga 1 h con cortes de 5/10/20 s (S5) | — | pendiente |
@@ -79,3 +79,15 @@ Hecha desde el asistente: flasheo por COM4, log de la ESP leído por COM4 (UART0
 - **Al cerrar el servidor** la ESP imprimió 7 `Envio fallido; se reintenta el mismo mensaje` (cada 100 ms) y `Cambio de conexion ... tras 557 mensajes`: es lo esperado, una conexión que se cierra de golpe. El servidor recibió los mismos 557 que la ESP contó como enviados.
 
 Con esta corrida son **dos seguidas sin caídas** con el timeout de 5 s + ventana. Falta la prueba de 10 min.
+
+## Prueba 2 — 10 minutos (13/10/2026, ~17:45), servidor abierto antes que la ESP
+
+Hecha desde el asistente (COM4 para el log de la ESP, servidor con segmentos de 30 s). Firmware `25086f88a`. Evidencia: `tools/prueba_websocket/prueba_10min_auto1/` (fuera de Git).
+
+- **Primeros 7,7 min (hasta el segundo ~463): perfectos.** Sin caídas ni reinicios, `dma=0`, `i2s=0`, `sin_ack` entre 1 y 9, `pila_sink` plana (3984 → 3664 B libres de 6144), `ram_int` entre 74 y 84 KB sin deriva.
+- **Incidente a los 476 s:** el servidor recibió el mensaje 3631 y dejó de contestar (sin `ack`). La ESP lo detectó como está diseñado: `no PONG received for more than 3 seconds after PING` (10 s de ping + 3 s de pong). Los reintentos conectaban por TCP, mandaban el Upgrade HTTP y no recibían respuesta (`Error read response for Upgrade header`): el **proceso del servidor estaba colgado**, no la red.
+- **El servidor se descongeló recién a las 17:55:39** (~173 s), y entonces procesó la orden de cierre que había recibido ~37 s antes (su revisión del archivo de parada tampoco corrió: era todo el proceso, no solo el socket). Sesión guardada: 3632 mensajes, 464,9 s, 0 huecos, `slots` = 4 × mensajes.
+- **La ESP se portó bien:** detectó en 13 s, siguió capturando (el ring se llenó a 31 slots/s, `desc` creció de 154 a 3904), reintentó con backoff 1-2-4-8 s y no se reinició. 18 min después seguía viva.
+- **`ram_int` bajó de 82 a 61 KB** durante los reintentos de handshake fallidos (~1,7 KB por intento, 12 intentos) y **se recuperó sola**: a los 18 min de uptime, con el servidor cerrado, estaba en 83,5–84 KB. Es memoria retenida por conexiones a medio abrir; vigilar si el corte es largo.
+- **Hipótesis del congelamiento (sin confirmar):** el servidor escribía los WAV en una carpeta de OneDrive (`C:\Users\dante\OneDrive\Escritorio\...`); una escritura bloqueada por la sincronización congelaría todo el proceso asyncio. Segunda corrida con salida fuera de OneDrive: **cancelada** (quedó pendiente).
+- **Mientras tanto:** abrir el servidor con `--output` en una carpeta fuera de OneDrive (por ejemplo `C:\orbita_pruebas`).

@@ -28,6 +28,8 @@ Arranque (`main.c`): primero I2S, pipeline y sink; después Wi-Fi y WebSocket, *
    python tools/ws_audio_server.py --segment-seconds 10
    ```
 
+   **Ojo con OneDrive:** la carpeta de salida por defecto (`tools/prueba_websocket`) queda dentro de OneDrive si el repo está en el Escritorio. En una prueba de 10 min el servidor se congeló ~173 s (sospecha: escritura bloqueada por la sincronización). Para tomas largas usar `--output` fuera de OneDrive (por ejemplo `C:\orbita_pruebas`).
+
    Abrirlo **antes** de la ESP. Permitir Python en el firewall de la red privada. `Ctrl+C` cierra el segmento en curso y deja el WAV legible.
 
 2. En la terminal de ESP-IDF 5.5.5, en `firmware`: `idf.py menuconfig` → `Orbita integration`: WebSocket, SSID, contraseña y URI `ws://IP-DE-LA-PC:8765` (la IP de la PC puede cambiar). La opción "Segundos nominales por toma" ya no se usa. Si el `sdkconfig` es viejo, verificar `CONFIG_I2S_ISR_IRAM_SAFE=y`. No subir SSID/contraseña ni `sdkconfig`.
