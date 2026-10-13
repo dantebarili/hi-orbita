@@ -6,6 +6,7 @@
 #include "esp_rom_sys.h"
 #include "audio_afe.h"
 #include "audio_capture.h"
+#include "audio_ring_out.h"
 #include "wav_writer.h"
 #include "pipeline.h"
 
@@ -20,33 +21,37 @@ static TaskHandle_t s_captura_handle;
 static int32_t s_crudo_buf[ORBITA_CHUNK_FRAMES * ORBITA_CHANNELS];
 static int16_t s_chunk_buf[ORBITA_CHUNK_FRAMES * ORBITA_CHANNELS];
 
+// Bloques mono de 512 muestras que salen de un chunk (hoy 2). Cada uno sera un slot del ring out.
+#define BLOQUES_POR_CHUNK   (ORBITA_CHUNK_FRAMES / ORBITA_SLOT_SAMPLES)
+
+// Buffer de tarea_feed (sin AFE): el chunk estereo reducido a mono, un bloque por fila.
+// Es static para no gastar el stack de la tarea (2 KB de 4 KB).
+static int16_t s_mono_buf[BLOQUES_POR_CHUNK][ORBITA_SLOT_SAMPLES];
+
 // Contadores: cada uno lo escribe UNA sola tarea.
 static volatile uint32_t s_i2s_errores;
 
 // Cada feed tiene que producir un numero entero de fetch (hoy 2).
 _Static_assert(ORBITA_CHUNK_FRAMES % ORBITA_AFE_FETCH_FRAMES == 0, "ORBITA_CHUNK_FRAMES debe ser multiplo de ORBITA_AFE_FETCH_FRAMES");
+// Cada chunk tiene que dar un numero entero de bloques mono: si no, el resto se perderia sin aviso.
+_Static_assert(ORBITA_CHUNK_FRAMES % ORBITA_SLOT_SAMPLES == 0, "ORBITA_CHUNK_FRAMES debe ser multiplo de ORBITA_SLOT_SAMPLES");
 
-/* ----------------------------------------------------------------------------
- *  RING 1:      captura -> feed   (existe siempre, con o sin AFE)
- * ----------------------------------------------------------------------------
- *  Dato:        chunks de la captura (estereo, 16 bit, sin header)
- *  Tipo:        NOSPLIT: un chunk por item, se guarda y se devuelve entero
- *  Item:        ORBITA_CHUNK_BYTES = 4096 B (1024 frames = 64 ms)
- *  Capacidad:   RING1_CHUNKS = 8 items = 512 ms de colchon
- *  Productor:   tarea_captura (core 1, prio 6)
- *  Consumidor:  tarea_feed    (core 1, prio 5)
- *  Si se llena: el chunk nuevo se descarta y aumenta s_overruns_ring1
- * ------------------------------------------------------------------------- */
+/* RING IN: captura -> feed (con o sin AFE)
+ *  Dato:        ring de freeRTOS, chunks estereo 16 bit, sin header (NOSPLIT, 1 chunk por item)
+ *  Item:        4096 B (1024 frames = 64 ms)    Capacidad: 8 items = 512 ms
+ *  Productor:   tarea_captura (prio 6)    Consumidor: tarea_feed (prio 5), ambas core 1
+ *  Si se llena: se descarta el chunk nuevo y sube s_overruns_ring1 */
 #define RING1_CHUNKS        8
 
 static RingbufHandle_t s_ring1;
 static TaskHandle_t s_feed_handle;
 static volatile uint32_t s_overruns_ring1;     // la escribe la captura
+static volatile uint32_t s_chunks_invalidos;   // las dos siguientes las escribe tarea_feed
+static volatile uint32_t s_bloques_mono;       // bloques mono armados (sin AFE; 2 por chunk)
 
 #if ORBITA_PIPELINE_USA_AFE
 static TaskHandle_t s_fetch_handle;
 static volatile uint32_t s_chunks_alimentados; // las siguientes las escribe tarea_feed / tarea_fetch
-static volatile uint32_t s_chunks_invalidos;
 static volatile uint32_t s_chunks_recibidos;
 static volatile uint32_t s_fetch_vacios;
 static volatile uint32_t s_fetch_invalidos;
@@ -54,7 +59,7 @@ static volatile uint32_t s_bloques_voz;
 #endif
 
 // =============================================================================
-//  TAREA DE CAPTURA  -  I2S -> callback (y ring 1 si hay AFE)
+//  TAREA DE CAPTURA  -  I2S -> callback (y ring in)
 // =============================================================================
 // Corre siempre y nunca termina. Hay que leer siempre para vaciar el DMA (90 ms de margen).
 static void tarea_captura(void *arg)
@@ -96,7 +101,7 @@ static void tarea_captura(void *arg)
 }
 
 // =============================================================================
-//  TAREA DE FEED  -  ring 1 -> AFE (sin AFE, por ahora solo vacia el ring)
+//  TAREA DE FEED  -  ring in -> AFE  (sin AFE: ring in -> mono L -> bloques de 512)
 // =============================================================================
 static void tarea_feed(void *arg)
 {
@@ -117,7 +122,18 @@ static void tarea_feed(void *arg)
             s_chunks_invalidos++;    // sin log (puede haber una toma en curso)
         }
 #else
-        (void)n;                     // TODO (A5): reducir a mono y entregar al ring 2
+        if (n == ORBITA_CHUNK_BYTES) {
+            // Estereo intercalado L,R,L,R...: el frame f tiene su L en la posicion 2*f. Se descarta R.
+            const int16_t *estereo = (const int16_t *)p;
+            for (size_t b = 0; b < BLOQUES_POR_CHUNK; b++) {
+                for (size_t k = 0; k < ORBITA_SLOT_SAMPLES; k++) {
+                    s_mono_buf[b][k] = estereo[2 * (b * ORBITA_SLOT_SAMPLES + k)];
+                }
+                s_bloques_mono++;    // TODO (A5): entregar s_mono_buf[b] al ring out
+            }
+        } else {
+            s_chunks_invalidos++;
+        }
 #endif
 
         // Se devuelve el lugar al ring, haya sido valido el chunk o no.
@@ -202,7 +218,7 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
 
     s_ring1 = xRingbufferCreateNoSplit(ORBITA_CHUNK_BYTES, RING1_CHUNKS);
     if (s_ring1 == NULL) {
-        ESP_LOGE(TAG, "No se pudo crear el ring 1 (%d bytes)", RING1_CHUNKS * ORBITA_CHUNK_BYTES);
+        ESP_LOGE(TAG, "No se pudo crear el ring in (%d bytes)", RING1_CHUNKS * ORBITA_CHUNK_BYTES);
         return ESP_ERR_NO_MEM;
     }
 
@@ -234,12 +250,13 @@ void orbita_pipeline_get_stats(orbita_pipeline_stats_t *out)
         out->stack_libre_captura = uxTaskGetStackHighWaterMark(s_captura_handle);
     }
     out->overruns_ring1 = s_overruns_ring1;
+    out->chunks_invalidos = s_chunks_invalidos;
+    out->bloques_mono = s_bloques_mono;
     if (s_feed_handle != NULL) {
         out->stack_libre_feed = uxTaskGetStackHighWaterMark(s_feed_handle);
     }
 #if ORBITA_PIPELINE_USA_AFE
     out->chunks_alimentados = s_chunks_alimentados;
-    out->chunks_invalidos = s_chunks_invalidos;
     out->chunks_recibidos = s_chunks_recibidos;
     out->fetch_vacios = s_fetch_vacios;
     out->fetch_invalidos = s_fetch_invalidos;

@@ -10,7 +10,7 @@
  * @details La tarea de captura lee el I2S de a ORBITA_CHUNK_FRAMES frames (64 ms), los pasa a
  *          16 bit y llama al callback `on_crudo`. Quien consume (hoy el modulo de test de
  *          main/, manana el sink de sockets) se engancha ahi y no toca la captura.
- *          Opcional (CONFIG_ORBITA_PIPELINE_USA_AFE, en menuconfig): ring 1 -> tarea feed -> AFE -> tarea fetch,
+ *          Opcional (CONFIG_ORBITA_PIPELINE_USA_AFE, en menuconfig): ring in -> tarea feed -> AFE -> tarea fetch,
  *          que entrega la salida procesada por `on_afe`. Hoy esta en pausa (ver plan).
  */
 
@@ -76,9 +76,10 @@ typedef struct {
 typedef struct {
     uint32_t i2s_errores;            // lecturas del I2S que fallaron o vinieron incompletas
     uint32_t dma_overflows;          // veces que el DMA del I2S pisó audio sin leer (hueco real en la captura)
-    uint32_t overruns_ring1;         // chunks que no entraron al ring 1 (feed no sigue el ritmo)
+    uint32_t overruns_ring1;         // chunks que no entraron al ring in (feed no sigue el ritmo)
     uint32_t chunks_alimentados;     // chunks entregados al AFE
-    uint32_t chunks_invalidos;       // chunks del ring 1 con tamano inesperado
+    uint32_t chunks_invalidos;       // chunks del ring in con tamano inesperado
+    uint32_t bloques_mono;           // bloques mono de 512 armados por feed (sin AFE; 2 por chunk)
     uint32_t chunks_recibidos;       // fetch que devolvieron audio valido
     uint32_t fetch_vacios;           // fetch sin audio (vencio el tiempo)
     uint32_t fetch_invalidos;        // fetch con tamano inesperado

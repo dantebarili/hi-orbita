@@ -4,7 +4,7 @@ menu "Orbita pipeline"
         bool "Usar el AFE (esp-sr) en el pipeline"
         default n
         help
-            Activado: la captura alimenta al AFE (ring 1 -> feed -> AFE -> fetch) y se
+            Activado: la captura alimenta al AFE (ring in -> feed -> AFE -> fetch) y se
             entrega su salida por on_afe. Desactivado: solo captura cruda por on_crudo.
             Es una sola opcion para todo el proyecto, asi pipeline.c y main/ nunca
             se compilan con valores distintos.

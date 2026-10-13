@@ -1,0 +1,154 @@
+#include <stdlib.h>
+#include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "audio_capture.h"
+#include "wav_writer.h"
+#include "esp_heap_caps.h"
+#include "driver/usb_serial_jtag.h"
+#include "driver/uart.h"
+
+static const char *TAG = "orbita_main";
+
+#define TEST_DURATION_SEC 3
+#define FRAME_SIZE 2
+
+// El audio (header + datos) se manda por UART0 a alto baudrate. El
+// USB-Serial-JTAG resulto tener throughput real de ~170 B/s para
+// transferencias grandes, inviable para un .wav.
+//
+// ORBITA_UART_CONSOLE_BAUD tiene que coincidir con el baudrate de consola
+// real (CONFIG_ESP_CONSOLE_UART_BAUDRATE en sdkconfig, default 115200): es
+// al que volvemos despues de mandar el audio, para que idf.py monitor siga
+// viendo los logs bien.
+#define ORBITA_UART_DATA_NUM UART_NUM_0
+#define ORBITA_UART_DATA_BAUD 921600
+#define ORBITA_UART_CONSOLE_BAUD 115200
+
+// Frames por bloque de lectura del I2S.
+static size_t frame_count_test = TEST_DURATION_SEC * ORBITA_SAMPLE_RATE_HZ;
+static size_t frame_count_test_to_read = 1600;
+
+void app_main(void)
+{
+    // Driver de UART0 (el mismo puerto que usa la consola para logs), para
+    // poder mandar el WAV por ahi. rx_buffer_size=256: no leemos nada por
+    // este UART, pero el driver EXIGE un buffer RX mayor al FIFO de hardware
+    // (128 bytes). La consola puede haber instalado ya su propio driver;
+    // ESP_ERR_INVALID_STATE significa "ya hay uno", no es un error real.
+    esp_err_t uart_install_err = uart_driver_install(ORBITA_UART_DATA_NUM, 256, 8192, 0, NULL, 0);
+    if (uart_install_err == ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "UART0 ya tenia un driver instalado (consola) -- lo reusamos.");
+    } else {
+        ESP_ERROR_CHECK(uart_install_err);
+    }
+
+    // USB-Serial-JTAG: solo lo usamos para recibir el comando 'g' y mandar
+    // el marcador WAV_ON_UART0. Sin este install, usb_serial_jtag_read_bytes
+    // no tiene de donde leer.
+    usb_serial_jtag_driver_config_t usb_cfg = {
+        .rx_buffer_size = 256,
+        .tx_buffer_size = 256,
+    };
+    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_cfg));
+
+    ESP_ERROR_CHECK(orbita_audio_i2s_init());
+
+    // Buffer de la grabacion completa en PSRAM (32 bits por muestra, L/R entrelazado).
+    int32_t *buf_psram = heap_caps_malloc(frame_count_test * FRAME_SIZE * sizeof(int32_t), MALLOC_CAP_SPIRAM);
+    if (buf_psram == NULL) {
+        ESP_LOGE(TAG, "No se pudo reservar %d bytes en PSRAM", (int)(frame_count_test * FRAME_SIZE * sizeof(int32_t)));
+        return;
+    }
+    ESP_LOGI(TAG, "Buffer en PSRAM reservado: %d frames (%d seg)", (int)frame_count_test, TEST_DURATION_SEC);
+
+    // Buffer descartable: mientras esperamos el comando 'g' hay que seguir
+    // leyendo el I2S (si nadie lo vacia, el DMA se pisa), pero esos datos se tiran.
+    int32_t *drain_buf = malloc(frame_count_test_to_read * FRAME_SIZE * sizeof(int32_t));
+    if (drain_buf == NULL) {
+        ESP_LOGE(TAG, "No se pudo reservar el buffer de descarte");
+        return;
+    }
+
+    uint8_t cmd;
+    uint8_t *wav_header = malloc(WAV_HEADER_SIZE);
+    if (wav_header == NULL) {
+        ESP_LOGE(TAG, "No se pudo reservar la memoria en la RAM para el header.");
+        return;
+    }
+
+    // Buffer chico y reusable para empaquetar de a un bloque (32->24 bit)
+    // justo antes de mandarlo.
+    uint8_t *pack_buf = malloc(frame_count_test_to_read * FRAME_SIZE * 3);
+    if (pack_buf == NULL) {
+        ESP_LOGE(TAG, "No se pudo reservar el buffer de empaquetado");
+        return;
+    }
+
+    while (1) {
+        // Lee 1 byte de la PC (sin bloquear, timeout=0).
+        int n = usb_serial_jtag_read_bytes(&cmd, sizeof(char), 0);
+
+        if (n == 1 && cmd == 'g') {
+            // --- Captura: llena buf_psram ---
+            size_t frames_acumulados = 0;
+            while (frames_acumulados < frame_count_test) {
+                size_t frames_leidos_este_bloque = 0;
+                esp_err_t lectura_actual = orbita_audio_i2s_read(buf_psram + frames_acumulados * FRAME_SIZE, frame_count_test_to_read, &frames_leidos_este_bloque);
+                if (lectura_actual != ESP_OK) {
+                    ESP_LOGE(TAG, "Error al leer frames: %s", esp_err_to_name(lectura_actual));
+                    break;
+                }
+                frames_acumulados += frames_leidos_este_bloque;
+            }
+
+            // --- Envio ---
+            // Avisamos a la PC (por USB-Serial-JTAG) que el audio viene ahora
+            // por UART0.
+            const char *wav_start_marker = "WAV_ON_UART0\n";
+            usb_serial_jtag_write_bytes(wav_start_marker, strlen(wav_start_marker), portMAX_DELAY);
+
+            // Header con el tamaño REAL capturado (puede ser menor al esperado si una lectura fallo).
+            uint32_t wav_data_size = (uint32_t)(frames_acumulados * FRAME_SIZE * 3);
+            wav_build_header(wav_header, ORBITA_SAMPLE_RATE_HZ, FRAME_SIZE, 24, wav_data_size);
+
+            // Durante el envio silenciamos los logs: si un ESP_LOGI se cuela
+            // en medio, corrompe el archivo (texto mezclado con binario).
+            esp_log_level_set("*", ESP_LOG_NONE);
+            uart_set_baudrate(ORBITA_UART_DATA_NUM, ORBITA_UART_DATA_BAUD);
+
+            uart_write_bytes(ORBITA_UART_DATA_NUM, (const char *)wav_header, WAV_HEADER_SIZE);
+
+            size_t frames_enviados = 0;
+            while (frames_enviados < frames_acumulados) {
+                size_t frames_este_bloque = frame_count_test_to_read;
+                if (frames_enviados + frames_este_bloque > frames_acumulados) {
+                    frames_este_bloque = frames_acumulados - frames_enviados;
+                }
+
+                size_t bytes_empaquetados = wav_pack_block_24bit(
+                    buf_psram + frames_enviados * FRAME_SIZE, frames_este_bloque, pack_buf);
+                uart_write_bytes(ORBITA_UART_DATA_NUM, (const char *)pack_buf, bytes_empaquetados);
+
+                frames_enviados += frames_este_bloque;
+            }
+
+            // Esperar a que salgan FISICAMENTE todos los bytes del FIFO antes
+            // de bajar el baudrate; si no, los ultimos quedan corruptos.
+            uart_wait_tx_done(ORBITA_UART_DATA_NUM, portMAX_DELAY);
+            uart_set_baudrate(ORBITA_UART_DATA_NUM, ORBITA_UART_CONSOLE_BAUD);
+            esp_log_level_set("*", ESP_LOG_INFO);
+
+            ESP_LOGI(TAG, "Envio de audio por UART0 completo: %d bytes", (int)(frames_enviados * FRAME_SIZE * 3));
+
+        } else {
+            // Esperando 'g': drenamos el I2S y tiramos los datos.
+            size_t frames_leidos_descarte = 0;
+            esp_err_t lectura_actual = orbita_audio_i2s_read(drain_buf, frame_count_test_to_read, &frames_leidos_descarte);
+            if (lectura_actual != ESP_OK) {
+                ESP_LOGE(TAG, "Error al drenar el I2S: %s", esp_err_to_name(lectura_actual));
+            }
+        }
+    }
+}
