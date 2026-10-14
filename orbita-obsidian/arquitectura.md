@@ -1,6 +1,6 @@
 # Arquitectura — decisiones que afectan al producto final
 
-Solo decisiones que sobreviven al prototipo. Pasos, pruebas y decisiones por hablar: `plan_dante.md`. FSM: `órbita..md`. Hardware y pines: `CLAUDE.md`. RAM/CPU: `plan-presupuesto-ram-cpu.md`.
+FSM: `órbita..md`. Hardware y pines: `CLAUDE.md`. RAM/CPU: `plan-presupuesto-ram-cpu.md`.
 
 Estado: **Cerrada** · **Provisoria** (vale hasta medir/verificar) · **Propuesta** (sin validar) · **Abierta**.
 
@@ -18,7 +18,9 @@ Estado: **Cerrada** · **Provisoria** (vale hasta medir/verificar) · **Propuest
 
 ---
 
-## 1. Chip: `sdkconfig.defaults` y `partitions.csv`
+## 1. Memoria, chip: `sdkconfig.defaults` y `partitions.csv`
+
+ACTUALIZAR
 
 Hecho el 2026-10-10 (A0). `sdkconfig` está en `.gitignore`: lo que vale para el equipo es `sdkconfig.defaults`.
 
@@ -31,12 +33,6 @@ Hecho el 2026-10-10 (A0). `sdkconfig` está en `.gitignore`: lo que vale para el
 | CPU a 240 MHz | Cerrada | Más corriente y calor que a 160; lo medido de CPU vale solo a esta frecuencia. |
 | Tick de FreeRTOS a 1 ms | Cerrada | Antes 10 ms. Un `vTaskDelay(10)` en ticks crudos espera 10 veces menos; `pdMS_TO_TICKS` se adapta. |
 | Stack de `app_main` 8192 B | Provisoria | RAM interna (la escasa); medir cada tarea con `uxTaskGetStackHighWaterMark`. |
-
-Riesgos de 240 MHz y tick de 1 ms:
-- **Alimentación:** el pico (CPU + WiFi) sube; con regulador justo hay brownout. Dimensionarlo en la PCB.
-- **Temperatura:** medir en carcasa cerrada; si el AFE entra holgado a 160 MHz, comparar consumo.
-- **Contador de ticks:** a 1 ms da la vuelta a los ~49 días (a 100 Hz, ~497); una comparación de ticks hecha a mano falla.
-- El costo de 10 veces más interrupciones de tick no está medido.
 
 ### Mapa de la flash
 
@@ -56,10 +52,7 @@ Puntos abiertos:
 - **NS y VAD hoy son WebRTC** (default de `esp-sr`, no una elección): algoritmo clásico, liviano, sin red neuronal; `model` queda vacía. NSNet/VADNet son redes neuronales de Espressif. **Pendiente:** en la Fase B se prueban los dos con las mismas tomas (CPU, RAM, latencia, calidad).
 - Cambiar `sdkconfig.defaults` no actualiza un `sdkconfig` existente: borrarlo y reconfigurar. Flashear otra tabla borra el `nvs`.
 
-## 2. Memoria
-
-- RAM interna (~512 KB): la escasa. PSRAM (8 MB): sobra. Audio y tensores de modelos en PSRAM; DMA del I2S y stacks críticos en RAM interna.
-- Falta medir WiFi + TLS (compañero) y la RAM interna libre con el AFE andando (`memory_alloc_mode` del AFE = más PSRAM).
+PSRAM? RAM?¿
 
 ## 3. DSP y pipeline de audio
 
@@ -198,19 +191,6 @@ Alternativas (el patrón es habitual: TCP guarda lo enviado sin confirmar): (2) 
 | Mono vs. estéreo hacia el backend | Abierta | Hoy mono (ver 3.3); falta decidir L o mezcla. |
 | Política de captura: continua vs. solo tras la wake word | Abierta | Dentro de la consulta ya es continua; falta decidir fuera de sesión. |
 
-### 3.6 Cierre del segmento y latencia
-
-```
-segmento (1-2 s)   = [mensaje][mensaje] ... [mensaje]        ← unidad de la FSM
-mensaje (~100 ms)  = [header del cable] + audio de ~4 slots   ← lo que sale por el socket
-slot en ring out     = [header interno 16 B] + audio (32 ms)    ← solo dentro del ESP32
-```
-
-- **`VOZ` es un bit por slot** (32 ms, válido con `VAD_OK`). Fin de frase = N slots seguidos con `VAD_OK` y sin `VOZ` (silencio de ~0,5–1 s: valor típico, sin medir).
-- **El tamaño del segmento es decisión de producto y backend.** Corto: más llamadas y riesgo de cortar una frase, pero libera y reenvía poco. Largo: más contexto, pero el resumen sale más tarde y se reenvía más. Un tiempo fijo largo es inviable para el urgente, por eso el **urgente se cierra por silencio**; el de fondo tolera demora y conviene cortarlo en una pausa con un máximo.
-- **Latencia del urgente** = silencio de fin de frase (~0,5–1 s) + proceso del backend + respuesta. El largo del segmento no suma: los mensajes salen antes de cerrarlo.
-- **Aviso de wake word:** los ~100 ms del mensaje son tiempo de *juntar* audio, no de enviar. El aviso ("urgente, pausá el resumen") es un mensaje de control de pocos bytes que sale apenas se detecta; luego el pre-roll (~1 s ya guardado, decenas de ms) y después el audio en vivo. Desde que termina "Órbita": detección en el ESP32 ~0,1–0,4 s (depende de la ventana y las inferencias por ventana del modelo; es el tramo más grande) + red decenas de ms ≈ 0,2–0,5 s. Estimado; medir en la Fase B. La FSM corta el segmento de fondo al saltar la wake word, así que un fondo largo no afecta al urgente.
-
 ### 3.7 Tiempos y latencia del pipeline
 
 Sin AFE salvo que se diga. *Medido* = máximo en una toma de 20 s en el chip (13/10), en reposo: sin WiFi, sin escrituras a flash. *Estimado* = sin medir. A15 imprime los máximos en la línea `Fin:`.
@@ -226,24 +206,14 @@ Sin AFE salvo que se diga. *Medido* = máximo en una toma de 20 s en el chip (13
 | Latencia de la tubería del AFE | 64 ms | — | medido |
 | `ring_out_write` / `read` (interrupciones apagadas en ese core) | **62 µs** / **5 µs** | ≪ 15 ms | medido |
 | Sink: espera por polling | ≤ 10 ms | — | diseño |
-| Sink: juntar un mensaje (4 slots) | 128 ms | — | diseño |
+| Sink: juntar un mensaje (4 slots) | 128 ms (reducible) | — | diseño |
 | `send` de un mensaje | UART: 4 KB a ~92 KB/s ≈ 45 ms | < 128 ms promedio | cálculo |
 
-**Mic → fin del `send`** (audio más viejo del mensaje): ≈ 128 + 10 + 45 ≈ **180 ms** con UART; con AFE, +64 ms. La latencia del urgente (§3.6) es otra cuenta.
-
-Toma de 20 s sin AFE (13/10): 0 pérdidas en todos los contadores; ring out 1538 slots escritos, 0 descartados, máximo 2 ocupados; sink 384 mensajes y 0 saltos (el audio completo pasó). Stacks libres: captura 3192, feed 3220, sink 3396 B. Falta: con AFE, y bajo carga (WiFi y escrituras a flash) cuando esté el socket de Juani.
-
-## 4. Depuración en producto
-
-| Decisión | Estado | Nota |
-|---|---|---|
-| Logs por UART0 (GPIO 43/44); USB-Serial-JTAG (19/20) libre para uso propio | Provisoria | Hoy asume el chip puente USB-UART del DevKit. En la PCB: CP2102/CH340 o conector de programación; alternativa más barata: USB nativo, sin puente. Decisión de BOM y ruteo. |
-| Streaming de test por UART0 con `esp_log_level_set(NONE)` | Solo test | No frena los logs de ROM al arrancar ni el handler de pánico. No es para producción. |
+**Mic → fin del `send`** (audio más viejo del mensaje): ≈ 128 + 10 + 45 ≈ **180 ms** con UART; con AFE, +64 ms o 84?. La latencia del urgente (§3.6) es otra cuenta.
 
 ## 5. Pendientes de producto (sin dueño todavía)
 
 - Seguridad: TLS, autenticación del dispositivo, aprovisionamiento de WiFi, OTA (ya hay dos slots).
 - Resiliencia offline: rol de la SD y política de pérdida de datos (liga con los rings).
 - Estados que faltan en la FSM: falla de `audio_init`, login NFC, apagado.
-- Verificar: separación de mics (50 mm) vs. lo que soporta el beamforming de `esp-sr`; licencia comercial y continuidad de Edge Impulse; ley de datos personales e historia clínica digital.
-- El proyecto en OneDrive puede trabar builds de ESP-IDF.
+
