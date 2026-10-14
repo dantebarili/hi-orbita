@@ -1,6 +1,6 @@
 # Arquitectura — decisiones que afectan al producto final
 
-FSM: `órbita..md`. Hardware y pines: `CLAUDE.md`. RAM/CPU: `plan-presupuesto-ram-cpu.md`.
+FSM: `órbita..md`. Hardware y pines: `CLAUDE.md`.
 
 Estado: **Cerrada** · **Provisoria** (vale hasta medir/verificar) · **Propuesta** (sin validar) · **Abierta**.
 

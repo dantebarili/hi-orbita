@@ -91,7 +91,7 @@ Sin wake word ni AFE: el equipo manda **todo el tiempo**. Hecho (compila; probad
 - [ ] **WebRTC vs. NSNet/VADNet:** modo 1 `SR_NSN_WEBRTC` + `SR_VADN_WEBRTC`; modo 2 `NSNET2`/`NSNET3` + `VADNET1_MEDIUM` (NSNet3 113 KB, NSNet2 334 KB). Medir CPU por core, RAM, `overruns`/`dma_overflows` en 0 y calidad (SNR; que no se coma r, b). Anotar el modo de cada toma.
 - [ ] Que el AFE procese de verdad (ver "Retomar acá").
 - [ ] Grabador de test con duración variable (hoy fija en 64 bloques): arrancar/parar por comando.
-- [ ] Documentar RAM/CPU en `orbita-obsidian/plan-presupuesto-ram-cpu.md`.
+- [ ] Documentar RAM/CPU en `orbita-obsidian/arquitectura.md`.
 
 ## Fase C — listo para sockets (cierra H2)
 
