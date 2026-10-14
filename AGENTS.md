@@ -72,6 +72,7 @@ Las instrucciones completas de estas herramientas se mantienen en los siguientes
 - `.claude/agents/fsm-consistency-reviewer.md`: revisión de consistencia con la FSM del vault.
 - `.claude/skills/fsm-check/SKILL.md`: comprobación de estados, eventos y transiciones.
 - `.claude/skills/pin-map-check/SKILL.md`: comprobación del mapa de pines y restricciones de hardware.
+- `.claude/skills/esp32-firmware-engineer/SKILL.md`: criterio de firmware ESP-IDF (ISR, memoria, configuración) y diagnóstico de panics y reinicios.
 - `.claude/settings.json`: configuración de los hooks de Claude.
 - `.claude/hooks/guard-sensitive-edits.sh`: solicita confirmación antes de editar `sdkconfig.defaults` o `audio_capture.h`, y recuerda revisar las restricciones de pines.
 - `.claude/hooks/remind-explain-c.sh`: recuerda explicar conceptos o patrones de C nuevos al editar archivos `.c` o `.h`.
