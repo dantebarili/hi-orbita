@@ -26,20 +26,21 @@ Una conexión WebSocket larga, una sesión por conexión, sin `end`:
 
 - ESP → servidor: `hello` (JSON) una vez; después binarios `ORBA` (header 40 B + hasta 4 slots = 128 ms de PCM), `index` creciente sin cortes. Los huecos se anotan (`lost`, `seq`), no se rellenan.
 - Servidor → ESP: `ready` (JSON) y `ack` (último `index` recibido) cada ~1 s.
-- **Falta definir (Paso 0):** `orbita` (se detectó la palabra), `play` (id, bytes), audio binario del parlante y `play_end`.
+- **Downlink acordado el 14/10** (`orbita`, `play`, `play_end`, `play_stop`, `play_done`, ...): ver `INTEGRACION_WEBSOCKET.md`.
 - Tras reconectar: sesión nueva (id nuevo); el servidor mide el hueco por `seq`. Todavía no hay reenvío desde el último `ack`.
 
-## Paso 0 — Juntos (antes de separarse, ~1 h)
+## Paso 0 — Juntos (14/10)
 
-Se escribe en `INTEGRACION_WEBSOCKET.md` y se commitea a **las dos ramas** antes de empezar el Paso 1. Sin esto, S6 y S7 se escriben en el aire.
+Contrato en `INTEGRACION_WEBSOCKET.md` ("Downlink"). Decidido:
 
-- [ ] **Mensajes nuevos** con sus campos: `orbita`, `play` (id, bytes), `play_end`.
-- [ ] **Audio del parlante:** binario con header propio (distinto de `ORBA`); formato (PCM 16 kHz / 16-bit mono) y largo máximo de la respuesta (fija el buffer en PSRAM).
-- [ ] **Mic durante el parlante:** sin AEC, lo más simple para el alfa es pausar el envío mientras suena (si no, el servidor transcribe el propio parlante). Decidir y anotar.
-- [ ] **Reenvío tras reconexión:** ¿alcanza marcar el hueco o hace falta reenviar desde el último `ack` (A6)?
-- [ ] **Diferencias con la FSM** (backoff sin tope de intentos, sin timeout de 5 s de respuesta, sin eventos `srv_*`): confirmar que se aceptan para el alfa.
-- [ ] **Interfaz de unión** acordada: firmware de Juani entrega el audio de respuesta a un callback `on_play_data(data, len)` (más `play_begin(id, bytes)` / `play_end()`); firmware de Dante implementa la reproducción detrás de esa API. Es lo único que se toca de los dos lados.
-- [ ] **S4 (RAM) lo hace Dante, primero:** toca `orbita_ws` (de Juani), así que se avisa y se commitea a ambas ramas antes de separarse.
+- [x] **`orbita` informativo:** el servidor detecta "Órbita" (STT + comparación aproximada) y avisa; el ESP lo registra y enciende un **LED de conversación** (es la idea del producto final); `conversation_end` lo apaga. El detalle de la conversación con el LLM no afecta al ESP.
+- [x] **Audio del parlante:** PCM s16le 16 kHz mono, frames `PLAY` ≤ 4 KB, **streaming con prebuffer** (inicial 400 ms) para reproducir en tiempo real y bajar la latencia. El servidor puede mandar más rápido que tiempo real; el buffer en PSRAM absorbe la diferencia.
+- [x] **Mic durante el parlante:** flag de S8 y el servidor ignora esos mensajes. **El ESP corta la reproducción** con `play_stop` (orden del servidor) y, en la Fase 2, por barge-in propio (AEC + VAD, `barge_in`); eso requiere actualizar la FSM del vault (no ahora).
+- [x] **Reenvío tras reconexión:** entra al alfa (A6): tercer cursor en el ring, el `ready` trae `last_index`.
+- [x] **Diferencias con la FSM** (backoff sin tope, sin timeout de 5 s, sin `srv_*`): aceptadas para el alfa.
+- [x] **Interfaz de unión:** `play_begin` / `play_push` / `play_end` / `play_stop` + `play_is_active()` + callback de eventos (`started`, `done`, `stopped`, `underrun`, `rejected`).
+- [x] **S4 (RAM) lo hace Dante primero** (toca `orbita_ws`; avisar a Juani).
+- [ ] **Pendiente (con Juani, medir):** velocidad real del downlink (hoy no está medida: los 237 KB/s fueron del uplink) y valor final del prebuffer.
 
 ## Paso 1a — Rama `dante` (firmware, hardware, audio)
 
@@ -53,7 +54,9 @@ Carpetas: `firmware/components/orbita_audio`, `orbita_pipeline`, `orbita_playbac
 - [ ] **Pruebas en la placa** (registro en `pruebas_socket.md`):
   2. Corte corto de Wi-Fi (~10 s) con la sesión en curso: reconecta, el servidor no cierra con error, hueco entre sesiones = 0.
   3. Corte largo (> 40 s): no salta el watchdog (el sink drena el atraso sin dormir, prio 5 > red 4) y el descarte del mensaje retenido aparece en el log.
-- [ ] **S7 Parlante (lado hardware), sin red.** Amplificador I2S clase D (pines con `pin-map-check`: fuera de GPIO 26–37, 19/20, 43/44; puede necesitar 5 V y picos de corriente: probar con fuente decente), salida I2S, buffer de reproducción en PSRAM, API `play_begin` / `play_push` / `play_end`. Se prueba con un tono o un clip de la partición `clips`. AEC queda para después.
+- [ ] **S7 Parlante (lado hardware), sin red.** Amplificador I2S clase D (pines con `pin-map-check`: fuera de GPIO 26–37, 19/20, 43/44; puede necesitar 5 V y picos de corriente: probar con fuente decente), módulo `orbita_playback` dueño del I2S de salida (la referencia del AEC futuro sale de ahí), ring en PSRAM de una respuesta máxima (480 KB), reproducción con prebuffer y contador de `underrun`, API del Paso 0. Se prueba con un tono o un clip de la partición `clips`. AEC y barge-in: Fase 2.
+- [ ] **A6 Reenvío:** tercer cursor del ring ("confirmado por el servidor"), el sink retoma desde el `last_index` del `ready` (la parte del `hello`/`ready` es de Juani). Ver `arquitectura.md` §3.4.
+- [ ] **LED de conversación:** un GPIO (con `pin-map-check`) que se enciende con `orbita` y se apaga con `conversation_end`. Es una prueba simple, pero ya fija un pin de la PCB.
 - [ ] **Deuda que afecta al alfa** (detalle en `plan_dante.md`):
   - **A9:** confirmar en una toma con Wi-Fi que `CONFIG_I2S_ISR_IRAM_SAFE` y el DMA de 8 descriptores aguantan (quien ya tenga `sdkconfig` debe regenerarlo o activarlo en menuconfig).
   - **A16:** limitar el `ESP_LOGE` de fallo de lectura I2S (hasta ~100 logs/s).
@@ -66,10 +69,12 @@ Carpetas: `firmware/components/orbita_audio`, `orbita_pipeline`, `orbita_playbac
 
 Carpetas: `tools/` (servidor), `firmware/components/orbita_ws`, `orbita_audio_ws`, `orbita_wifi`.
 
-- [ ] **S6 Servidor:** transcripción, detección de "Órbita", envío de `orbita`, `play` y el audio binario.
-- [ ] **Cliente simulado de la placa** (script que habla `orbita-pcm-v2` y recibe `play`): permite probar todo el downlink sin hardware (base: `tools/ws_audio_session.py`).
-- [ ] **Recepción en el firmware:** parsear `orbita`, `play`, `play_end` en `orbita_ws` y entregar los binarios al callback `on_play_data`, en buffer propio (no por la cola RX). No toca el parlante.
-- [ ] **Reenvío desde el último `ack` (A6)**, solo si el Paso 0 dice que hace falta.
+- [ ] **S6 Servidor:** STT y TTS de prueba (Juani los prueba), detección de "Órbita" sobre la transcripción (comparación aproximada, probada con voces reales), y **simulación de la conversación** (el LLM todavía no está disponible). Alcance del alfa: ver qué pasa cuando llega un `orbita` y mandar al ESP un aviso que reproduzca algo.
+- [ ] **Investigar** cómo se abre una conversación con un LLM (protocolo, historial/contexto, por turnos vs. voz en tiempo real) para no perder contexto. Bloquea el diseño final, no el alfa.
+- [ ] **Medir el downlink** (timestamp de envío en el servidor vs. recepción en el ESP): velocidad real y valor de prebuffer. Si hace falta, revisar la cola RX, el buffer de 8 KB y la ventana TCP.
+- [ ] **Cliente simulado de la placa** (script que habla `orbita-pcm-v2` y recibe `play`): permite probar el downlink sin hardware (base: `tools/ws_audio_session.py`).
+- [ ] **Recepción en el firmware:** parsear `orbita`, `conversation_end`, `play`, `play_end`, `play_stop` en `orbita_ws` y entregar los frames `PLAY` al callback de `play_push`, en buffer propio (no por la cola RX); enviar `play_done` / `play_reject`. No toca el parlante.
+- [ ] **`ready` con `last_index`** y manejo del reenvío en el servidor (A6, la mitad de Juani).
 
 ## Paso 2 — Unir (otro día)
 

@@ -60,9 +60,27 @@ Header (little-endian, ya no cambia respecto de v1): `ORBA`, versión 1, tamaño
 
 El servidor sigue aceptando `start`/`end` (v1, toma fija) si el primer mensaje es `start`; el firmware ya no lo usa.
 
+## Downlink: respuesta por el parlante (acordado 14/10, a implementar)
+
+| Quién | Mensaje | Para qué |
+|---|---|---|
+| srv → ESP (JSON ≤ 512 B) | `orbita` {id, at_index} | El servidor detectó "Órbita" en la transcripción. El ESP lo registra y **enciende el LED de conversación**. |
+| srv → ESP (JSON) | `conversation_end` {id} | Fin de la conversación: apaga el LED. (Nombre a confirmar con Juani.) |
+| srv → ESP (JSON) | `play` {play_id, rate 16000, format s16le} | Viene una respuesta. `bytes` es opcional: con TTS en streaming no se conoce el total. |
+| srv → ESP (binario) | header `PLAY` (play_id, seq, largo) + PCM, ≤ 4 KB | Audio del parlante, en streaming. El TTS puede entregar chunks de ~2 s; el ESP solo ve frames. |
+| srv → ESP (JSON) | `play_end` {play_id} | No viene más audio de esa respuesta. |
+| srv → ESP (JSON) | `play_stop` {play_id} | Cortar ya (el servidor cancela). |
+| ESP → srv (JSON) | `play_done` {play_id, reason: end/stopped/underrun, played_ms} | Terminó o se cortó. |
+| ESP → srv (JSON) | `play_reject` {play_id} | No cabe en el buffer. |
+| ESP → srv (JSON, Fase 2) | `barge_in` {play_id} | El usuario interrumpió (AEC + VAD en el ESP); el ESP ya cortó localmente. |
+
+- **Reproducción en tiempo real:** el ESP junta un prebuffer (inicial 400 ms) y reproduce mientras sigue llegando; si se vacía, se registra `underrun`. El servidor puede mandar más rápido que tiempo real; el buffer en PSRAM (máximo de una respuesta, hoy 15 s = 480 KB) absorbe la diferencia.
+- **Mic durante el parlante:** el ESP sigue mandando mensajes con el flag de "silencio salteado" (S8) y sin audio útil; el servidor los ignora. Sin AEC no hay interrupción por voz.
+- **Reanudar tras reconexión:** el `ready` trae `last_index` (último mensaje recibido) y el ESP retoma desde `last_index + 1`. El ring conserva lo enviado y sin `ack` (tercer cursor, A6).
+
 ## Límites
 
-- No hay reenvío desde el último `ack`: lo perdido por un corte largo (>~32 s) queda como hueco. Los `ack` hoy solo se cuentan.
+- Hoy no hay reenvío desde el último `ack` (se hace en el alfa, ver arriba): lo perdido por un corte largo (>~32 s) queda como hueco. Los `ack` hoy solo se cuentan.
 - Una toma cortada por reconexión termina en una sesión y sigue en otra; sin autenticación ni TLS (LAN de laboratorio). Mensajes WS ≤ 8 KiB, cola RX de 4.
 - Diferencias con la FSM (backoff 1-8 s sin tope de intentos, sin timeout de 5 s de respuesta ni `srv_*`) siguen sin acordar con Juani. No modifican el vault.
 - Mono L (`mic_l`) o AFE: la decisión L/mezcla sigue abierta.
