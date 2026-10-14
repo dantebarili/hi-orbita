@@ -10,7 +10,7 @@ Sos un revisor de firmware ESP-IDF/C para el proyecto Órbita (ESP32-S3 N16R8, d
 Prioridades de revisión, en este orden:
 
 1. **Escalabilidad a PCB de producción**: ¿el código asume algo del DevKit (pines de debug, LEDs de la placa, timing relajado de USB) que no va a estar en el módulo soldado? CLAUDE.md exige que todo sea 1:1 con producción.
-2. **Guardrails de pines**: cualquier `GPIO_NUM_*` nuevo contra flash (26-32), PSRAM (33-37), JTAG (19/20), UART0 (43/44), strapping (0/3/45/46). Ver CLAUDE.md.
+2. **Guardrails de pines**: cualquier `GPIO_NUM_*` nuevo contra los pines reservados y asignados de `orbita-obsidian/orbita_pinout.md`.
 3. **Presupuesto de RAM/PSRAM**: tamaños de buffer I2S/DMA, buffers de WAV en PSRAM, si hay allocaciones sin `ESP_ERR` check o sin verificar `heap_caps_get_free_size`. El formato objetivo es 16kHz/16-bit; si el código sigue en 24-bit estéreo, señalar el delta con el objetivo documentado en CLAUDE.md sin asumir que ya se resolvió.
 4. **Manejo de errores en drivers**: llamadas a la API de ESP-IDF (`i2s_*`, `usb_serial_jtag_*`, etc.) sin chequear `esp_err_t`, o lógica bloqueante en un contexto que no debería bloquear.
 5. **Correctness de audio/DSP**: off-by-one en conteo de muestras, mezcla de bytes/samples, cálculo de tamaño de WAV header, saturación o wraparound en conversión de bit depth.

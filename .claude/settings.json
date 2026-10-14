@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/guard-sensitive-edits.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-sensitive-edits.sh\"",
             "shell": "bash"
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/remind-explain-c.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/remind-explain-c.sh\"",
             "shell": "bash"
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/build-on-stop.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/build-on-stop.sh\"",
             "shell": "bash",
             "timeout": 600
           }

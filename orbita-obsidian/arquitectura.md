@@ -114,7 +114,7 @@ Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). 
 | `orbita_wifi` | Conexión y reintentos | **sin fijar** | 3 | 4 KB | sin medir |
 | `app_main` | Arranque | 0 | 1 | 8 KB | sin medir |
 | `envio` (`test.c`, laboratorio) | WAV por UART0 | 0 | 5 | 4 KB | sin medir |
-| `orbita_playback` (S7) | Ring de salida → I2S del parlante | 0 | 6 | — | — |
+| `orbita_playback` (S7) | Ring de salida → I2S del parlante (I2S todavía simulado) | 0 | 6 | 4 KB | sin medir |
 
 **REPARTO DE CORES:**
 - core 0: main, wifi, envio (sink) y recepcion (parlante, sink)
@@ -123,6 +123,7 @@ Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). 
 - **lwIP fijado al core 0** (`CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0`, nombre sin verificar contra el IDF): con prio 18 > captura 6, si corría en el core 1 le robaba CPU a la captura en cada ráfaga TCP. Confirmar con Wi-Fi activo (A9) que el DMA no se desborda.
 - **Prioridad de `orbita_ws` (4) vs. `sink` (5): a ver con Juani.** `orbita_ws` recibe los `PLAY` del parlante; hay que decidir si debe quedar por encima de quien envía. No se cambia sin él.
 - **Parlante (propuesta):** core 0 con prio 6 (> sink, para que el drenaje no la deje sin datos). Consume poco CPU y el colchón del DMA de salida absorbe las ráfagas de Wi-Fi; el core 1 queda para el audio de entrada. Si luego se agrega AEC, la referencia debe quedar alineada con `feed`: se revisa entonces.
+- **Mejorable (latencia de arranque del parlante):** en reposo `orbita_playback` mira el estado cada 10 ms (polling, 100 despertares por segundo): hasta 10 ms de demora al empezar a sonar. Alternativa: `xTaskNotifyGive` desde `push`/`end` y `ulTaskNotifyTake` con timeout (arranque inmediato, sin polling). Se dejó el polling por tener menos formas de fallar en silencio; con el prebuffer de 400 ms no se nota. Tiempos en §3.7.
 
 ## 3. DSP y pipeline de audio
 
@@ -163,6 +164,10 @@ Sin AFE salvo que se diga. *Medido* = máximo en una toma de 20 s en el chip (13
 | Latencia de la tubería del AFE | 64 ms | — | medido |
 | `ring_out_write` / `read` (interrupciones apagadas en ese core) | **62 µs** / **5 µs** | ≪ 15 ms | medido |
 | Sink: espera por polling | ≤ 10 ms | — | diseño |
+| Parlante: espera en reposo por polling (arranque de la reproducción) | ≤ 10 ms | prebuffer de 400 ms | diseño; **mejorable** (§2) |
+| Parlante: prebuffer antes de sonar | 400 ms (12,8 KB) | — | config (Paso 0) |
+| Parlante: trozo que saca la tarea del ring por vuelta | 32 ms (1 KB) | — | diseño |
+| Parlante: respuesta máxima en el ring | 15 s (480 KB) | — | config (provisoria) |
 | Sink: juntar un mensaje (4 slots) | 128 ms (reducible) | — | diseño |
 | `send` de un mensaje | UART: 4 KB a ~92 KB/s ≈ 45 ms | < 128 ms promedio | cálculo |
 
@@ -193,8 +198,8 @@ Movido a [[protocolo_comunicacion]].
 
 ## 4. Puertos serie y cableado de los mics
 
-- **Dos puertos serie, uso separado:** UART0 (chip puente USB-UART del DevKit) solo para logs (`idf.py monitor`); USB-Serial-JTAG nativo (GPIO 19/20) libre para comandos y datos (`tools/orbita_serial.py`). Compartirlos hace que el driver se instale dos veces y falle (`ESP_ERR_INVALID_STATE`). Se logra con `CONFIG_ESP_CONSOLE_UART_DEFAULT=y`, `CONFIG_ESP_CONSOLE_UART_NUM=0` y `CONFIG_ESP_CONSOLE_SECONDARY_NONE=y` en `sdkconfig.defaults`. En Windows, cuál es cuál se ve en el Administrador de dispositivos desconectando un cable. En la PCB: chip puente o conector de programación, o USB nativo sin puente (decisión de BOM).
-- **Cableado de los dos mics:** BCLK (GPIO 4), WS (GPIO 5) y DIN (GPIO 6) van en paralelo a ambos; cada mic elige su slot con el pin `L/R` (a GND = canal L, a VDD = canal R, según el datasheet del INMP441/ICS-43434: verificar). Alimentación 3,3 V estricta, nunca 5 V.
+- **Dos puertos serie, uso separado:** UART0 (chip puente USB-UART del DevKit) solo para logs (`idf.py monitor`); USB-Serial-JTAG nativo libre para comandos y datos (`tools/orbita_serial.py`). Compartirlos hace que el driver se instale dos veces y falle (`ESP_ERR_INVALID_STATE`). Se logra con `CONFIG_ESP_CONSOLE_UART_DEFAULT=y`, `CONFIG_ESP_CONSOLE_UART_NUM=0` y `CONFIG_ESP_CONSOLE_SECONDARY_NONE=y` en `sdkconfig.defaults`. En Windows, cuál es cuál se ve en el Administrador de dispositivos desconectando un cable. En la PCB: chip puente o conector de programación, o USB nativo sin puente (decisión de BOM).
+- **Cableado de los dos mics:** BCLK, WS y DIN (pines en `orbita_pinout.md`) van en paralelo a ambos; cada mic elige su slot con el pin `L/R` (a GND = canal L, a VDD = canal R, según el datasheet del INMP441/ICS-43434: verificar). Alimentación 3,3 V estricta, nunca 5 V.
 
 ## 5. Pendientes de producto (sin dueño todavía)
 

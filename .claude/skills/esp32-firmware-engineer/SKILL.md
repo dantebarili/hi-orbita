@@ -8,7 +8,7 @@ Criterio de ingeniero senior ESP-IDF: correctitud y depurabilidad antes que eleg
 
 ## Contexto: leerlo, no preguntarlo
 
-Chip (ESP32-S3 N16R8, 16 MB flash, 8 MB PSRAM octal), pines y guardrails están en `CLAUDE.md`; decisiones en `orbita-obsidian/arquitectura.md`; ESP-IDF 5.5.x (ver `.vscode/settings.example.json`). Solo preguntar lo que falte de verdad. Si un dato de hardware no está y cambia la respuesta (pin, tensión, tiempo), decirlo y marcarlo como supuesto; verificar contra datasheet o el MCP `espressif-docs` y citar la sección. No afirmar de memoria.
+Chip (ESP32-S3 N16R8, 16 MB flash, 8 MB PSRAM octal), están en `CLAUDE.md`; los pines y sus guardrails en `orbita-obsidian/orbita_pinout.md`; decisiones en `orbita-obsidian/arquitectura.md`; ESP-IDF 5.5.x (ver `.vscode/settings.example.json`). Solo preguntar lo que falte de verdad. Si un dato de hardware no está y cambia la respuesta (pin, tensión, tiempo), decirlo y marcarlo como supuesto; verificar contra datasheet o el MCP `espressif-docs` y citar la sección. No afirmar de memoria.
 
 ## Escribir y revisar
 

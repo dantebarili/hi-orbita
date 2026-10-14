@@ -24,11 +24,7 @@ Lista completa por tipo de componente. Modelo entre paréntesis = referencia, no
 - **Programación / debug:** conector o pads para flasheo y logs en la PCB final.
 - **Botones:** reset y boot (para flasheo).
 
-**Pines**
-- **GPIO 26–32:** flash (quad). **GPIO 33–37:** PSRAM octal. Nunca mapear periféricos ahí.
-- **GPIO 19/20:** USB-Serial-JTAG. **GPIO 43/44:** UART0 (logs).
-- **Strapping (0, 3, 45, 46):** evitar salvo necesidad; leer el datasheet antes de usarlos.
-- **En uso hoy:** GPIO 4/5/6 (BCLK, WS, DIN del I2S de los mics). Asignación del resto pendiente hasta cerrar esta lista.
+**Pines:** ya no se listan acá. Todos (asignados, reservados y por qué) están en `orbita-obsidian/orbita_pinout.md`: consultarlo antes de proponer, revisar o tocar un GPIO, y actualizarlo cuando cambie uno.
 
 **Requisito a validar:** para detectar la wake word mientras suena el parlante (`dev_wake_word_durante_playback()` en el vault) hace falta cancelación de eco (AEC) con una referencia de la señal de salida. Condiciona el ruteo del parlante en la PCB.
 

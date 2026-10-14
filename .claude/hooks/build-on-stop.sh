@@ -12,7 +12,9 @@ git status --porcelain -- 'firmware/*.c' 'firmware/*.h' 'firmware/*/CMakeLists.t
   'firmware/*Kconfig*' 2>/dev/null | grep -q . || exit 0
 command -v idf.py >/dev/null 2>&1 || exit 0
 
-out=$(idf.py -C firmware build 2>&1)
+# Desde Git Bash idf.py no compila (avisa "MSys/Mingw is no longer supported" y sale con 0, o sea
+# falla en silencio): se lo llama por PowerShell, sin MSYSTEM.
+out=$(powershell.exe -NoProfile -Command "\$env:MSYSTEM=\$null; idf.py -C firmware build" 2>&1)
 if [ $? -ne 0 ]; then
   echo "idf.py build fallo. Ultimas lineas:" >&2
   echo "$out" | tail -n 25 >&2
