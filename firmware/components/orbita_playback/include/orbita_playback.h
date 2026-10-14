@@ -27,23 +27,26 @@
 #define ORBITA_PLAY_WS_GPIO    15
 #define ORBITA_PLAY_DOUT_GPIO  16
 
-/* EVENTOS: lo que el modulo avisa hacia afuera por el callback (los HECHOS que pasaron; que se hace
- * con ellos lo decide quien escucha). Ojo con el contexto:
- *  - Pueden llegar desde la tarea de red (begin/push/end) o desde la tarea de reproduccion
- *    (STARTED, DONE, STOPPED, UNDERRUN), y NO hay orden garantizado entre dos eventos emitidos desde
- *    tareas distintas (por ejemplo, DONE puede cruzarse con STARTED en una respuesta cortisima).
- *  - El callback tiene que ser reentrante, NO bloquear ni hacer trabajo largo (corre en la pila de
- *    4 KB de la tarea de reproduccion): copiar el dato y salir.
- *  - Puede llamar a orbita_playback_is_active(); NO conviene que llame a begin/stop desde adentro. */
+/* EVENTOS: hechos ASINCRONOS que el modulo avisa hacia afuera por el callback (que se hace con ellos lo
+ * decide quien escucha). Cada evento trae el `play_id` que se paso a orbita_playback_begin() para la
+ * respuesta a la que pertenece: un DONE atrasado lleva el id de la respuesta que termino, no el de una nueva.
+ *  - TODOS salen desde la tarea de reproduccion (un solo contexto), asi que llegan EN ORDEN:
+ *    STARTED -> (UNDERRUN)* -> DONE o STOPPED. Nunca se cruzan.
+ *  - CONTRATO: cada begin() que devuelve ESP_OK termina en EXACTAMENTE un evento terminal, DONE o STOPPED.
+ *    Si se corta la conexion a mitad de una respuesta, quien recibe el audio debe llamar a stop().
+ *  - Los rechazos (begin/push/end/stop) NO son eventos: se informan SOLO por el valor de retorno, en la tarea
+ *    de quien llamo. Asi no hay dos avisos (retorno + callback) del mismo rechazo.
+ *  - El callback tiene que ser rapido y NO bloquear (corre en la pila de 4 KB de la tarea de reproduccion):
+ *    copiar el dato y salir. Puede llamar a orbita_playback_is_active(); NO a begin/stop desde adentro. */
 typedef enum {
-    ORBITA_PLAY_EV_STARTED,    // se lleno el prebuffer y empezo a sonar
-    ORBITA_PLAY_EV_DONE,       // termino la respuesta (llego play_end y se vacio el ring)
+    ORBITA_PLAY_EV_STARTED,    // empezo a sonar (prebuffer lleno, o respuesta corta cerrada por end)
+    ORBITA_PLAY_EV_DONE,       // termino la respuesta (llego end y se vacio el ring y el DMA)
     ORBITA_PLAY_EV_STOPPED,    // se corto por orbita_playback_stop()
-    ORBITA_PLAY_EV_UNDERRUN,   // el ring se vacio antes de play_end: se escucho un corte
-    ORBITA_PLAY_EV_REJECTED,   // begin/push rechazado (ocupado, o no entra en el ring)
+    ORBITA_PLAY_EV_UNDERRUN,   // el ring se vacio antes de end: se escucho un corte
 } orbita_play_event_t;
 
-typedef void (*orbita_play_cb_t)(orbita_play_event_t ev, void *ctx);
+/* `play_id`: el valor opaco que se paso a begin() (el modulo no lo interpreta). */
+typedef void (*orbita_play_cb_t)(orbita_play_event_t ev, uint32_t play_id, void *ctx);
 
 /* CONFIG: los pines NO estan fijos en el modulo (siguen pendientes, se validan con pin-map-check).
  *  gpio_bclk, gpio_ws, gpio_dout:  pines del I2S de salida hacia el amplificador clase D
@@ -67,16 +70,28 @@ typedef struct {
  */
 esp_err_t orbita_playback_init(const orbita_playback_cfg_t *cfg);
 
-/** @brief  Abre una respuesta. ESP_ERR_INVALID_STATE (+ evento REJECTED) si ya hay una en curso. */
-esp_err_t orbita_playback_begin(void);
+/**
+ * @brief  Abre una respuesta y le pone un identificador.
+ * @param  play_id  Valor opaco que el modulo devuelve en cada evento de ESTA respuesta (p. ej. un indice a
+ *                  una tabla de quien recibe el audio con el play_id del servidor y la conexion).
+ * @return ESP_OK; ESP_ERR_INVALID_STATE si ya hay una respuesta en curso (o un stop que no termino en 100 ms)
+ *         o el modulo no esta iniciado. Sin evento: el rechazo se informa solo por el retorno.
+ */
+esp_err_t orbita_playback_begin(uint32_t play_id);
 
-/** @brief  Agrega `len` bytes de PCM (<= 4 KB por llamada). Copia al ring; no espera si esta lleno. */
+/**
+ * @brief  Agrega `len` bytes de PCM (par, <= 4 KB por llamada). Copia al ring; no espera si esta lleno.
+ * @return ESP_OK; ESP_ERR_INVALID_ARG (puntero nulo, largo 0, impar o > 4 KB); ESP_ERR_INVALID_STATE (no hay
+ *         respuesta abierta, o se esta cortando); ESP_ERR_NO_MEM (ring lleno: el frame NO entro y la respuesta
+ *         quedo con un hueco; quien llama deberia mandar play_reject y llamar a stop()).
+ */
 esp_err_t orbita_playback_push(const uint8_t *data, size_t len);
 
-/** @brief  Avisa que no llegan mas datos; el evento DONE sale cuando el ring se vacia. */
+/** @brief  Avisa que no llegan mas datos; DONE sale cuando se vacian el ring y el DMA. ESP_ERR_INVALID_STATE si no hay respuesta abierta. */
 esp_err_t orbita_playback_end(void);
 
-/** @brief  Corta ya: descarta el ring y silencia el I2S. Evento STOPPED. */
+/** @brief  Pide cortar ya: se descarta lo que falta y sale STOPPED desde la tarea de reproduccion.
+ *          Lo que ya esta en el DMA (hasta 120 ms) suena igual. ESP_ERR_INVALID_STATE si no hay nada que cortar. */
 esp_err_t orbita_playback_stop(void);
 
 /** @brief  true entre begin y DONE/STOPPED. 

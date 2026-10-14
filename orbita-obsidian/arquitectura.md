@@ -142,7 +142,7 @@ mics ─▶ I2S/DMA ─▶ captura ─▶ RING IN ─▶ tarea feed ─┤      
 | 2 | `captura` | Convierte 32→16 bit (shift fijo) y arma chunks | Estéreo 16 bit; chunk de 1024 frames = 4 KB (64 ms) |
 | 3 | Ring in | Cola siempre activa, con o sin AFE | 8 chunks = 32 KB (~0,5 s), PSRAM |
 | 4 | `feed` | Con AFE: intercala los canales (mic, mic; con AEC, también la referencia) y alimenta al AFE. Sin AFE: reduce a mono (L por ahora) y parte el chunk en 2 bloques de 512 | int16 a 16 kHz |
-| 5 | AFE (`esp-sr`), opcional | VAD; audio mono. El beamforming (BSS) no actúa (medido 12/10) | `fetch` = 512 muestras mono = 32 ms; 2 `fetch` por `feed`; latencia 64 ms |
+| 5 | AFE (`esp-sr`), opcional | VAD (modo 4); audio mono. Sin beamforming: no actuaba (medido 12/10) y se sacó (14/10) | `fetch` = 512 muestras mono = 32 ms; 2 `fetch` por `feed`; latencia 64 ms |
 | 6 | Wake word (Edge Impulse) | Consume todo el audio de `fetch`, con su propia ventana | 32 KB/s |
 | 7 | Ring out | Slots (header de 16 B + 512 muestras mono) y tabla de segmentos | 1040 B por slot; 60 s ≈ 1,9 MB en PSRAM |
 | 8 | `sink` | Saca slots, los junta en mensajes de 4 slots y los pasa al `send` registrado | ≈ 4 KB por mensaje; ≈ 270 kbit/s con TLS (estimado) |
@@ -182,7 +182,7 @@ La tarea `captura` lee el I2S (slots de 32 bit, 24 útiles en el INMP441), convi
 
 ### 3.3 AFE y wake word
 
-- **AFE (`esp-sr`):** solo VAD (NS, AGC y WakeNet apagados). Desactivable en compilación (`CONFIG_ORBITA_PIPELINE_USA_AFE`); **apagado por defecto; en el alfa se enciende para AEC y VAD** (`plan_prototipo_alfa.md`, S9). NS y beamforming siguen en pausa (decisión 11/10, `plan_dante.md`). Con 2 mics el BSS no actúa (medido 12/10) y el NS del AFE solo existe en `AFE_TYPE_VC`. La cifra "~1,2 MB de PSRAM y ~46 % de un núcleo" es estimación sin fuente.
+- **AFE (`esp-sr`):** solo VAD (NS, AGC y WakeNet apagados). Desactivable en compilación (`CONFIG_ORBITA_PIPELINE_USA_AFE`); **apagado por defecto; en el alfa se enciende para AEC y VAD** (`plan_prototipo_alfa.md`, S9). NS y beamforming siguen en pausa (decisión 11/10, `plan_dante.md`). El beamforming (BSS) no actuaba con 2 mics (medido 12/10) y se sacó el 14/10 (`se_init = false`, sin probar con el AFE encendido); el VAD queda en modo 4 por defecto. El NS del AFE solo existe en `AFE_TYPE_VC`. La cifra "~1,2 MB de PSRAM y ~46 % de un núcleo" es estimación sin fuente.
 - **Wake word "Órbita":** modelo propio de Edge Impulse, con su propio búfer de ventana; consume todo el audio siempre. Si corre sobre audio crudo o sobre la salida del AFE se decide con datos (`plan_dante.md`).
 - **Mono:** al ring out va audio mono (salida del AFE, o canal L del crudo sin AFE; L o mezcla: a decidir con Comunicación). Se reduce lo más tarde posible, nunca antes del ring in.
 - **AEC (riesgo):** `feed` pide la referencia del parlante al final (mic, mic, ref). Condiciona el ruteo del parlante en la PCB. No diseñar todavía.

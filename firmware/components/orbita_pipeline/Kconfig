@@ -12,12 +12,13 @@ menu "Orbita pipeline"
     config ORBITA_AFE_VAD_MODE
         int "VAD del AFE: modo (0 normal ... 4 el mas agresivo)"
         range 0 4
-        default 0
+        default 4
         depends on ORBITA_PIPELINE_USA_AFE
         help
             Modo del VAD WebRTC. Mas agresivo = marca menos voz (menos falsos "hay voz"
             en silencio, pero puede comerse el inicio o el final de las palabras).
-            0 es el default del AFE (marcaba voz en el 100 % de los bloques con ruido grave).
+            0 es el default del AFE (marcaba voz en el 100 % de los bloques con ruido grave);
+            el 13/10 el modo 4 anduvo bien y es el default del proyecto (14/10).
 
     config ORBITA_AFE_VAD_MIN_SPEECH_MS
         int "VAD del AFE: ms minimos de voz para marcar inicio (>= 32)"

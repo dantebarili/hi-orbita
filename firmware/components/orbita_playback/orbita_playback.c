@@ -45,14 +45,18 @@ static orbita_playback_cfg_t cfg_play;
 static SemaphoreHandle_t mutex_play = NULL;   // protege estado_play y los contadores: los tocan la tarea de red y la que reproduce
 static uint32_t bytes_recibidos_play = 0;     // bytes metidos al ring en la respuesta actual
 static uint32_t underruns_play = 0;           // veces que el ring se vacio antes de play_end
+static uint32_t id_play = 0;                  // id opaco de la respuesta en curso (lo pone begin, solo con estado LIBRE)
+static bool started_pendiente = false;       // hay que avisar STARTED: lo emite la tarea (todos los eventos salen de ella)
 static uint32_t prebuffer_bytes_play = 0;     // cuantos bytes hay que juntar antes de empezar a sonar (se calcula en init)
 static i2s_chan_handle_t tx_chan = NULL;      // canal I2S de salida (hacia el MAX98357A)
 static volatile bool iniciado_play = false;   // true recien cuando init termino TODO (mutex, ring y tarea)
 
-// Avisa un evento a quien registro el callback (puede no haber). Llamar SIEMPRE fuera del mutex.
-static void emitir(orbita_play_event_t ev){
+// Avisa un evento a quien registro el callback (puede no haber). Llamar SIEMPRE fuera del mutex y SOLO
+// desde tarea_play: asi los eventos salen en orden. `id` se captura bajo el mutex junto con el cambio de
+// estado que lo origina, para que un evento atrasado lleve el id de SU respuesta.
+static void emitir(orbita_play_event_t ev, uint32_t id){
     if (cfg_play.cb != NULL) {
-        cfg_play.cb(ev, cfg_play.cb_ctx);
+        cfg_play.cb(ev, id, cfg_play.cb_ctx);
     }
 }
 
@@ -117,9 +121,20 @@ static esp_err_t i2s_salida_iniciar(const orbita_playback_cfg_t *cfg){
 static void tarea_play(void *arg){
     bool en_underrun = false;            // para avisar UNDERRUN una vez por episodio, no cada vuelta
     while (1) {
+        // Foto del estado, del id y de si hay un STARTED por avisar. El id solo cambia en begin() con estado
+        // LIBRE, y a LIBRE solo pasa esta tarea: mientras no vuelva a LIBRE, este id es el de la respuesta.
+        bool avisar_start = false;
         xSemaphoreTake(mutex_play, portMAX_DELAY);
         orbita_state_t est = estado_play;
+        uint32_t id = id_play;
+        if (started_pendiente) {
+            started_pendiente = false;
+            avisar_start = (est == SONANDO || est == VACIANDO);   // si ya se pidio stop, nunca llego a sonar
+        }
         xSemaphoreGive(mutex_play);
+        if (avisar_start) {
+            emitir(ORBITA_PLAY_EV_STARTED, id);   // fuera del mutex
+        }
 
         if (est == DETENIENDO) {         // stop pedido: aca no hay ningun trozo en la mano, se puede vaciar
             vaciar_ring();               // lo que ya esta en el DMA (hasta PLAY_DMA_MS) suena igual: disable/enable no lo limpia
@@ -127,7 +142,7 @@ static void tarea_play(void *arg){
             estado_play = LIBRE;
             xSemaphoreGive(mutex_play);
             en_underrun = false;
-            emitir(ORBITA_PLAY_EV_STOPPED);   // fuera del mutex
+            emitir(ORBITA_PLAY_EV_STOPPED, id);   // fuera del mutex
             continue;
         }
 
@@ -169,7 +184,7 @@ static void tarea_play(void *arg){
             if (fin) {
                 ESP_LOGI(TAG, "respuesta terminada: underruns=%u, pila libre=%u B",
                          (unsigned)underruns, (unsigned)uxTaskGetStackHighWaterMark(NULL));
-                emitir(ORBITA_PLAY_EV_DONE);  // fuera del mutex
+                emitir(ORBITA_PLAY_EV_DONE, id);  // fuera del mutex
             }
         } else if (!en_underrun) {       // SONANDO con el ring vacio: llego tarde el audio, se oye un corte
             en_underrun = true;
@@ -181,7 +196,7 @@ static void tarea_play(void *arg){
             }
             xSemaphoreGive(mutex_play);
             if (contar) {
-                emitir(ORBITA_PLAY_EV_UNDERRUN);
+                emitir(ORBITA_PLAY_EV_UNDERRUN, id);
             }
         }
     }
@@ -245,7 +260,7 @@ esp_err_t orbita_playback_init(const orbita_playback_cfg_t *cfg){
     return ESP_OK;
 }
 
-esp_err_t orbita_playback_begin(void){
+esp_err_t orbita_playback_begin(uint32_t play_id){
     if (!iniciado_play) {
         return ESP_ERR_INVALID_STATE;    // No inicializado
     }
@@ -257,7 +272,9 @@ esp_err_t orbita_playback_begin(void){
         xSemaphoreTake(mutex_play, portMAX_DELAY);
         orbita_state_t est = estado_play;
         if (est == LIBRE) {
-            estado_play = LLENANDO;      // STARTED sale despues, cuando push llene el prebuffer
+            estado_play = LLENANDO;      // STARTED sale despues, cuando se llene el prebuffer (lo avisa la tarea)
+            id_play = play_id;           // el id de la respuesta nueva; los eventos de la anterior ya salieron con el suyo
+            started_pendiente = false;
             bytes_recibidos_play = 0;
             underruns_play = 0;
             libre = true;
@@ -270,8 +287,7 @@ esp_err_t orbita_playback_begin(void){
     }
 
     if (!libre) {
-        emitir(ORBITA_PLAY_EV_REJECTED); // ya hay una respuesta en curso (fuera del mutex)
-        return ESP_ERR_INVALID_STATE;
+        return ESP_ERR_INVALID_STATE;    // ocupado: se informa solo por el retorno, sin evento
     }
     // Restos de una respuesta anterior (un push que llego tarde, tras un stop). Es seguro vaciar aca: en
     // LLENANDO la tarea de reproduccion no lee, y push no puede correr (lo llama esta misma tarea de red).
@@ -293,41 +309,31 @@ esp_err_t orbita_playback_push(const uint8_t *data, size_t len){
     bool acepta = (estado_play == LLENANDO || estado_play == SONANDO);
     xSemaphoreGive(mutex_play);
     if (!acepta) {
-        emitir(ORBITA_PLAY_EV_REJECTED);
         return ESP_ERR_INVALID_STATE;
     }
 
     // 2) Al ring SIN esperar (ticks = 0) y fuera del mutex: si no entra, se rechaza el frame nuevo.
     //    Nunca se pisa lo anterior: una respuesta con un hueco en el medio no sirve.
     if (xRingbufferSend(ring_play, data, len, 0) != pdTRUE) {
-        emitir(ORBITA_PLAY_EV_REJECTED);
-        return ESP_ERR_NO_MEM;
+        return ESP_ERR_NO_MEM;           // ring lleno: el llamador manda play_reject y llama a stop()
     }
 
-    // 3) Contar el audio y, si ya se junto el prebuffer, pasar a SONANDO.
-    bool arranca = false;
+    // 3) Contar el audio y, si ya se junto el prebuffer, pasar a SONANDO (la tarea avisa STARTED).
     bool cortado = false;
     xSemaphoreTake(mutex_play, portMAX_DELAY);
     if (estado_play == LLENANDO || estado_play == SONANDO) {
         bytes_recibidos_play += len;
         if (estado_play == LLENANDO && bytes_recibidos_play >= prebuffer_bytes_play) {
             estado_play = SONANDO;
-            arranca = true;
+            started_pendiente = true;
         }
     } else {
         cortado = true;                  // entro un stop entre el paso 1 y el 2: no se cuenta
     }
     xSemaphoreGive(mutex_play);
 
-    if (cortado) {
-        // El audio que acaba de entrar al ring queda como resto: lo limpia el proximo begin.
-        emitir(ORBITA_PLAY_EV_REJECTED);
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (arranca) {
-        emitir(ORBITA_PLAY_EV_STARTED);  // fuera del mutex
-    }
-    return ESP_OK;
+    // El audio que acaba de entrar y quedo como resto lo limpia el proximo begin.
+    return cortado ? ESP_ERR_INVALID_STATE : ESP_OK;
 }
 
 esp_err_t orbita_playback_end(void){
@@ -336,27 +342,20 @@ esp_err_t orbita_playback_end(void){
     }
 
     bool valido = false;
-    bool arranca = false;
     xSemaphoreTake(mutex_play, portMAX_DELAY);
     if (estado_play == LLENANDO) {
         // Respuesta mas corta que el prebuffer: nunca se alcanzo el umbral en push, se arranca igual.
         estado_play = VACIANDO;
+        started_pendiente = true;        // la tarea avisa STARTED
         valido = true;
-        arranca = true;
     } else if (estado_play == SONANDO) {
         estado_play = VACIANDO;          // ya sonaba; solo falta que se vacie el ring
         valido = true;
     }
     xSemaphoreGive(mutex_play);
 
-    if (!valido) {
-        return ESP_ERR_INVALID_STATE;    // no hay respuesta abierta (LIBRE), ya se cerro (VACIANDO) o se esta cortando
-    }
-    if (arranca) {
-        emitir(ORBITA_PLAY_EV_STARTED);  // fuera del mutex
-    }
-    // DONE no sale aca: lo emite la tarea de reproduccion cuando el ring llegue a vacio.
-    return ESP_OK;
+    // DONE no sale aca: lo emite la tarea de reproduccion cuando el ring y el DMA lleguen a vacio.
+    return valido ? ESP_OK : ESP_ERR_INVALID_STATE;   // LIBRE, ya cerrada (VACIANDO) o cortandose
 }
 
 esp_err_t orbita_playback_stop(void){
