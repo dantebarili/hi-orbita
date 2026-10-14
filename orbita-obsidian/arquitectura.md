@@ -213,6 +213,11 @@ Sin AFE salvo que se diga. *Medido* = máximo en una toma de 20 s en el chip (13
 
 **Mic → fin del `send`** (audio más viejo del mensaje): ≈ 128 + 10 + 45 ≈ **180 ms** con UART; con AFE, +64 ms o 84?. La latencia del urgente (§3.6) es otra cuenta.
 
+## 4. Puertos serie y cableado de los mics
+
+- **Dos puertos serie, uso separado:** UART0 (chip puente USB-UART del DevKit) solo para logs (`idf.py monitor`); USB-Serial-JTAG nativo (GPIO 19/20) libre para comandos y datos (`tools/orbita_serial.py`). Compartirlos hace que el driver se instale dos veces y falle (`ESP_ERR_INVALID_STATE`). Se logra con `CONFIG_ESP_CONSOLE_UART_DEFAULT=y`, `CONFIG_ESP_CONSOLE_UART_NUM=0` y `CONFIG_ESP_CONSOLE_SECONDARY_NONE=y` en `sdkconfig.defaults`. En Windows, cuál es cuál se ve en el Administrador de dispositivos desconectando un cable. En la PCB: chip puente o conector de programación, o USB nativo sin puente (decisión de BOM).
+- **Cableado de los dos mics:** BCLK (GPIO 4), WS (GPIO 5) y DIN (GPIO 6) van en paralelo a ambos; cada mic elige su slot con el pin `L/R` (a GND = canal L, a VDD = canal R, según el datasheet del INMP441/ICS-43434: verificar). Alimentación 3,3 V estricta, nunca 5 V.
+
 ## 5. Pendientes de producto (sin dueño todavía)
 
 - Seguridad: TLS, autenticación del dispositivo, aprovisionamiento de WiFi, OTA (ya hay dos slots).

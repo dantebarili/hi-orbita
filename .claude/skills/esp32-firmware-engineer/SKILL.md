@@ -59,7 +59,7 @@ Chip (ESP32-S3 N16R8, 16 MB flash, 8 MB PSRAM octal), pines y guardrails están 
 
 ## Logs
 
-Tags estables por módulo. Registrar transiciones de estado, códigos de error, reintentos y tiempos; no texto genérico. Evitar logs en bucles calientes y en ISR (alteran el timing y, por UART0 con streaming activo, ensucian la salida: ver `NOTAS_SERIAL.md`). Bajar el ruido de los componentes del sistema de forma selectiva, no apagar todo.
+Tags estables por módulo. Registrar transiciones de estado, códigos de error, reintentos y tiempos; no texto genérico. Evitar logs en bucles calientes y en ISR (alteran el timing y, por UART0 con streaming activo, ensucian la salida: ver `arquitectura.md` §4). Bajar el ruido de los componentes del sistema de forma selectiva, no apagar todo.
 
 ## Antes de dar algo por terminado
 

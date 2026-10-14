@@ -1,7 +1,7 @@
 """
 Cliente PC para Proyecto Orbita - captura en streaming.
 
-Usa DOS puertos COM (ver firmware/NOTAS_SERIAL.md):
+Usa DOS puertos COM (ver orbita-obsidian/arquitectura.md §4):
 - Puerto de COMANDOS (USB-Serial-JTAG nativo, "Puerto B"): manda 'g' para
   disparar una grabacion y recibe el marcador WAV_ON_UART0.
 - Puerto de DATOS (UART0, el cable del chip puente, "Puerto A"): recibe el
