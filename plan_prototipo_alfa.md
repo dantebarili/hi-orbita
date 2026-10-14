@@ -50,6 +50,11 @@ Carpetas: `firmware/components/orbita_audio`, `orbita_pipeline`, `orbita_playbac
   2. Corte corto de Wi-Fi (~10 s) con la sesión en curso: reconecta, el servidor no cierra con error, hueco entre sesiones = 0.
   3. Corte largo (> 40 s): no salta el watchdog (el sink drena el atraso sin dormir, prio 5 > red 4) y el descarte del mensaje retenido aparece en el log.
 - [ ] **S7 Parlante (lado hardware), sin red.** Amplificador I2S clase D (pines con `pin-map-check`: fuera de GPIO 26–37, 19/20, 43/44; puede necesitar 5 V y picos de corriente: probar con fuente decente), salida I2S, buffer de reproducción en PSRAM, API `play_begin` / `play_push` / `play_end`. Se prueba con un tono o un clip de la partición `clips`. AEC queda para después.
+- [ ] **Deuda que afecta al alfa** (detalle en `plan_dante.md`):
+  - **A9:** confirmar en una toma con Wi-Fi que `CONFIG_I2S_ISR_IRAM_SAFE` y el DMA de 8 descriptores aguantan (quien ya tenga `sdkconfig` debe regenerarlo o activarlo en menuconfig).
+  - **A16:** limitar el `ESP_LOGE` de fallo de lectura I2S (hasta ~100 logs/s).
+  - **A5b:** `_Static_assert` de `ORBITA_MSG_SLOTS * 512 <= UINT16_MAX` y de `ORBITA_SLOT_SAMPLES == ORBITA_AFE_FETCH_FRAMES`.
+  - **A10 mínimo:** guarda de `s_rx_chan == NULL`. Para la hora de prueba, `arranque_fallo()` queda como está.
 - [ ] **S8 VAD como compuerta (opcional, mínimo).** Anotar los números de la prueba del 13/10 (modo 4 anduvo bien; el 100 % de voz era del modo 0) y reservar en el header un flag de "silencio salteado" (≠ pérdida).
 - [ ] **En paralelo:** wake word y tomas de las tres fuentes (`plan_dante.md`); no bloquea nada.
 
