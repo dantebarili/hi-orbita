@@ -4,7 +4,7 @@ Actualizado 2026-10-13. Deriva de `plan_dante.md` (captura/AFE/wake word). Detal
 
 ## Objetivo
 
-El equipo manda **audio mono 16 kHz / 16-bit sin parar** al servidor. El **servidor** transcribe y detecta "Órbita": ahí corta el procesamiento de fondo y responde con un audio que el equipo reproduce (`audio_play`). **Sin wake word en el chip, sin AFE, sin VAD** (el VAD entra después como compuerta opcional). Fuera de alcance (sigue en `plan_dante.md`): wake word on-device, NS/beamforming, FSM `dev_wake_word*`. La FSM del vault no aplica a este prototipo: es "modo prototipo", no se actualiza.
+El equipo manda **audio mono 16 kHz / 16-bit sin parar** al servidor. El **servidor** transcribe y detecta "Órbita": ahí corta el procesamiento de fondo y responde con un audio que el equipo reproduce (`audio_play`). **Sin wake word en el chip.** El **AFE entra al alfa** solo para dos cosas: **AEC** (que el equipo no se escuche a sí mismo por el parlante) y **VAD** (cortar la respuesta cuando el usuario habla encima, `barge_in`). Fuera de alcance (sigue en `plan_dante.md`): wake word on-device, NS/beamforming, VAD como compuerta de envío, FSM `dev_wake_word*`. La FSM del vault no aplica a este prototipo: es "modo prototipo", no se actualiza.
 
 ## Cómo se trabaja: 3 pasos
 
@@ -35,7 +35,7 @@ Contrato en `INTEGRACION_WEBSOCKET.md` ("Downlink"). Decidido:
 
 - [x] **`orbita` informativo:** el servidor detecta "Órbita" (STT + comparación aproximada) y avisa; el ESP lo registra y enciende un **LED de conversación** (es la idea del producto final); `conversation_end` lo apaga. El detalle de la conversación con el LLM no afecta al ESP.
 - [x] **Audio del parlante:** PCM s16le 16 kHz mono, frames `PLAY` ≤ 4 KB, **streaming con prebuffer** (inicial 400 ms) para reproducir en tiempo real y bajar la latencia. El servidor puede mandar más rápido que tiempo real; el buffer en PSRAM absorbe la diferencia.
-- [x] **Mic durante el parlante:** flag de S8 y el servidor ignora esos mensajes. **El ESP corta la reproducción** con `play_stop` (orden del servidor) y, en la Fase 2, por barge-in propio (AEC + VAD, `barge_in`); eso requiere actualizar la FSM del vault (no ahora).
+- [x] **Mic durante el parlante:** flag de S8 y el servidor ignora esos mensajes. **El ESP corta la reproducción** con `play_stop` (orden del servidor) y por barge-in propio (AEC + VAD, `barge_in`), que **entra al alfa** (S9); requiere actualizar la FSM del vault y un evento nuevo hacia el servidor (a acordar con Juani).
 - [x] **Reenvío tras reconexión:** entra al alfa (A6): tercer cursor en el ring, el `ready` trae `last_index`.
 - [x] **Diferencias con la FSM** (backoff sin tope, sin timeout de 5 s, sin `srv_*`): aceptadas para el alfa.
 - [x] **Interfaz de unión:** `play_begin` / `play_push` / `play_end` / `play_stop` + `play_is_active()` + callback de eventos (`started`, `done`, `stopped`, `underrun`, `rejected`).
@@ -46,7 +46,7 @@ Contrato en `INTEGRACION_WEBSOCKET.md` ("Downlink"). Decidido:
 
 Carpetas: `firmware/components/orbita_audio`, `orbita_pipeline`, `orbita_playback` (nuevo), `sdkconfig.defaults`, `firmware/main/`.
 
-- [ ] **S4 Presupuesto de RAM** (requisito de S7). `orbita_ws_message_t` lleva `data[8192]` y se copia 6 veces (cola RX de 4, `s_rx`, `reply`...): ≥ 50 KB internos para recibir un `ready` de ~50 B. Bajar el mensaje de control a ≤ 512 B, mover buffers grandes a PSRAM, medir RAM interna antes/después y anotar en `orbita-obsidian/arquitectura.md`.
+- [ ] **S4 Presupuesto de RAM** (requisito de S7 y de S9: el AFE ocupa 68 a 79 KB de RAM interna según Espressif, y hoy quedan ≈ 80; ver `arquitectura.md` §1). `orbita_ws_message_t` lleva `data[8192]` y se copia 6 veces (cola RX de 4, `s_rx`, `reply`...): ≥ 50 KB internos para recibir un `ready` de ~50 B. Bajar el mensaje de control a ≤ 512 B, mover buffers grandes a PSRAM, medir RAM interna antes/después y anotar en `orbita-obsidian/arquitectura.md`.
 - [ ] **S4b Revisión de memoria** (a hablar; auditoría del 13/10 sobre el código, sin medir en la placa). Hoy hay ~80 KB de RAM interna libre con Wi-Fi + socket, sin AFE ni parlante.
   - **Mal alojado:** el módulo WebSocket pasa de 60 KB internos (cola RX 4 × 8,2 KB, `s_rx`, `s.reply`, buffer de la librería 8 KB, pila 6 KB, `packet` 4 KB). Es S4: más de la mitad de lo que queda.
   - **Bien alojado:** ring out (1,04 MB) y ring in (33 KB) en PSRAM; DMA del I2S (~15 KB) y buffers de captura/sink (~25 KB) en interna.
@@ -55,6 +55,7 @@ Carpetas: `firmware/components/orbita_audio`, `orbita_pipeline`, `orbita_playbac
   2. Corte corto de Wi-Fi (~10 s) con la sesión en curso: reconecta, el servidor no cierra con error, hueco entre sesiones = 0.
   3. Corte largo (> 40 s): no salta el watchdog (el sink drena el atraso sin dormir, prio 5 > red 4) y el descarte del mensaje retenido aparece en el log.
 - [ ] **S7 Parlante (lado hardware), sin red.** Amplificador I2S clase D (pines con `pin-map-check`: fuera de GPIO 26–37, 19/20, 43/44; puede necesitar 5 V y picos de corriente: probar con fuente decente), módulo `orbita_playback` dueño del I2S de salida (la referencia del AEC futuro sale de ahí), ring en PSRAM de una respuesta máxima (480 KB), reproducción con prebuffer y contador de `underrun`, API del Paso 0. Se prueba con un tono o un clip de la partición `clips`. AEC y barge-in: Fase 2.
+- [ ] **S9 AFE con AEC y VAD (barge-in).** Va **después de S4 y S7**: necesita RAM interna libre y la referencia del parlante (`orbita_playback` es su dueño). Pasos: (1) log al arranque con el heap interno total y libre, y medir `ram_int` con el AFE encendido; (2) AEC solo (`aec_init`, sin NS ni BSS, referencia digital alineada en el `feed`; ver `plan_dante.md`), medido con el parlante sonando; (3) VAD en modo 4 (anduvo bien el 13/10; el 100 % de voz era del modo 0) como disparador de `play_stop` propio; (4) con AFE, `ws://` en el alfa: TLS no entra en la RAM interna. Criterio: sin falsos cortes con la respuesta sonando sola, y corta al hablar encima. Requiere acordar con Juani el evento `barge_in` y la FSM.
 - [ ] **A6 Reenvío:** tercer cursor del ring ("confirmado por el servidor"), el sink retoma desde el `last_index` del `ready` (la parte del `hello`/`ready` es de Juani). Ver `arquitectura.md` §3.4.
 - [ ] **LED de conversación:** un GPIO (con `pin-map-check`) que se enciende con `orbita` y se apaga con `conversation_end`. Es una prueba simple, pero ya fija un pin de la PCB.
 - [ ] **Deuda que afecta al alfa** (detalle en `plan_dante.md`):

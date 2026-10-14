@@ -81,7 +81,8 @@ El servidor sigue aceptando `start`/`end` (v1, toma fija) si el primer mensaje e
 ## Límites
 
 - Hoy no hay reenvío desde el último `ack` (se hace en el alfa, ver arriba): lo perdido por un corte largo (>~32 s) queda como hueco. Los `ack` hoy solo se cuentan.
-- Una toma cortada por reconexión termina en una sesión y sigue en otra; sin autenticación ni TLS (LAN de laboratorio). Mensajes WS ≤ 8 KiB, cola RX de 4.
+- Una toma cortada por reconexión termina en una sesión y sigue en otra; sin autenticación ni TLS (LAN de laboratorio). Envío ≤ 8 KiB; mensajes **recibidos** por la cola RX ≤ 512 B (`ORBITA_WS_MAX_CONTROL_BYTES`, S4: libera ≈ 46 KB de RAM interna), cola RX de 4.
+- **Para Juani:** los frames binarios `PLAY` (hasta 4 KB) ya no caben en la cola RX. Hay que darles un camino de recepción propio (buffer propio, sin pasar por la cola; `ws_rx` hoy rechaza todo lo > 512 B). Un `PLAY` que llegue antes de eso se descarta con "Mensaje RX rechazado" en el log.
 - Diferencias con la FSM (backoff 1-8 s sin tope de intentos, sin timeout de 5 s de respuesta ni `srv_*`) siguen sin acordar con Juani. No modifican el vault.
 - Mono L (`mic_l`) o AFE: la decisión L/mezcla sigue abierta.
 

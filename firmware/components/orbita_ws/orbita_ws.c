@@ -193,7 +193,8 @@ esp_err_t orbita_ws_start(const orbita_ws_config_t *config)
         .ping_interval_sec = 10,
         .pingpong_timeout_sec = 3,
         .disable_pingpong_discon = false,
-        // Buffer interno de 8192 bytes; ws_rx limita también el mensaje total a 8192.
+        // Buffer interno de 8192 bytes (envío y lectura de la biblioteca); ws_rx limita el mensaje
+        // RECIBIDO por la cola a ORBITA_WS_MAX_CONTROL_BYTES (512).
         // La tarea de la biblioteca tiene pila propia de 6144 bytes y prioridad 4.
         .buffer_size = ORBITA_WS_MAX_MESSAGE_BYTES,
         .task_stack = 6144,

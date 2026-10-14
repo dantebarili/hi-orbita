@@ -54,8 +54,8 @@ ws_rx_result_t ws_rx_feed(ws_rx_t *rx, uint8_t opcode, bool fin,
         } else if (!rx->active) {
             return reject(rx, WS_RX_INVALID);
         }
-        // Límite del MENSAJE completo: 8192 bytes, sumando todos sus frames.
-        if (frame_size > ORBITA_WS_MAX_MESSAGE_BYTES - rx->message.size) {
+        // Límite del MENSAJE completo: ORBITA_WS_MAX_CONTROL_BYTES (512), sumando todos sus frames.
+        if (frame_size > ORBITA_WS_MAX_CONTROL_BYTES - rx->message.size) {
             return reject(rx, WS_RX_TOO_LARGE);
         }
         // Guardamos datos del frame para comprobar los siguientes trozos.

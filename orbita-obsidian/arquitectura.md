@@ -20,23 +20,11 @@ Estado: **Cerrada** · **Provisoria** (vale hasta medir/verificar) · **Propuest
 
 ---
 
-## 1. Memoria, chip: `sdkconfig.defaults` y `partitions.csv`
+## 1. Memoria
 
-ACTUALIZAR
+Estado: **medido** (en la placa) · **calculado** (del código, sin medir) · **estimado** (de otra fuente o supuesto).
 
-Hecho el 2026-10-10 (A0). `sdkconfig` está en `.gitignore`: lo que vale para el equipo es `sdkconfig.defaults`.
-
-| Decisión | Estado | Consecuencia |
-|---|---|---|
-| Flash 16 MB | Cerrada | Es lo del N16R8; la flash de la PCB debe ser de 16 MB. Declarar más que la real: no arranca. |
-| Flash en QIO a 80 MHz | Provisoria | Antes DIO (default de IDF); se apagó `FLASH_MODE_AUTO_DETECT`. El header de la imagen sigue diciendo `dio` (normal en S3). **Confirmar en el chip:** `SPI Mode : QIO` en el log; si no arranca, volver a DIO. |
-| Tabla de particiones propia | Cerrada | Lo más caro de cambiar: un equipo instalado no mueve sus particiones por OTA. Por eso se reservó de más. |
-| Dos slots de app de 3 MB (`ota_0`, `ota_1`) | Propuesta | Si el OTA falla vuelve al slot anterior; con uno solo, un corte de luz puede dejar el equipo muerto. La app pesa 240 KB; con `esp-sr`, WiFi, TLS y Edge Impulse podría llegar a 1,5–2 MB (estimado). |
-| CPU a 240 MHz | Cerrada | Más corriente y calor que a 160; lo medido de CPU vale solo a esta frecuencia. |
-| Tick de FreeRTOS a 1 ms | Cerrada | Antes 10 ms. Un `vTaskDelay(10)` en ticks crudos espera 10 veces menos; `pdMS_TO_TICKS` se adapta. |
-| Stack de `app_main` 8192 B | Provisoria | RAM interna (la escasa); medir cada tarea con `uxTaskGetStackHighWaterMark`. |
-
-### Mapa de la flash
+### Flash
 
 | Partición | Para qué | Offset | Tamaño |
 |---|---|---|---|
@@ -54,32 +42,86 @@ Puntos abiertos:
 - **NS y VAD hoy son WebRTC** (default de `esp-sr`, no una elección): algoritmo clásico, liviano, sin red neuronal; `model` queda vacía. NSNet/VADNet son redes neuronales de Espressif. **Pendiente:** en la Fase B se prueban los dos con las mismas tomas (CPU, RAM, latencia, calidad).
 - Cambiar `sdkconfig.defaults` no actualiza un `sdkconfig` existente: borrarlo y reconfigurar. Flashear otra tabla borra el `nvs`.
 
+### RAM interna (la escasa)
+
+| Concepto | KB | Origen |
+|---|---|---|
+| **Libre hoy** (Wi-Fi + socket corriendo, sin AFE ni parlante) | **≈ 80** (74 a 84) | medido (`ram_int`, `pruebas_socket.md`) |
+| Heap total disponible al arrancar | sin medir | falta un log al arranque (ver abajo) |
+| **Usado por Orbita** | | |
+| `orbita_ws`: cola RX (4 × 8 KB) | 33 | calculado |
+| `orbita_ws`: copias de un mensaje (`s_rx`, `reply`) | 16 | calculado (auditoría 13/10, sin releer) |
+| `orbita_ws`: buffer de la librería + pila | 8 + 6 | calculado |
+| Captura: `s_crudo_buf` (32 bit) + `s_chunk_buf` (16 bit) | 12 | calculado |
+| DMA del I2S de entrada (8 × 240 frames × 8 B) | 15 | calculado |
+| Sink: audio del mensaje + un slot | 5 | calculado |
+| Adaptador del socket: `packet` + `control` | 4,4 | calculado |
+| Pilas: `captura` 4, `feed` 4, `sink` 6, `orbita_wifi` 4, `app_main` 8 | 26 | asignado (§2) |
+| **Total usado por Orbita** | **≈ 125** | calculado |
+
+El resto (IDF, Wi-Fi, lwIP, TLS futuro) no está itemizado: es la diferencia entre el heap total y lo que hay libre más lo de Orbita. **Falta medir:** un log al arranque con `heap_caps_get_total_size(MALLOC_CAP_INTERNAL)` y el libre antes de iniciar los módulos. Con eso se cierra la tabla y se sabe cuánto come el sistema.
+
+### PSRAM
+
+| Concepto | MB | Origen |
+|---|---|---|
+| **Disponible** (N16R8) | **8** | `CLAUDE.md` |
+| Ring out (1024 slots × 1040 B) | 1,04 | calculado (`diseño_ring_orbita.md`) |
+| Ring in (8 chunks de 4 KB) | 0,03 | calculado |
+| **Total usado hoy** | **≈ 1,07** | calculado |
+| *Previsto:* ring out a 60 s (1875 slots) | +0,9 | estimado (diseño) |
+| *Previsto:* buffer del parlante (una respuesta) | 0,48 | plan alfa (S7) |
+| *Previsto:* AFE | 1,15 a 1,2 | estimado (benchmark de Espressif, ver abajo) |
+| *Previsto:* wake word (Edge Impulse) | sin medir | |
+| **Total con todo lo previsto** | **≈ 3,6** (45 % de 8) | estimado |
+
+La PSRAM no es el problema. Sí importa el orden de arranque: el ring out se reserva en un bloque contiguo **antes** de iniciar el AFE, porque `esp-sr` fragmenta la PSRAM.
+
+### Qué pasa si se activa el AFE
+
+Referencia: benchmark oficial de `esp-sr` para ESP32-S3 (2 mics, filas MMNR; leído de la web, no de memoria). Esa configuración incluye AEC, BSS, VAD vadnet y WakeNet; la nuestra es más liviana (solo VAD WebRTC, BSS que no actúa, WakeNet apagado), así que es un techo probable, **no una medición propia**.
+
+| | RAM interna | PSRAM | CPU de un core |
+|---|---|---|---|
+| AFE 2 mics (MMNR, `SR`) | 68 a 79 KB | 1,15 a 1,2 MB | feed ≈ 24 %, fetch ≈ 23 % |
+| Nuestro `feed` con AFE (medido) | — | — | 20 ms de cada 64 ms ≈ 31 % |
+
+| Escenario | Libre en RAM interna |
+|---|---|
+| Hoy | ≈ 80 KB |
+| Hoy + AFE (+ 4 KB de pila de `fetch`) | ≈ 0 a 8 KB: **no hay margen** |
+| Con S4 (cola RX y copias de mensaje a ≤ 512 B, ahorro estimado ≈ 45 KB) | ≈ 125 KB |
+| S4 + AFE | ≈ 40 a 50 KB |
+| S4 + AFE + parlante + `wss://` | sin medir; TLS suma decenas de KB internos |
+
+**Lectura:** el AFE consume casi toda la RAM interna que queda hoy; S4 es requisito para activarlo, y con AFE conviene `ws://` en el alfa. La PSRAM y la CPU alcanzan.
+
 ## 2. Tareas, cores y prioridades
 
 Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). Prioridad mayor = más urgente; en un mismo core, igual prioridad se reparte el tiempo (tick de 1 ms). Las del sistema son los **defaults de ESP-IDF, sin verificar** (no hay IDF en esta PC; confirmar en menuconfig). Qué hace cada una con los datos: §3.1.
 
-| Tarea | Qué hace | Core | Prio | Pila |
-|---|---|---|---|---|
-| Wi-Fi (sistema) | Radio y eventos de red | 0 | 23 | — |
-| `esp_timer`, event loop (sistema) | Timers y eventos | 0 | 22 / 20 | — |
-| lwIP `tcpip_thread` (sistema) | Pila TCP/IP | 0 (fijado en `sdkconfig.defaults`) | 18 | — |
-| `captura` | I2S → ring in | 1 | 6 | 4 KB |
-| `feed` | Ring in → AFE (o mono → ring out) | 1 | 5 | 4 KB |
-| `fetch` (solo con AFE) | Salida del AFE → ring out | 1 | 5 | 4 KB |
-| AFE interno (solo con AFE) | Procesa el audio | 0 | 5 | — |
-| `sink` | Ring out → mensajes → `send` | 0 | 5 | 6 KB |
-| `orbita_ws` | Cliente WebSocket (librería) | **sin fijar** | 4 | 6 KB |
-| `orbita_wifi` | Conexión y reintentos | **sin fijar** | 3 | 4 KB |
-| `app_main` | Arranque | 0 | 1 | 8 KB |
-| `envio` (`test.c`, laboratorio) | WAV por UART0 | 0 | 5 | 4 KB |
-| `orbita_playback` (S7) | Ring de salida → I2S del parlante | 0 | 6 | — |
+| Tarea | Qué hace | Core | Prio | Pila asignada | Pila en uso (máx.) |
+|---|---|---|---|---|---|
+| Wi-Fi (sistema) | Radio y eventos de red | 0 | 23 | — | — |
+| `esp_timer`, event loop (sistema) | Timers y eventos | 0 | 22 / 20 | — | — |
+| lwIP `tcpip_thread` (sistema) | Pila TCP/IP | 0 (fijado en `sdkconfig.defaults`) | 18 | — | — |
+| `captura` | I2S → ring in | 1 | 6 | 4 KB | sin medir |
+| `feed` | Ring in → AFE (o mono → ring out) | 1 | 5 | 4 KB | sin medir |
+| `fetch` (solo con AFE) | Salida del AFE → ring out | 1 | 5 | 4 KB | sin medir |
+| AFE interno (solo con AFE) | Procesa el audio | 0 | 5 | — | — |
+| `sink` | Ring out → mensajes → `send` | 0 | 5 | 6 KB | ~2,7 KB (libre ≥ 3,4 KB; `pruebas_socket.md`) |
+| `orbita_ws` | Cliente WebSocket (librería) | **sin fijar** | 4 | 6 KB | sin medir |
+| `orbita_wifi` | Conexión y reintentos | **sin fijar** | 3 | 4 KB | sin medir |
+| `app_main` | Arranque | 0 | 1 | 8 KB | sin medir |
+| `envio` (`test.c`, laboratorio) | WAV por UART0 | 0 | 5 | 4 KB | sin medir |
+| `orbita_playback` (S7) | Ring de salida → I2S del parlante | 0 | 6 | — | — |
 
 **REPARTO DE CORES:**
 - core 0: main, wifi, envio (sink) y recepcion (parlante, sink)
 - core 1: pipeline de audio
 
 - **lwIP fijado al core 0** (`CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0`, nombre sin verificar contra el IDF): con prio 18 > captura 6, si corría en el core 1 le robaba CPU a la captura en cada ráfaga TCP. Confirmar con Wi-Fi activo (A9) que el DMA no se desborda.
-- **`sink` (5) > `orbita_ws` (4):** al drenar atraso el sink no duerme y puede demorar el heartbeat/pong del cliente WebSocket si este queda en su mismo core. Verificar con el corte largo; el remedio es un `vTaskDelay(1)` cada N mensajes o subir `orbita_ws` a 5.
+- **Prioridad de `orbita_ws` (4) vs. `sink` (5): a ver con Juani.** `orbita_ws` recibe los `PLAY` del parlante; hay que decidir si debe quedar por encima de quien envía. No se cambia sin él.
 - **Parlante (propuesta):** core 0 con prio 6 (> sink, para que el drenaje no la deje sin datos). Consume poco CPU y el colchón del DMA de salida absorbe las ráfagas de Wi-Fi; el core 1 queda para el audio de entrada. Si luego se agrega AEC, la referencia debe quedar alineada con `feed`: se revisa entonces.
 
 ## 3. DSP y pipeline de audio
@@ -135,7 +177,7 @@ La tarea `captura` lee el I2S (slots de 32 bit, 24 útiles en el INMP441), convi
 
 ### 3.3 AFE y wake word
 
-- **AFE (`esp-sr`):** solo VAD (NS, AGC y WakeNet apagados). Desactivable en compilación (`CONFIG_ORBITA_PIPELINE_USA_AFE`); **hoy apagado y en pausa** (decisión 11/10, `plan_dante.md`). Con 2 mics el BSS no actúa (medido 12/10) y el NS del AFE solo existe en `AFE_TYPE_VC`. La cifra "~1,2 MB de PSRAM y ~46 % de un núcleo" es estimación sin fuente.
+- **AFE (`esp-sr`):** solo VAD (NS, AGC y WakeNet apagados). Desactivable en compilación (`CONFIG_ORBITA_PIPELINE_USA_AFE`); **apagado por defecto; en el alfa se enciende para AEC y VAD** (`plan_prototipo_alfa.md`, S9). NS y beamforming siguen en pausa (decisión 11/10, `plan_dante.md`). Con 2 mics el BSS no actúa (medido 12/10) y el NS del AFE solo existe en `AFE_TYPE_VC`. La cifra "~1,2 MB de PSRAM y ~46 % de un núcleo" es estimación sin fuente.
 - **Wake word "Órbita":** modelo propio de Edge Impulse, con su propio búfer de ventana; consume todo el audio siempre. Si corre sobre audio crudo o sobre la salida del AFE se decide con datos (`plan_dante.md`).
 - **Mono:** al ring out va audio mono (salida del AFE, o canal L del crudo sin AFE; L o mezcla: a decidir con Comunicación). Se reduce lo más tarde posible, nunca antes del ring in.
 - **AEC (riesgo):** `feed` pide la referencia del parlante al final (mic, mic, ref). Condiciona el ruteo del parlante en la PCB. No diseñar todavía.
