@@ -46,6 +46,10 @@ Se escribe en `INTEGRACION_WEBSOCKET.md` y se commitea a **las dos ramas** antes
 Carpetas: `firmware/components/orbita_audio`, `orbita_pipeline`, `orbita_playback` (nuevo), `sdkconfig.defaults`, `firmware/main/`.
 
 - [ ] **S4 Presupuesto de RAM** (requisito de S7). `orbita_ws_message_t` lleva `data[8192]` y se copia 6 veces (cola RX de 4, `s_rx`, `reply`...): ≥ 50 KB internos para recibir un `ready` de ~50 B. Bajar el mensaje de control a ≤ 512 B, mover buffers grandes a PSRAM, medir RAM interna antes/después y anotar en `orbita-obsidian/arquitectura.md`.
+- [ ] **S4b Revisión de memoria** (a hablar; auditoría del 13/10 sobre el código, sin medir en la placa). Hoy hay ~80 KB de RAM interna libre con Wi-Fi + socket, sin AFE ni parlante.
+  - **Mal alojado:** el módulo WebSocket pasa de 60 KB internos (cola RX 4 × 8,2 KB, `s_rx`, `s.reply`, buffer de la librería 8 KB, pila 6 KB, `packet` 4 KB). Es S4: más de la mitad de lo que queda.
+  - **Bien alojado:** ring out (1,04 MB) y ring in (33 KB) en PSRAM; DMA del I2S (~15 KB) y buffers de captura/sink (~25 KB) en interna.
+  - **Pulir:** (1) medir `ram_int` con parlante + AFE (si se activa) antes de elegir `ws://` o `wss://`: TLS suma decenas de KB internos; (2) pilas fijas en ~37 KB con `highwater` medido solo para el sink (queda 3,7 KB libres de 6): medir las demás; (3) `ram_int` bajó de 82 a 61 KB en 12 handshakes fallidos (~1,7 KB cada uno) y se recuperó: confirmar con un corte largo; (4) buffer de reproducción en PSRAM con tamaño que fija el Paso 0 (largo máximo de la respuesta).
 - [ ] **Pruebas en la placa** (registro en `pruebas_socket.md`):
   2. Corte corto de Wi-Fi (~10 s) con la sesión en curso: reconecta, el servidor no cierra con error, hueco entre sesiones = 0.
   3. Corte largo (> 40 s): no salta el watchdog (el sink drena el atraso sin dormir, prio 5 > red 4) y el descarte del mensaje retenido aparece en el log.
