@@ -59,6 +59,7 @@ Sí cursamos una materia de C hace unos años, pero **lo tenemos oxidado** — n
 - Ir por frente: no adelantar diseño de otros frentes o fases futuras sin pedido explícito. Las interfaces entre frentes (la FSM del vault) sí se revisan siempre.
 - Al introducir una librería o patrón nuevo, explicarlo y construir el código de forma incremental junto al usuario (no entregar todo de una vez) — objetivo es que entiendan las bases.
 - **Notas en `.md` (docs, plan, vault) lo más acotadas posible, sin perder claridad:** sin relleno ni repetir lo que ya está en otro archivo; no llenar el repo de texto.
+- **Datasheet como fuente:** al afirmar un pin, registro, tensión o tiempo, citar la sección o tabla del datasheet (o consultar el MCP `espressif-docs`); si no se pudo verificar, decirlo. No afirmar de memoria.
 - **Ser crítico con cada decisión, no solo cuando se pregunta.** No hace falta ser criticón, pero sí juzgar activamente cada elección de diseño (buffers, formatos, protocolos, manejo de errores, uso de memoria, etc.) pensando en el producto final — señalar de entrada si algo puede salir caro de corregir más adelante (en escalabilidad, en PCB, en producción), en vez de esperar a que se pregunte explícitamente.
 
 ## Sincronización de instrucciones (Claude y Codex)
@@ -74,4 +75,6 @@ Las instrucciones completas de estas herramientas se mantienen en los siguientes
 - `.claude/settings.json`: configuración de los hooks de Claude.
 - `.claude/hooks/guard-sensitive-edits.sh`: solicita confirmación antes de editar `sdkconfig.defaults` o `audio_capture.h`, y recuerda revisar las restricciones de pines.
 - `.claude/hooks/remind-explain-c.sh`: recuerda explicar conceptos o patrones de C nuevos al editar archivos `.c` o `.h`.
+- `.claude/hooks/build-on-stop.sh`: al terminar una tarea con cambios en `firmware/`, corre `idf.py build` y devuelve el error si falla (se salta si `idf.py` no está en el PATH: abrir Claude desde una terminal de ESP-IDF). El guard de edición también bloquea `sdkconfig`, `build/` y `managed_components/` (archivos generados).
+- `.mcp.json`: MCP `espressif-docs` (documentación oficial de Espressif; pide login con GitHub la primera vez, desde `/mcp`).
 Leer estas referencias no activa automáticamente agentes, skills ni hooks en otra herramienta. Al trabajar en Codex, consultar y respetar las instrucciones aplicables; no asumir que los hooks de Claude se ejecutaron.

@@ -1,5 +1,7 @@
 # Arquitectura — decisiones que afectan al producto final
 
+> **A futuro (diseño de la PCB):** probar los MCP de KiCad (`mixelpixx/KiCAD-MCP-Server`, el más maduro, pide KiCad 9+) y de partes JLCPCB/LCSC (`jlc-mcp`) para revisar esquemáticos y elegir componentes. Son comunitarios e inmaduros: usarlos como segunda opinión, nunca como verificación; los pines y tensiones se confirman a mano contra el datasheet. Detalle en `reports/Herramientas Claude para firmware embebido.md`.
+
 FSM: `órbita..md`. Hardware y pines: `CLAUDE.md`.
 
 Estado: **Cerrada** · **Provisoria** (vale hasta medir/verificar) · **Propuesta** (sin validar) · **Abierta**.

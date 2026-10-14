@@ -23,6 +23,18 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/build-on-stop.sh",
+            "shell": "bash",
+            "timeout": 600
+          }
+        ]
+      }
     ]
   }
 }
