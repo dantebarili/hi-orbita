@@ -42,6 +42,11 @@ CONFIG_FREERTOS_HZ=1000
 # cache de la flash esta apagada por una escritura/borrado (NVS, OTA). Sin esto, el DMA pisa audio.
 CONFIG_I2S_ISR_IRAM_SAFE=y
 
+# La tarea de lwIP (tcpip_thread, prioridad ~18) queda fija en el core 0, junto con el Wi-Fi.
+# Sin esto puede correr en el core 1 y quitarle CPU a la captura (prioridad 6) en cada rafaga TCP.
+# Nombre de la opcion sin verificar contra el IDF: comprobar en el sdkconfig regenerado.
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+
 # Stack de app_main (antes 3584 bytes, justo para un printf). Sale de la
 # RAM interna, asi que no subirlo de mas.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
