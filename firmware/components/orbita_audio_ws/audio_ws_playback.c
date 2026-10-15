@@ -164,6 +164,36 @@ static void on_playback_event(orbita_play_event_t event, uint32_t token, void *c
         ESP_LOGW(TAG, "No se pudo encolar play_done (%s)", esp_err_to_name(err));
 }
 
+// DIAGNOSTICO (borrar cuando suene): tono local de 1 s al arrancar, SIN red. Usa el mismo camino que un PLAY del
+// servidor (begin -> push -> ring -> tarea -> I2S). Si suena y el PLAY del servidor no, el problema esta en el
+// estado/eventos de la respuesta; si no suena, en el I2S, el cableado o la alimentacion. Poner en 0 para quitarlo.
+#define PLAY_BOOT_TONE 1
+#define BOOT_TONE_TOKEN 0xB007u   // fuera del mapa del servidor: sus eventos no generan play_done
+
+#if PLAY_BOOT_TONE
+static void boot_tone(void)
+{
+    static const int16_t ciclo[16] = {0, 6123, 11314, 14782, 16000, 14782, 11314, 6123,
+                                      0, -6123, -11314, -14782, -16000, -14782, -11314, -6123};
+    int16_t trozo[800];   // 50 ciclos de 1 kHz: sin salto de fase entre push y push
+    for (int i = 0; i < 800; ++i) trozo[i] = ciclo[i % 16];
+    esp_err_t err = orbita_playback_begin(BOOT_TONE_TOKEN);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Tono de arranque: begin fallo (%s)", esp_err_to_name(err));
+        return;
+    }
+    for (int i = 0; i < 20; ++i) {   // 20 x 50 ms = 1 s
+        err = orbita_playback_push((const uint8_t *)trozo, sizeof(trozo));
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Tono de arranque: push %d fallo (%s)", i, esp_err_to_name(err));
+            break;
+        }
+    }
+    err = orbita_playback_end();
+    ESP_LOGI(TAG, "Tono de arranque encolado (1 kHz, 1 s); end=%s", esp_err_to_name(err));
+}
+#endif
+
 esp_err_t audio_ws_playback_init(void)
 {
     const orbita_playback_cfg_t config = {
@@ -174,7 +204,11 @@ esp_err_t audio_ws_playback_init(void)
         .cb = on_playback_event,
         .cb_ctx = NULL,
     };
-    return orbita_playback_init(&config);
+    esp_err_t err = orbita_playback_init(&config);
+#if PLAY_BOOT_TONE
+    if (err == ESP_OK) boot_tone();
+#endif
+    return err;
 }
 
 bool audio_ws_playback_on_downlink(void *ctx, const orbita_ws_downlink_event_t *event)

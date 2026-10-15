@@ -114,6 +114,25 @@ static esp_err_t i2s_salida_iniciar(const orbita_playback_cfg_t *cfg){
     return ESP_OK;
 }
 
+// DIAGNOSTICO (borrar cuando suene): cuenta lo que realmente sale del ring y llega al DMA del I2S, para
+// compararlo con el CRC de recepcion de audio_ws_playback ("PLAY RX"). CRC32 igual al de zlib, sobre el PCM
+// tal cual salio del ring, ANTES del tope de volumen. Solo lo toca tarea_play (y begin con la tarea en reposo).
+static uint32_t diag_crc_ring = 0;     // CRC del PCM sacado del ring
+static uint32_t diag_bytes_ring = 0;   // bytes sacados del ring
+static uint32_t diag_bytes_i2s = 0;    // bytes que i2s_channel_write dice haber copiado al DMA
+static uint32_t diag_err_i2s = 0;      // llamadas a i2s_channel_write que devolvieron error
+
+static uint32_t diag_crc32(uint32_t previo, const uint8_t *d, size_t n){
+    uint32_t crc = ~previo;
+    for (size_t i = 0; i < n; i++) {
+        crc ^= d[i];
+        for (int b = 0; b < 8; b++) {
+            crc = (crc >> 1) ^ ((crc & 1) ? 0xEDB88320u : 0);
+        }
+    }
+    return ~crc;
+}
+
 // Aplica el tope de volumen (ORBITA_PLAY_GAIN_Q15) en el lugar. Q15: 32768 = 1,0, asi que `>> 15` divide por 32768.
 // Se multiplica en int32_t: una muestra de 16 bit por hasta 32768 no entra en 16 bit. `n_bytes` es par (todos los push lo son).
 static void aplicar_ganancia(void *datos, size_t n_bytes){
@@ -151,6 +170,9 @@ static void tarea_play(void *arg){
             estado_play = LIBRE;
             xSemaphoreGive(mutex_play);
             en_underrun = false;
+            ESP_LOGI(TAG, "DIAG (stop) ring: bytes=%u crc32=%08x | i2s: bytes=%u errores=%u",
+                     (unsigned)diag_bytes_ring, (unsigned)diag_crc_ring,
+                     (unsigned)diag_bytes_i2s, (unsigned)diag_err_i2s);
             emitir(ORBITA_PLAY_EV_STOPPED, id);   // fuera del mutex
             continue;
         }
@@ -166,11 +188,15 @@ static void tarea_play(void *arg){
         void *trozo = xRingbufferReceiveUpTo(ring_play, &n, pdMS_TO_TICKS(PLAY_POLL_MS), PLAY_TROZO_BYTES);
         if (trozo != NULL) {
             en_underrun = false;
+            diag_crc_ring = diag_crc32(diag_crc_ring, (const uint8_t *)trozo, n);   // DIAGNOSTICO: antes del tope
+            diag_bytes_ring += (uint32_t)n;
             aplicar_ganancia(trozo, n);   // tope de volumen, sobre el trozo que esta en el ring (ya es nuestro)
             // i2s_channel_write se bloquea hasta que el DMA tiene lugar: es la que marca el ritmo real (16 kHz).
             size_t escritos = 0;
             esp_err_t err = i2s_channel_write(tx_chan, trozo, n, &escritos, PLAY_I2S_WRITE_TIMEOUT_MS);
+            diag_bytes_i2s += (uint32_t)escritos;
             if (err != ESP_OK) {
+                diag_err_i2s++;
                 ESP_LOGW(TAG, "i2s_channel_write: %s (%u de %u B)", esp_err_to_name(err), (unsigned)escritos, (unsigned)n);
             }
             vRingbufferReturnItem(ring_play, trozo);
@@ -194,6 +220,9 @@ static void tarea_play(void *arg){
             if (fin) {
                 ESP_LOGI(TAG, "respuesta terminada: underruns=%u, pila libre=%u B",
                          (unsigned)underruns, (unsigned)uxTaskGetStackHighWaterMark(NULL));
+                ESP_LOGI(TAG, "DIAG ring: bytes=%u crc32=%08x | i2s: bytes=%u errores=%u",
+                         (unsigned)diag_bytes_ring, (unsigned)diag_crc_ring,
+                         (unsigned)diag_bytes_i2s, (unsigned)diag_err_i2s);
                 emitir(ORBITA_PLAY_EV_DONE, id);  // fuera del mutex
             }
         } else if (!en_underrun) {       // SONANDO con el ring vacio: llego tarde el audio, se oye un corte
@@ -287,6 +316,7 @@ esp_err_t orbita_playback_begin(uint32_t play_id){
             started_pendiente = false;
             bytes_recibidos_play = 0;
             underruns_play = 0;
+            diag_crc_ring = 0; diag_bytes_ring = 0; diag_bytes_i2s = 0; diag_err_i2s = 0;   // DIAGNOSTICO
             libre = true;
         }
         xSemaphoreGive(mutex_play);
