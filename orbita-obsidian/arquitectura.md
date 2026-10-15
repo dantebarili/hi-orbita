@@ -186,7 +186,20 @@ La tarea `captura` lee el I2S (slots de 32 bit, 24 útiles en el INMP441), convi
 - **AFE (`esp-sr`):** solo VAD (NS, AGC y WakeNet apagados). Desactivable en compilación (`CONFIG_ORBITA_PIPELINE_USA_AFE`); **apagado por defecto; en el alfa se enciende para AEC y VAD** (`plan_prototipo_alfa.md`, S9). NS y beamforming siguen en pausa (decisión 11/10, `plan_dante.md`). El beamforming (BSS) no actuaba con 2 mics (medido 12/10) y se sacó el 14/10 (`se_init = false`, sin probar con el AFE encendido); el VAD queda en modo 4 por defecto. El NS del AFE solo existe en `AFE_TYPE_VC`. La cifra "~1,2 MB de PSRAM y ~46 % de un núcleo" es estimación sin fuente.
 - **Wake word "Órbita":** modelo propio de Edge Impulse, con su propio búfer de ventana; consume todo el audio siempre. Si corre sobre audio crudo o sobre la salida del AFE se decide con datos (`plan_dante.md`).
 - **Mono:** al ring out va audio mono (salida del AFE, o canal L del crudo sin AFE; L o mezcla: a decidir con Comunicación). Se reduce lo más tarde posible, nunca antes del ring in.
-- **AEC (riesgo):** `feed` pide la referencia del parlante al final (mic, mic, ref). Condiciona el ruteo del parlante en la PCB. No diseñar todavía.
+- **AEC (diseño, 15/10; pasos y pendientes en `plan_prototipo_alfa.md` S9):**
+  - **Cómo funciona:** el parlante reproduce `x(n)`; el mic oye la voz más el eco, `d(n) = voz + h * x(n)` (`h` = camino parlante → aire → mic). Un filtro FIR de `L` coeficientes `w` estima el eco `ŷ(n) = w * x(n)` a partir de la referencia, se resta (`e(n) = d(n) − ŷ(n)`) y `e(n)` ajusta `w` (tipo LMS/NLMS) para minimizar el residuo. Sigue un NLP (supresor del eco que queda) y el VAD. Todo ocurre **dentro** del AFE: `feed` solo entrega mic, mic, ref (`"MMR"`, referencia al final).
+  - **`D` = retardo entre que `x(n)` se entrega como referencia y su eco llega al mic.** El filtro solo cancela ecos con retardo dentro de lo que cubre (`filter_length`; unidad **sin verificar**, hipótesis 4 × 32 ms). Si `D` cae fuera, el AEC no cancela nada. Se compensa con una línea de retardo `τ ≈ D − margen` en la referencia, contando **muestras**, no tiempo de reloj.
+  - **De qué depende `D` (no es una constante de diseño):**
+
+    | Componente | Valor hoy | Qué lo cambia |
+    |---|---|---|
+    | Cola del DMA de salida | hasta 120 ms (domina) | `PLAY_DMA_DESC_NUM × PLAY_DMA_FRAME_NUM`; tamaño de los trozos de escritura; **cuán llena esté la cola** (si la referencia sale al escribir, `D` varía entre ~0 y 120 ms) |
+    | Ampli + parlante | pocos ms, sin verificar | modelo de ampli, filtros internos |
+    | Acústica | ≈ 1 ms a 30 cm | distancia parlante → mic en la PCB |
+    | Entrada del mic | no cuenta si se alinea por índice de muestra | solo si cambia el modo de alineación |
+
+  - **Medición de `D` (pendiente):** reproducir un chirp con `orbita_playback`, capturar el mic crudo y anotar el índice de captura en que se escribió el primer trozo; la correlación cruzada da el retardo. **Repetir siempre que cambie** el DMA, el tamaño de trozo, el ruteo de la PCB o la versión de `esp-sr`/IDF. Valor medido: *sin medir*.
+  - **A decidir:** AEC dentro del AFE (A) o suelto (B) midiendo RAM; `τ` fijo en Kconfig o calculado en ejecución; DMA mínimo con `underruns = 0`; quién expone la referencia (`orbita_playback` no lo hace aún); convergencia entre respuestas y doble habla (el NLP agresivo puede dañar la voz propia). Condiciona el ruteo del parlante en la PCB.
 - Pendientes (`vad_cache`, falsos negativos y positivos de la wake word): en `plan_dante.md`.
 
 ### 3.4 Rings, header y tabla de segmentos
