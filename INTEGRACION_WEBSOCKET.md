@@ -89,7 +89,7 @@ python tools/ws_audio_server.py --stt-window-seconds 8
 
 El modelo `tiny` de faster-whisper se descarga la primera vez y corre localmente en CPU. El servidor imprime la transcripción y busca la palabra completa `Órbita` sin distinguir mayúsculas ni tilde. Si la encuentra, manda `orbita` y reproduce por WebSocket `tools/respuesta_orbita.wav`, si existe. Ese WAV todavía falta: al recibirlo, convertirlo a PCM mono, 16 kHz, 16-bit y guardarlo con ese nombre. Sin el WAV, la detección funciona y queda registrada, pero no hay audio de respuesta. La ventana se analiza una vez por conexión; no es escucha continua de wake word ni STT en tiempo real.
 
-## Downlink: respuesta por el parlante (integrado en `juani`, prueba de placa pendiente)
+## Downlink: respuesta por el parlante (integrado en `juani`)
 
 | Quién | Mensaje | Para qué |
 |---|---|---|
@@ -124,3 +124,12 @@ python -m unittest discover -s tools/tests -v
 34 pruebas (1 salteada: fixture C): protocolo v1, sesión v2, helpers STT/PLAY, tono conocido y recorte exacto con devolución PLAY por socket real, verificando que el uplink y los ACK sigan funcionando.
 
 Estado en hardware (13/10/2026): warm-up, retención y corte de Wi-Fi validados con v1. **v2 probado en la placa**: sesión con `hello`/`ready`, 5 segmentos de 10 s, catch-up de 48 s de audio en 15 s tras un corte largo y huecos marcados (27 s perdidos al desbordar el ring). Falta: corte corto con la sesión en curso, tomas largas (10 min / 1 h) y mirar `sin_ack` y la pila del sink en el monitor.
+
+
+### Prueba integrada de playback (15/10/2026)
+
+Juani confirmó captura, envío continuo y reproducción del intervalo 2–12 s con el amplificador alimentado por una fuente externa de 5 V. El cambio de alimentación permitió que funcionara la prueba; no se midió la causa eléctrica del silencio anterior. Se conservan CRC de PCM recibido y retirado del ring, bytes I2S y errores.
+
+Modo actual: `DIAG_WS_SIN_CAPTURA=0` en `firmware/main/main.c`. Ejecutar `python tools/ws_audio_server.py --replay-window 2 12 --segment-seconds 10`; devuelve el intervalo una vez por conexión. Sigue habilitado el tono local de arranque de 1 s.
+
+Diagnóstico alternativo sin mics: poner `DIAG_WS_SIN_CAPTURA=1`, recompilar y usar `python tools/ws_audio_server.py --playback-diagnostic`. Secuencia: tono local, tono remoto de 3 s, espera de 5 s tras `play_done` y tres pitidos remotos. `diag_local_done` es exclusivo de este diagnóstico; no cambia el protocolo de producción.
