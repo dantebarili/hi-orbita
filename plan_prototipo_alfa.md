@@ -81,7 +81,7 @@ Carpetas: `tools/` (servidor), `firmware/components/orbita_ws`, `orbita_audio_ws
 - [ ] **Investigar** cómo se abre una conversación con un LLM (protocolo, historial/contexto, por turnos vs. voz en tiempo real) para no perder contexto. Bloquea el diseño final, no el alfa.
 - [ ] **Medir el downlink** (timestamp de envío en el servidor vs. recepción en el ESP): velocidad real y valor de prebuffer. Si hace falta, revisar la cola RX, el buffer de 8 KB y la ventana TCP.
 - [ ] **Cliente simulado de la placa** (script que habla `orbita-pcm-v2` y recibe `play`): permite probar el downlink sin hardware (base: `tools/ws_audio_session.py`).
-- [ ] **Recepción en el firmware:** parsear `orbita`, `conversation_end`, `play`, `play_end`, `play_stop` en `orbita_ws` y entregar los frames `PLAY` al callback de `play_push`, en buffer propio (no por la cola RX); enviar `play_done` / `play_reject`. No toca el parlante.
+- [ ] **Recepción en el firmware:** transporte implementado en `juani`: parseo de controles, buffer PLAY propio en PSRAM, callback ordenado y reportes `play_done` / `play_reject` asincronos. Falta conectar el callback a `play_*`, acordar con el servidor el layout binario propuesto y verificar en placa. API/pruebas: `firmware/components/orbita_ws/README.md`.
 - [ ] **`ready` con `last_index`** y manejo del reenvío en el servidor (A6, la mitad de Juani).
 
 ## Paso 2 — Unir (otro día)

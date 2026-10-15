@@ -11,6 +11,7 @@
 #include "orbita_wifi.h"
 #include "orbita_ws.h"
 #include "audio_ws_sink.h"
+#include "audio_ws_playback.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
@@ -41,6 +42,9 @@ void app_main(void)
         arranque_fallo("Configurar Wi-Fi y URI en Orbita integration", ESP_ERR_INVALID_ARG);
     esp_err_t err = orbita_audio_i2s_init();
     if (err != ESP_OK) arranque_fallo("I2S", err);
+    // Reservar el ring del parlante en PSRAM antes de que pipeline/AFE asignen sus buffers.
+    err = audio_ws_playback_init();
+    if (err != ESP_OK) arranque_fallo("playback", err);
     // NULL: sin copias/callbacks del test UART. No enviar desde on_crudo ni on_afe.
     err = orbita_pipeline_start(NULL);
     if (err != ESP_OK) arranque_fallo("pipeline", err);
@@ -56,7 +60,10 @@ void app_main(void)
     err = orbita_wifi_start(CONFIG_ORBITA_WIFI_SSID, CONFIG_ORBITA_WIFI_PASSWORD);
     if (err != ESP_OK) arranque_fallo("Wi-Fi", err);
     // Sin esperar IP: el cliente WebSocket reintenta solo hasta que haya red y servidor.
-    const orbita_ws_config_t ws = { .uri = CONFIG_ORBITA_WS_URI };
+    const orbita_ws_config_t ws = {
+        .uri = CONFIG_ORBITA_WS_URI,
+        .on_downlink = audio_ws_playback_on_downlink,
+    };
     err = orbita_ws_start(&ws);
     if (err != ESP_OK) arranque_fallo("WebSocket", err);
     ESP_LOGI("main", "Audio WebSocket activo; el resumen sale cada 30 s en audio_ws");

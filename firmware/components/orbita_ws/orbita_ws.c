@@ -1,6 +1,7 @@
 /*
  * TRANSPORTE WEBSOCKET: nuestro módulo usa esp_websocket_client de Espressif.
- * No genera datos ni interpreta audio. El adaptador está en orbita_audio_ws/audio_ws_sink.c.
+ * El adaptador de envio esta en orbita_audio_ws/audio_ws_sink.c. Downlink despacha
+ * controles y PCM a un callback; playback sigue siendo el responsable de I2S.
  *
  * MAPA: app_main -> orbita_ws_start, una vez (no hace falta tener IP: reconecta sola).
  * La biblioteca crea su tarea para conectar, recibir y manejar el protocolo.
@@ -8,9 +9,9 @@
  * creada por nosotros ni el callback Wi-Fi del event loop predeterminado.
  *
  * ENVÍO: tarea sink -> adaptador audio_ws_sink -> send -> biblioteca -> servidor.
- * RECEPCIÓN: biblioteca -> on_ws_event -> ws_rx_feed (ws_rx.c) -> cola RX -> receive,
- * llamada por el adaptador para esperar ready/saved. Los callbacks de red siguen
- * recibiendo mientras la tarea sink espera. No se hace eco del audio.
+ * RECEPCION: biblioteca -> on_ws_event -> ws_rx_feed -> ws_downlink -> callback.
+ * ready/ack/texto generico siguen por cola RX -> receive. PLAY usa buffer PSRAM.
+ * Los reportes play_done/reject se encolan y otra tarea los transmite.
  *
  * ESP_OK al iniciar no significa conectado. ESP_OK al enviar no significa que el
  * servidor procesó los datos. Reconectar no reenvía mensajes que pudieron llegar.
@@ -19,11 +20,16 @@
 // API pública propia y reconstructor interno de mensajes (ws_rx.h).
 #include "orbita_ws.h"
 #include "ws_rx.h"
+#include "ws_downlink.h"
+#include "esp_heap_caps.h"
+#include <inttypes.h>
+#include <stdio.h>
 // Estado sincronizado entre tareas y manejo de textos de configuración.
 #include <stdatomic.h>
 #include <string.h>
 // FreeRTOS provee banderas, cola de mensajes y mutex (permiso exclusivo para enviar).
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -38,16 +44,16 @@
 // Etiqueta de los registros del módulo, no se transmite al servidor.
 static const char *TAG = "orbita_ws";
 // Referencia al cliente creado en start; se usa para las operaciones de transporte.
-static esp_websocket_client_handle_t s_client;
+static esp_websocket_client_handle_t ws_client;
 // El callback modifica CONNECTED_BIT; los emisores pueden esperar esa señal.
-static EventGroupHandle_t s_events;
+static EventGroupHandle_t ws_events;
 // Cola en RAM: el callback copia mensajes y la tarea receptora los retira.
 static QueueHandle_t s_rx_queue;
 // Mutex para que dos emisores no intercalen envíos. No es una cola TX
 // ni impide por sí mismo que el receptor trabaje mientras enviamos.
 static SemaphoreHandle_t s_tx_lock;
 // Inicialización completa, no conexión confirmada.
-static atomic_bool s_started;
+static atomic_bool ws_started;
 // Número LOCAL que cambia al conectar: permite rechazar respuestas de otra conexión.
 // No se transmite ni representa el ID de sesión/segmento del protocolo del backend.
 static atomic_uint s_generation;
@@ -55,6 +61,54 @@ static atomic_uint s_generation;
 static bool s_start_attempted;
 // Buffer/estado de reconstrucción en RAM estática, fuera de la pila del callback.
 static ws_rx_t s_rx;
+static ws_downlink_t s_downlink;
+// Solo el reconstructor usa estos 4096 B en PSRAM; no se copian en la cola RX.
+static uint8_t *s_play_buffer;
+typedef struct {
+    uint32_t connection;
+    uint64_t id;
+    bool rejected;
+    orbita_ws_play_reason_t reason;
+    uint32_t played_ms;
+} play_feedback_t;
+// Playback publica cierres; solo el callback modifica el estado del receptor.
+typedef struct { uint32_t connection; uint64_t id; } play_completion_t;
+static QueueHandle_t s_completion_queue;
+static QueueHandle_t s_feedback_queue;
+static TaskHandle_t s_feedback_task;
+static esp_err_t send_for_connection(orbita_ws_type_t type, const void *data,
+    size_t size, uint32_t timeout_ms, uint32_t expected_connection);
+
+// Respuestas pequenas pendientes: el callback nunca espera al mutex TX ni a red.
+static void reject_play(void *ctx, uint32_t connection, uint64_t id)
+{
+    (void)ctx;
+    play_feedback_t item={.connection=connection,.id=id,.rejected=true};
+    if (xQueueSend(s_feedback_queue,&item,0)!=pdTRUE)
+        ESP_LOGW(TAG,"Cola de respuestas PLAY llena; reject no encolado");
+}
+
+static void feedback_task(void *arg)
+{
+    (void)arg;
+    // start publica el cliente antes de habilitar envios de esta tarea.
+    ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+    play_feedback_t item;
+    char json[192];
+    for (;;) {
+        if (xQueueReceive(s_feedback_queue,&item,portMAX_DELAY)!=pdTRUE) continue;
+        if (orbita_ws_connection_id()!=item.connection) continue;
+        static const char *reasons[]={"end","stopped","underrun"};
+        int length=item.rejected
+            ? snprintf(json,sizeof(json),"{\"type\":\"play_reject\",\"play_id\":\"%016" PRIx64 "\"}",item.id)
+            : snprintf(json,sizeof(json),"{\"type\":\"play_done\",\"play_id\":\"%016" PRIx64
+                "\",\"reason\":\"%s\",\"played_ms\":%" PRIu32 "}",item.id,reasons[item.reason],item.played_ms);
+        if (length<=0 || (size_t)length>=sizeof(json)) continue;
+        esp_err_t err=send_for_connection(ORBITA_WS_TEXT,json,(size_t)length,1000,item.connection);
+        if (err!=ESP_OK) ESP_LOGW(TAG,"Respuesta PLAY no confirmada localmente: %s",esp_err_to_name(err));
+        // Un fallo es ambiguo: no reenviar automaticamente una respuesta.
+    }
+}
 // Espera ANTES del próximo intento de reconexión: 1, 2, 4, 8 s y se queda en 8 s.
 // Vuelve a 1 s al conectar. La usa solo el callback (tarea de la biblioteca).
 #define BACKOFF_MIN_MS 1000
@@ -79,6 +133,9 @@ static void reset_received(void)
 {
     ws_rx_reset(&s_rx);
     xQueueReset(s_rx_queue);
+    xQueueReset(s_feedback_queue);
+    xQueueReset(s_completion_queue);
+    ws_downlink_reset(&s_downlink,0);
 }
 
 /* CALLBACK: registrado por start con esp_websocket_register_events.
@@ -94,13 +151,14 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *even
     if (id == WEBSOCKET_EVENT_CONNECTED) {
         reset_received();
         unsigned generation = atomic_fetch_add(&s_generation, 1) + 1;
-        xEventGroupSetBits(s_events, CONNECTED_BIT);
+        ws_downlink_reset(&s_downlink,generation);
+        xEventGroupSetBits(ws_events, CONNECTED_BIT);
         ESP_LOGI(TAG, "WebSocket conectado; conexion local=%u", generation);
     // Apagamos el estado y descartamos pendientes. FINISH es tarea terminada,
     // no una desconexión para la que podamos afirmar que continuará reconectando.
     } else if (id == WEBSOCKET_EVENT_DISCONNECTED || id == WEBSOCKET_EVENT_CLOSED ||
                id == WEBSOCKET_EVENT_FINISH) {
-        xEventGroupClearBits(s_events, CONNECTED_BIT);
+        xEventGroupClearBits(ws_events, CONNECTED_BIT);
         reset_received();
         if (id == WEBSOCKET_EVENT_FINISH) {
             // Sin tarea no hay reconexión automática: el sink la reinicia (keepalive).
@@ -111,7 +169,7 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *even
             // corre en el hilo que provoca el corte, que puede ser la tarea de la biblioteca o la
             // tarea que llamó a send (el sink, con su pila chica). set_reconnect_timeout no bloquea.
             int espera = atomic_load(&s_backoff_ms);
-            esp_websocket_client_set_reconnect_timeout(s_client, espera);
+            esp_websocket_client_set_reconnect_timeout(ws_client, espera);
             ESP_LOGW(TAG, "WebSocket desconectado; reintento en %d ms", espera);
             atomic_store(&s_backoff_ms, espera * 2 > BACKOFF_MAX_MS ? BACKOFF_MAX_MS : espera * 2);
         }
@@ -123,8 +181,12 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *even
     // ws_rx_feed arma el mensaje: op_code indica tipo; fin, último frame;
     // payload_len/offset describen el frame; data_ptr/data_len describen ESTE trozo.
     } else if (id == WEBSOCKET_EVENT_DATA) {
+        play_completion_t completed;
+        while (xQueueReceive(s_completion_queue,&completed,0)==pdTRUE)
+            ws_downlink_finish(&s_downlink,completed.connection,completed.id);
         if (event->data_len < 0 || event->payload_len < 0 || event->payload_offset < 0) {
             ws_rx_reset(&s_rx);
+            ws_downlink_fail(&s_downlink);
             ESP_LOGW(TAG, "Metadatos RX invalidos; rechazados=%u", ++s_rejected);
             return;
         }
@@ -134,6 +196,14 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *even
         // Solo mensajes completos van a la cola. MORE espera; CONTROL no es contenido de aplicación.
         if (result == WS_RX_COMPLETE) {
             s_rx.message.connection_id = atomic_load(&s_generation);
+            ws_dl_result_t handled = s_rx.message.type == ORBITA_WS_BINARY
+                ? ws_downlink_binary(&s_downlink,s_play_buffer,s_rx.message.size)
+                : ws_downlink_control(&s_downlink,s_rx.message.data,s_rx.message.size);
+            if (handled == WS_DL_INVALID) {
+                ESP_LOGW(TAG,"Downlink invalido; rechazados=%u",++s_rejected);
+                return;
+            }
+            if (handled == WS_DL_HANDLED) return;
 
             // Copia el mensaje sin esperar (0); s_rx podrá reutilizarse. Si no hay
             // lugar, descartamos el nuevo en vez de frenar el procesamiento de red.
@@ -141,6 +211,7 @@ static void on_ws_event(void *arg, esp_event_base_t base, int32_t id, void *even
                 ESP_LOGW(TAG, "Cola RX llena; descartados=%u", ++s_dropped);
             }
         } else if (result == WS_RX_INVALID || result == WS_RX_TOO_LARGE) {
+            ws_downlink_fail(&s_downlink);
             ESP_LOGW(TAG, "Mensaje RX rechazado (causa=%d); total=%u",
                      (int)result, ++s_rejected);
         }
@@ -167,10 +238,20 @@ esp_err_t orbita_ws_start(const orbita_ws_config_t *config)
     esp_err_t err = ESP_ERR_NO_MEM;
     // Recursos FreeRTOS: bandera inicialmente apagada, cola vacía y mutex.
     // La cola reserva memoria para 4 estructuras completas, incluidos sus buffers.
-    s_events = xEventGroupCreate();
+    ws_events = xEventGroupCreate();
     s_rx_queue = xQueueCreate(RX_QUEUE_LENGTH, sizeof(orbita_ws_message_t));
     s_tx_lock = xSemaphoreCreateMutex();
-    if (s_events == NULL || s_rx_queue == NULL || s_tx_lock == NULL) goto fail;
+    s_feedback_queue = xQueueCreate(8,sizeof(play_feedback_t));
+    s_completion_queue = xQueueCreate(8,sizeof(play_completion_t));
+    s_play_buffer = heap_caps_malloc(ORBITA_WS_MAX_PLAY_BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    if (ws_events == NULL || s_rx_queue == NULL || s_tx_lock == NULL ||
+        s_feedback_queue == NULL || s_completion_queue == NULL || s_play_buffer == NULL) goto fail;
+    s_rx.binary_buffer=s_play_buffer;
+    s_rx.binary_capacity=ORBITA_WS_MAX_PLAY_BYTES;
+    s_downlink=(ws_downlink_t){.callback=config->on_downlink,.ctx=config->downlink_ctx,
+        .reject=reject_play};
+    if (xTaskCreatePinnedToCore(feedback_task,"ws_play_reports",6144,NULL,3,
+        &s_feedback_task,0)!=pdPASS) goto fail;
 
     // Ajustes de la biblioteca. Headers/subprotocol adaptan el contrato del servidor.
     // El certificado debe mantenerse válido durante toda la vida del cliente.
@@ -205,17 +286,18 @@ esp_err_t orbita_ws_start(const orbita_ws_config_t *config)
         .task_name = "orbita_ws",
     };
     // Crea el cliente; aún falta arrancar su tarea.
-    s_client = esp_websocket_client_init(&client_config);
-    if (s_client == NULL) goto fail;
+    ws_client = esp_websocket_client_init(&client_config);
+    if (ws_client == NULL) goto fail;
     // Aquí registramos NUESTRA on_ws_event para todos los eventos del cliente.
     // No ejecuta el callback ahora; NULL es el argumento adicional no utilizado.
-    err = esp_websocket_register_events(s_client, WEBSOCKET_EVENT_ANY, on_ws_event, NULL);
+    err = esp_websocket_register_events(ws_client, WEBSOCKET_EVENT_ANY, on_ws_event, NULL);
     if (err != ESP_OK) goto fail;
     // Arranca el trabajo de conexión/recepción en la tarea de la biblioteca.
-    err = esp_websocket_client_start(s_client);
+    err = esp_websocket_client_start(ws_client);
     if (err != ESP_OK) goto fail;
     // Publicamos componente preparado; app_main podrá crear las tareas de prueba.
-    atomic_store(&s_started, true);
+    atomic_store(&ws_started, true);
+    xTaskNotifyGive(s_feedback_task);
     return ESP_OK;
 
 // Solo fallo de preparación, no caída normal: liberar lo creado antes de publicar
@@ -223,16 +305,23 @@ esp_err_t orbita_ws_start(const orbita_ws_config_t *config)
 
 fail:
 
-    if (s_client != NULL) {
-        ESP_ERROR_CHECK(esp_websocket_client_destroy(s_client));
-        s_client = NULL;
+    if (ws_client != NULL) {
+        ESP_ERROR_CHECK(esp_websocket_client_destroy(ws_client));
+        ws_client = NULL;
     }
+    if (s_feedback_task != NULL) { vTaskDelete(s_feedback_task); s_feedback_task=NULL; }
+    if (s_feedback_queue != NULL) { vQueueDelete(s_feedback_queue); s_feedback_queue=NULL; }
+    if (s_completion_queue != NULL) { vQueueDelete(s_completion_queue); s_completion_queue=NULL; }
+    heap_caps_free(s_play_buffer);
+    s_play_buffer=NULL;
+    s_rx.binary_buffer=NULL;
+    s_rx.binary_capacity=0;
     if (s_tx_lock != NULL) vSemaphoreDelete(s_tx_lock);
     if (s_rx_queue != NULL) vQueueDelete(s_rx_queue);
-    if (s_events != NULL) vEventGroupDelete(s_events);
+    if (ws_events != NULL) vEventGroupDelete(ws_events);
     s_tx_lock = NULL;
     s_rx_queue = NULL;
-    s_events = NULL;
+    ws_events = NULL;
     return err;
 }
 
@@ -240,16 +329,16 @@ fail:
 // Lee la bandera mantenida por el callback, no envía paquetes para comprobar la red.
 bool orbita_ws_is_connected(void)
 {
-    return atomic_load(&s_started) &&
-        (xEventGroupGetBits(s_events) & CONNECTED_BIT) != 0;
+    return atomic_load(&ws_started) &&
+        (xEventGroupGetBits(ws_events) & CONNECTED_BIT) != 0;
 }
 
 // ESPERA opcional antes de enviar: bloquea al llamador, no al cliente.
 // pdFALSE conserva CONNECTED_BIT para otros lectores; timeout no cancela reconexión.
 esp_err_t orbita_ws_wait_connected(uint32_t timeout_ms)
 {
-    if (!atomic_load(&s_started)) return ESP_ERR_INVALID_STATE;
-    xEventGroupWaitBits(s_events, CONNECTED_BIT, pdFALSE, pdFALSE, to_ticks(timeout_ms));
+    if (!atomic_load(&ws_started)) return ESP_ERR_INVALID_STATE;
+    xEventGroupWaitBits(ws_events, CONNECTED_BIT, pdFALSE, pdFALSE, to_ticks(timeout_ms));
     return orbita_ws_is_connected() ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
@@ -259,8 +348,8 @@ esp_err_t orbita_ws_wait_connected(uint32_t timeout_ms)
  * No usar desde captura de audio ni callbacks porque puede bloquear al llamador.
  * Timeout 1..60000 ms por espera/escritura, no garantía de plazo total estricto.
  */
-esp_err_t orbita_ws_send(orbita_ws_type_t type, const void *data,
-                          size_t size, uint32_t timeout_ms)
+static esp_err_t send_for_connection(orbita_ws_type_t type, const void *data,
+                          size_t size, uint32_t timeout_ms, uint32_t expected_connection)
 {
     if ((type != ORBITA_WS_TEXT && type != ORBITA_WS_BINARY) ||
         (data == NULL && size != 0) || size > ORBITA_WS_MAX_MESSAGE_BYTES ||
@@ -271,14 +360,15 @@ esp_err_t orbita_ws_send(orbita_ws_type_t type, const void *data,
     if (xSemaphoreTake(s_tx_lock, timeout) != pdTRUE) return ESP_ERR_TIMEOUT;
     esp_err_t err = ESP_ERR_INVALID_STATE;
     // Pudo caer la conexión mientras esperábamos: consultar de nuevo antes de escribir.
-    if (orbita_ws_is_connected()) {
+    if (orbita_ws_is_connected() && (!expected_connection ||
+        expected_connection == atomic_load(&s_generation))) {
         unsigned generation = atomic_load(&s_generation);
 
         // Puntero válido incluso para mensaje vacío; texto/binario se envían con distinta API.
         const char *payload = size == 0 ? "" : (const char *)data;
         int sent = type == ORBITA_WS_TEXT
-            ? esp_websocket_client_send_text(s_client, payload, (int)size, timeout)
-            : esp_websocket_client_send_bin(s_client, payload, (int)size, timeout);
+            ? esp_websocket_client_send_text(ws_client, payload, (int)size, timeout)
+            : esp_websocket_client_send_bin(ws_client, payload, (int)size, timeout);
         // Éxito local exige tamaño esperado y misma generación de conexión.
         // No prueba procesamiento remoto. Ante fallo no repetir: pudo llegar al servidor.
         err = sent == (int)size && generation == atomic_load(&s_generation)
@@ -290,6 +380,35 @@ esp_err_t orbita_ws_send(orbita_ws_type_t type, const void *data,
     return err;
 }
 
+esp_err_t orbita_ws_send(orbita_ws_type_t type, const void *data,
+    size_t size, uint32_t timeout_ms)
+{
+    return send_for_connection(type,data,size,timeout_ms,0);
+}
+
+static esp_err_t queue_feedback(play_feedback_t item)
+{
+    if (!atomic_load(&ws_started) || !item.connection ||
+        orbita_ws_connection_id()!=item.connection) return ESP_ERR_INVALID_STATE;
+    // Publicar primero el cierre local: el siguiente downlink ya puede ser otro PLAY.
+    // Si luego falla la cola TX, el cierre local permanece; reintentar es inocuo.
+    play_completion_t completed={.connection=item.connection,.id=item.id};
+    if (xQueueSend(s_completion_queue,&completed,0)!=pdTRUE) return ESP_ERR_NO_MEM;
+    return xQueueSend(s_feedback_queue,&item,0)==pdTRUE ? ESP_OK : ESP_ERR_NO_MEM;
+}
+esp_err_t orbita_ws_play_done(uint32_t connection, uint64_t id,
+    orbita_ws_play_reason_t reason, uint32_t played_ms)
+{
+    if (reason<ORBITA_WS_PLAY_FINISHED || reason>ORBITA_WS_PLAY_UNDERRUN)
+        return ESP_ERR_INVALID_ARG;
+    return queue_feedback((play_feedback_t){.connection=connection,.id=id,
+        .reason=reason,.played_ms=played_ms});
+}
+esp_err_t orbita_ws_play_reject(uint32_t connection, uint64_t id)
+{
+    return queue_feedback((play_feedback_t){.connection=connection,.id=id,.rejected=true});
+}
+
 /* RECEPCIÓN llamada por el adaptador para retirar controles del servidor.
  * Retira una COPIA de la cola que llena el callback, no lee directamente del socket.
  * Un consumidor; out reserva una estructura completa. Texto no agrega terminador NUL.
@@ -298,7 +417,7 @@ esp_err_t orbita_ws_send(orbita_ws_type_t type, const void *data,
 esp_err_t orbita_ws_receive(orbita_ws_message_t *out, uint32_t timeout_ms)
 {
     if (out == NULL) return ESP_ERR_INVALID_ARG;
-    if (!atomic_load(&s_started)) return ESP_ERR_INVALID_STATE;
+    if (!atomic_load(&ws_started)) return ESP_ERR_INVALID_STATE;
     if (xQueueReceive(s_rx_queue, out, to_ticks(timeout_ms)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
@@ -314,8 +433,8 @@ esp_err_t orbita_ws_receive(orbita_ws_message_t *out, uint32_t timeout_ms)
 // próxima llamada.
 void orbita_ws_keepalive(void)
 {
-    if (!atomic_load(&s_started) || !atomic_load(&s_needs_restart)) return;
-    if (esp_websocket_client_start(s_client) == ESP_OK) {
+    if (!atomic_load(&ws_started) || !atomic_load(&s_needs_restart)) return;
+    if (esp_websocket_client_start(ws_client) == ESP_OK) {
         atomic_store(&s_needs_restart, false);
         ESP_LOGW(TAG, "Cliente WebSocket reiniciado");
     }

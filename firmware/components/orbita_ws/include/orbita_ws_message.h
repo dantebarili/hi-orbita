@@ -9,8 +9,8 @@
 // RECEPCIÓN por la cola RX: solo mensajes de CONTROL (JSON: ready, ack, orbita, play...).
 // La cola copia el mensaje entero por valor, así que este tamaño se paga 6 veces en RAM interna
 // (cola de 4 + s_rx + reply). Un mensaje recibido más grande se rechaza (WS_RX_TOO_LARGE).
-// OJO: los frames binarios PLAY (hasta 4 KiB, audio del parlante) NO caben acá: necesitan su
-// propio camino de recepción, con buffer propio, sin pasar por la cola (a cargo de Juani).
+// Los binarios PLAY (hasta 4 KiB incluyendo header) usan buffer propio en PSRAM
+// y on_downlink; nunca se copian a esta estructura ni a la cola de controles.
 #define ORBITA_WS_MAX_CONTROL_BYTES 512
 
 typedef enum {

@@ -2,12 +2,16 @@
 #include <stdbool.h>
 #include "esp_err.h"
 #include "orbita_ws_message.h"
+#include "orbita_ws_downlink.h"
 
 typedef struct {
     const char *uri;          // ws://IP:puerto/ruta o wss://nombre/ruta
     const char *server_ca_pem; // Obligatorio con wss; PEM terminado en '\0'.
     const char *headers;      // Opcional; cada cabecera termina en \r\n.
     const char *subprotocol;  // Opcional; depende del contrato del backend.
+    // Opcional; NULL rechaza PLAY. Callback/ctx deben vivir tanto como el cliente.
+    orbita_ws_downlink_callback_t on_downlink;
+    void *downlink_ctx;
 } orbita_ws_config_t;
 
 // Una instancia por arranque. Llamar después de inicializar la red.
@@ -31,10 +35,23 @@ esp_err_t orbita_ws_send(orbita_ws_type_t type, const void *data,
 
 // Un consumidor. Copia el siguiente mensaje completo en out (reservado por caller).
 // Cola RX de 4 mensajes. Si se llena, descarta el nuevo y registra un contador.
-// Mensajes >8 KiB o fragmentación inválida se rechazan. No entrega mensajes parciales.
+// Controles genericos <=512 B; los PLAY binarios <=4096 B van a on_downlink.
+// orbita/conversation_end/play/play_end/play_stop se despachan antes de esta cola.
 // Texto NO termina en '\0'. Mensajes pendientes se descartan al reconectar.
 // timeout_ms 0 consulta sin esperar. No enviar automáticamente lo recibido (eco infinito).
 esp_err_t orbita_ws_receive(orbita_ws_message_t *out, uint32_t timeout_ms);
+
+// Desde playback: ENCOLAN la respuesta sin esperar (tambien sirven en callback).
+// ESP_OK significa encolado, no entrega remota. NO_MEM = cola llena: llamador
+// decide si vuelve a encolar. INVALID_STATE = conexion vieja: descartar el aviso.
+// Conservar connection_id e id del evento BEGIN; nunca usar la conexion nueva.
+// El consumidor debe detener su reproduccion antes de reportar. El proximo evento
+// RX aplica el cierre local por conexion/id; NO_MEM puede dejar ese cierre encolado
+// aunque falte enviar el reporte. Reintentar no afecta otros IDs.
+// END recibido NO dispara done: reportar cuando el parlante termina/se corta.
+esp_err_t orbita_ws_play_done(uint32_t connection_id, uint64_t play_id,
+    orbita_ws_play_reason_t reason, uint32_t played_ms);
+esp_err_t orbita_ws_play_reject(uint32_t connection_id, uint64_t play_id);
 
 // ID local de conexión; 0 si no está conectado. No es el ID de toma del protocolo.
 uint32_t orbita_ws_connection_id(void);

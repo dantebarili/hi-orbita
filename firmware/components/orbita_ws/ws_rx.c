@@ -54,8 +54,10 @@ ws_rx_result_t ws_rx_feed(ws_rx_t *rx, uint8_t opcode, bool fin,
         } else if (!rx->active) {
             return reject(rx, WS_RX_INVALID);
         }
-        // Límite del MENSAJE completo: ORBITA_WS_MAX_CONTROL_BYTES (512), sumando todos sus frames.
-        if (frame_size > ORBITA_WS_MAX_CONTROL_BYTES - rx->message.size) {
+        // Un reconstructor mantiene el orden; PCM usa un buffer externo propio.
+        size_t capacity = rx->message.type == ORBITA_WS_BINARY && rx->binary_buffer
+            ? rx->binary_capacity : ORBITA_WS_MAX_CONTROL_BYTES;
+        if (rx->message.size > capacity || frame_size > capacity - rx->message.size) {
             return reject(rx, WS_RX_TOO_LARGE);
         }
         // Guardamos datos del frame para comprobar los siguientes trozos.
@@ -73,7 +75,9 @@ ws_rx_result_t ws_rx_feed(ws_rx_t *rx, uint8_t opcode, bool fin,
         return reject(rx, WS_RX_INVALID);
     }
     // Copiamos al final del mensaje y contamos el avance. No validamos UTF-8 aquí.
-    if (size != 0) memcpy(rx->message.data + rx->message.size, data, size);
+    uint8_t *destination = rx->message.type == ORBITA_WS_BINARY && rx->binary_buffer
+        ? rx->binary_buffer : rx->message.data;
+    if (size != 0) memcpy(destination + rx->message.size, data, size);
     rx->message.size += size;
     rx->frame_received += size;
     if (rx->frame_received != frame_size) return WS_RX_MORE;

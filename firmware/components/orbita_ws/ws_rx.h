@@ -11,6 +11,9 @@ typedef struct {
     uint8_t frame_opcode;
     size_t frame_size;
     size_t frame_received;
+    // Buffer externo para binarios PLAY; message sigue teniendo solo 512 B.
+    uint8_t *binary_buffer;
+    size_t binary_capacity;
 } ws_rx_t;
 
 typedef enum {
