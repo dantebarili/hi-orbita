@@ -1,11 +1,11 @@
 menu "Orbita integration"
     choice ORBITA_LAB_MODE
-        prompt "Prueba de laboratorio"
-        default ORBITA_LAB_UART
+        prompt "Modo del firmware"
+        default ORBITA_LAB_WEBSOCKET
         config ORBITA_LAB_UART
-            bool "Audio UART original (Dante)"
+            bool "Captura por UART a WAV (estudio de audio del frente Audio)"
         config ORBITA_LAB_WEBSOCKET
-            bool "Audio mono por WebSocket a WAV"
+            bool "Prototipo: audio continuo por WebSocket y parlante"
             select ESP_WS_CLIENT_SEPARATE_TX_LOCK
     endchoice
 

@@ -115,7 +115,7 @@ Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). 
 | `orbita_wifi` | Conexión y reintentos | **sin fijar** | 3 | 4 KB | sin medir |
 | `app_main` | Arranque | 0 | 1 | 8 KB | sin medir |
 | `envio` (`test.c`, laboratorio) | WAV por UART0 | 0 | 5 | 4 KB | sin medir |
-| `orbita_playback` (S7) | Ring de salida → I2S del parlante (I2S real, tono validado el 15/10; inicializado en modo WebSocket en juani, prueba por red pendiente) | 0 | 6 | 4 KB | sin medir |
+| `orbita_playback` (S7) | Ring de salida → I2S del parlante (validado con red el 15/10) | 0 | 6 | 4 KB | sin medir |
 
 **REPARTO DE CORES:**
 - core 0: main, wifi, envio (sink) y recepcion (parlante, sink)
@@ -124,7 +124,7 @@ Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). 
 - **lwIP fijado al core 0** (`CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0`, nombre sin verificar contra el IDF): con prio 18 > captura 6, si corría en el core 1 le robaba CPU a la captura en cada ráfaga TCP. Confirmar con Wi-Fi activo (A9) que el DMA no se desborda.
 - **Prioridad de `orbita_ws` (4) vs. `sink` (5): a ver con Juani.** `orbita_ws` recibe los `PLAY` del parlante; hay que decidir si debe quedar por encima de quien envía. No se cambia sin él.
 - **Parlante (propuesta):** core 0 con prio 6 (> sink, para que el drenaje no la deje sin datos). Consume poco CPU y el colchón del DMA de salida absorbe las ráfagas de Wi-Fi; el core 1 queda para el audio de entrada. Si luego se agrega AEC, la referencia debe quedar alineada con `feed`: se revisa entonces.
-- **Volumen del parlante limitado por software (15/10):** `orbita_playback` multiplica todo el audio por `ORBITA_PLAY_GAIN_Q15` (hoy 8192 = 0,25 = −12 dB) antes del I2S, en `aplicar_ganancia()` ([orbita_playback.c](../firmware/components/orbita_playback/orbita_playback.c)); la constante está en `orbita_playback.h`. Motivo: DevKit con el amplificador a 3V3 (5 V sin resolver, ver `orbita_pinout.md`) y parlante de 4 Ω. Subir de a poco. Protección de hardware pendiente: pin `GAIN` y alimentación de 5 V en la PCB.
+- **Volumen del parlante limitado por software (15/10):** `orbita_playback` multiplica todo el audio por `ORBITA_PLAY_GAIN_Q15` (hoy 8192 = 0,25 = −12 dB) antes del I2S, en `aplicar_ganancia()` ([orbita_playback.c](../firmware/components/orbita_playback/orbita_playback.c)); la constante está en `orbita_playback.h`. Motivo: proteger el parlante (4 Ω) y la fuente. El amplificador va a 5 V externos (desde el 3V3 del DevKit no sonaba, 15/10). Subir de a poco. Protección de hardware pendiente: pin `GAIN` y riel de 5 V en la PCB.
 - **Mejorable (latencia de arranque del parlante):** en reposo `orbita_playback` mira el estado cada 10 ms (polling, 100 despertares por segundo): hasta 10 ms de demora al empezar a sonar. Alternativa: `xTaskNotifyGive` desde `push`/`end` y `ulTaskNotifyTake` con timeout (arranque inmediato, sin polling). Se dejó el polling por tener menos formas de fallar en silencio; con el prebuffer de 400 ms no se nota. Tiempos en §3.7.
 
 ## 3. DSP y pipeline de audio
@@ -184,7 +184,7 @@ La tarea `captura` lee el I2S (slots de 32 bit, 24 útiles en el INMP441), convi
 
 ### 3.3 AFE y wake word
 
-- **AFE (`esp-sr`):** solo VAD (NS, AGC y WakeNet apagados). Desactivable en compilación (`CONFIG_ORBITA_PIPELINE_USA_AFE`); **apagado por defecto; en el alfa se enciende para AEC y VAD** (`plan_prototipo_alfa.md`, S9). NS y beamforming siguen en pausa (decisión 11/10, `plan_dante.md`). El beamforming (BSS) no actuaba con 2 mics (medido 12/10) y se sacó el 14/10 (`se_init = false`, sin probar con el AFE encendido); el VAD queda en modo 4 por defecto. El NS del AFE solo existe en `AFE_TYPE_VC`. La cifra "~1,2 MB de PSRAM y ~46 % de un núcleo" es estimación sin fuente.
+- **AFE (`esp-sr`):** solo VAD (NS, AGC y WakeNet apagados). Desactivable en compilación (`CONFIG_ORBITA_PIPELINE_USA_AFE`); **apagado por defecto; en el alfa se enciende para AEC y VAD** (`plan_prototipo_alfa.md`, S9). NS y beamforming siguen en pausa (decisión 11/10, `plan_dante.md`). El beamforming (BSS) no actuaba con 2 mics (medido 12/10) y se sacó el 14/10 (`se_init = false`). Sin BSS el AFE pide `feed` de 512 frames: el pipeline alimenta cada chunk de 1024 en 2 llamadas (15/10, compila; sin probar en placa con el AFE encendido); el VAD queda en modo 4 por defecto. El NS del AFE solo existe en `AFE_TYPE_VC`. La cifra "~1,2 MB de PSRAM y ~46 % de un núcleo" es estimación sin fuente.
 - **Wake word "Órbita":** modelo propio de Edge Impulse, con su propio búfer de ventana; consume todo el audio siempre. Si corre sobre audio crudo o sobre la salida del AFE se decide con datos (`plan_dante.md`).
 - **Mono:** al ring out va audio mono (salida del AFE, o canal L del crudo sin AFE; L o mezcla: a decidir con Comunicación). Se reduce lo más tarde posible, nunca antes del ring in.
 - **AEC (diseño, 15/10; pasos y pendientes en `plan_prototipo_alfa.md` S9):**

@@ -26,7 +26,7 @@
 #define ORBITA_CHANNELS          2                                   // mics L y R
 #define ORBITA_BYTES_PER_SAMPLE  2
 #define ORBITA_FRAME_BYTES       (ORBITA_CHANNELS * ORBITA_BYTES_PER_SAMPLE)   // un frame = una muestra por canal
-#define ORBITA_CHUNK_FRAMES      1024                                // 64 ms; es el chunk de feed del AFE (con 2 mics + BSS)
+#define ORBITA_CHUNK_FRAMES      1024                                // 64 ms; multiplo del feed del AFE (512 sin BSS, 1024 con BSS)
 #define ORBITA_CHUNK_BYTES       (ORBITA_CHUNK_FRAMES * ORBITA_FRAME_BYTES)    // 4096 B
 #define ORBITA_AFE_FETCH_FRAMES  512                                 // salida del AFE: 32 ms, mono
 #define ORBITA_AFE_FETCH_BYTES   (ORBITA_AFE_FETCH_FRAMES * ORBITA_BYTES_PER_SAMPLE)

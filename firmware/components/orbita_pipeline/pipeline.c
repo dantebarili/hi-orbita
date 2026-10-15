@@ -71,6 +71,9 @@ static volatile uint32_t s_bloques_mono;       // bloques mono armados (sin AFE;
 
 #if ORBITA_PIPELINE_USA_AFE
 static TaskHandle_t s_fetch_handle;
+// Frames que pide cada afe_feed (lo fija esp-sr: 512 sin beamforming, 1024 con BSS). El chunk de captura
+// (ORBITA_CHUNK_FRAMES) tiene que ser multiplo: se alimenta en ORBITA_CHUNK_FRAMES / s_feed_frames llamadas.
+static int s_feed_frames;
 static volatile uint32_t s_chunks_alimentados; // las siguientes las escribe tarea_feed / tarea_fetch
 static volatile uint32_t s_chunks_recibidos;
 static volatile uint32_t s_fetch_vacios;
@@ -180,7 +183,10 @@ static void tarea_feed(void *arg)
 
 #if ORBITA_PIPELINE_USA_AFE
         if (n == ORBITA_CHUNK_BYTES) {
-            orbita_afe_feed(p);      // ~20 ms: aca se va el tiempo de la tarea
+            // Un chunk de 1024 frames puede ser 1 o 2 feeds, segun lo que pida el AFE (ver s_feed_frames).
+            for (int f = 0; f < ORBITA_CHUNK_FRAMES; f += s_feed_frames) {
+                orbita_afe_feed(p + f * ORBITA_CHANNELS);   // aca se va el tiempo de la tarea
+            }
             s_chunks_alimentados++;
         } else {
             s_chunks_invalidos++;    // sin log (puede haber una toma en curso)
@@ -295,12 +301,13 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
     // El chunk lo fija la libreria, no nosotros: si cambia (otro tipo de AFE, otra
     // version de esp-sr), se frena aca en vez de entregar audio con tamanos desfasados.
     int feed_frames = orbita_afe_feed_chunk_frames();
-    if (feed_frames != ORBITA_CHUNK_FRAMES) {
-        ESP_LOGE(TAG, "ORBITA_CHUNK_FRAMES=%d no coincide con los frames que pide feed (%d)",
+    if (feed_frames <= 0 || ORBITA_CHUNK_FRAMES % feed_frames != 0) {
+        ESP_LOGE(TAG, "ORBITA_CHUNK_FRAMES=%d no es multiplo de los frames que pide feed (%d)",
                  ORBITA_CHUNK_FRAMES, feed_frames);
         esp_rom_printf("pipeline: ORBITA_CHUNK_FRAMES=%d, feed pide %d\n", ORBITA_CHUNK_FRAMES, feed_frames);
         return ESP_ERR_INVALID_SIZE;
     }
+    s_feed_frames = feed_frames;
     int fetch_frames = orbita_afe_fetch_chunk_frames();
     if (fetch_frames != ORBITA_AFE_FETCH_FRAMES) {
         ESP_LOGE(TAG, "ORBITA_AFE_FETCH_FRAMES=%d no coincide con lo que entrega fetch (%d)",

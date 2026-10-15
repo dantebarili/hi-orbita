@@ -1,2 +1,0 @@
-# PRUEBA PARLANTE (borrar): defaults extra para el build aparte build_play. Ver main/test_playback.h.
-CONFIG_ORBITA_LAB_PLAYBACK=y

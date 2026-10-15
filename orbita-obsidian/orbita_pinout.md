@@ -33,5 +33,5 @@ NFC (interfaz sin definir: SPI / I2C / UART), LED indicador, botón de mute, mic
 ## Notas
 
 - **GPIO 15 y 16 son XTAL_32K** (y CTS/RTS por defecto de la UART0; verificado en `uart_pins.h`). Sirven como GPIO mientras no haya cristal de 32 kHz ni control de flujo por hardware en la UART0. Si la PCB lleva ese cristal: usar 7, 8 y 9 para el parlante.
-- MAX98357A sin verificar contra su datasheet: alimentación (3,3 V o 5 V), 16 kHz / 16 bit, función de `SD` y `GAIN`.
+- MAX98357A: **alimentación a 5 V externos** (desde el 3V3 del DevKit no sonaba, 15/10; causa sin medir). Sin verificar contra su datasheet: 16 kHz / 16 bit, función de `SD` y `GAIN`.
 - Pines del DevKit (LED RGB de la placa, botones) no cuentan: no van a existir en la PCB.

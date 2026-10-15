@@ -1,14 +1,15 @@
 # Audio por WebSocket (protocolo `orbita-pcm-v2`, continuo)
 
-Rama `juani`. Prototipo alfa: audio mono continuo al servidor (`plan_prototipo_alfa.md`). No implementa la FSM del producto ni la wake word local; incluye una prueba opcional de detección por transcripción en el servidor.
+Prototipo alfa (`plan_prototipo_alfa.md`): audio mono continuo al servidor y respuesta por el parlante cuando el servidor la manda. No implementa la FSM del producto ni la wake word local. Mientras no exista el backend real, `tools/ws_audio_server.py` hace de servidor.
 
 ## Recorrido
 
-`I2S → pipeline → ring out → tarea sink → audio_ws_sink → orbita_ws → servidor → WAV`
+Subida: `I2S → pipeline → ring out → tarea sink → audio_ws_sink → orbita_ws → servidor → WAV`
+Bajada: `servidor → orbita_ws (ws_downlink) → audio_ws_playback → orbita_playback → I2S → parlante`
 
 `send(ctx,msg)` corre en la tarea sink; nunca desde los callbacks de captura. El adaptador serializa y envía antes de volver y no guarda `msg->audio`.
 
-Arranque (`main.c`): primero I2S, pipeline y sink; después Wi-Fi y WebSocket, **sin esperar IP**. En el menú `Orbita integration` se elige UART (predeterminado, conserva `test_loop`) o WebSocket; en WebSocket no se compila `test.c`.
+Arranque (`main.c`): I2S de los mics, parlante (su ring en PSRAM va antes que el AFE), pipeline y sink; después Wi-Fi y WebSocket, **sin esperar IP**. En `Orbita integration` → "Modo del firmware": prototipo por WebSocket (predeterminado) o captura por UART (estudio de audio, `test.c` + `tools/orbita_serial.py`).
 
 ## Comportamiento
 
@@ -60,23 +61,19 @@ Header (little-endian, ya no cambia respecto de v1): `ORBA`, versión 1, tamaño
 
 El servidor sigue aceptando `start`/`end` (v1, toma fija) si el primer mensaje es `start`; el firmware ya no lo usa.
 
-## Prueba de voz de vuelta al parlante (sin STT)
+## Demo actual: devolución de un tramo por el parlante
 
-### Aislar primero el downlink con una senal conocida
-
-`python tools/ws_audio_server.py --test-tone` envia una vez por conexion el mismo tono del ensayo local de Dante (1 kHz, 3 s, pico PCM 16000), por el camino normal `play/PLAY/play_end`. No espera audio util de los microfonos; el uplink sigue activo. La ganancia del firmware sigue en 0,25. Alternativa para voz conocida: `--play-wav archivo.wav` (mono, 16 kHz, PCM 16-bit, hasta 15 s). Ambos modos son excluyentes con replay y STT. Se guarda `test_play_*.wav` como referencia.
-
-El servidor muestra `PLAY TX: id=... bytes=... crc32=...`; el firmware actualizado muestra `PLAY RX` con el mismo ID, bytes y CRC al aceptar el fin (PCM antes de ganancia). Para el tono: `bytes=96000 crc32=6e479b9f`. Si coinciden, los bytes de red llegaron intactos hasta la entrada de playback; no verifica el contenido posterior del ring ni la salida electrica I2S. Si no suena, enfocar la salida bajo operacion simultanea de mics/red/parlante. Para esta comparacion hay que recompilar y flashear el firmware con el log RX.
-
-Integracion 15/10 en `juani` con `origin/dante`: conserva su ganancia Q15 (8192) y prueba de tono archivada. `main` inicia playback una sola vez antes del pipeline y registra `RAM antes de playback`, `despues de playback`, `despues de pipeline/AFE` y `arranque completo` (libre interna, mayor bloque interno y PSRAM). Los valores reales se deben recoger del monitor, aun pendientes.
+Mientras no haya backend, la demo muestra el recorrido completo: el ESP manda audio sin parar y el servidor le devuelve un tramo de lo que escuchó.
 
 ```powershell
 python tools/ws_audio_server.py --replay-window 2 12 --segment-seconds 10
 ```
 
-Una vez por conexion v2, recorta los segundos 2 a 12 del PCM recibido (no desde el boot), guarda `replay_*.wav` en la carpeta de salida y devuelve esos 10 s como `play` + binarios `PLAY` + `play_end`. El recorte es exacto a nivel de muestra; si el uplink tiene huecos, se cuenta solo el PCM que llego. Son 320000 B de PCM en 79 mensajes binarios de hasta 4096 B, enviados en rafaga. La tarea de recepcion del servidor sigue recibiendo y confirmando el audio del ESP durante el envio. No requiere Whisper ni un WAV externo; es incompatible con `--stt-window-seconds`.
+Una vez por conexión, el servidor recorta los segundos 2 a 12 del PCM recibido (contados desde el `hello`, no desde el boot), lo guarda como `replay_*.wav` y lo devuelve con `play` + frames `PLAY` (79 de hasta 4 KB, en ráfaga) + `play_end`. El uplink y los `ack` siguen durante el envío. Hablar en ese tramo y escuchar la repetición; el servidor debe mostrar `Playback terminado` con razón `end`. Reiniciar el ESP (o reconectar) abre otra sesión y repite la demo. Los mics oyen el parlante, pero el tramo se devuelve una sola vez: no hay bucle de eco.
 
-Hablar durante ese intervalo y despues escuchar la repeticion. El servidor debe mostrar `Playback terminado` con razon `end`, no `play_reject` ni `underrun`; el uplink debe seguir avanzando. Si corta la conexion antes del segundo 12, no devuelve una toma parcial. Reiniciar la ESP o reconectar abre una nueva sesion y repite la prueba. Los mics pueden captar el parlante, pero el recorte se devuelve una sola vez: no hay bucle de eco. Validacion fisica pendiente.
+Otra opción: `--play-wav archivo.wav` (mono, 16 kHz, 16 bit, hasta 15 s) envía un audio conocido una vez por conexión.
+
+**Validado en placa (15/10, Juani):** captura, envío continuo y reproducción del tramo 2–12 s. **El amplificador tiene que ir a 5 V externos:** alimentado desde el 3V3 del DevKit no sonaba (causa eléctrica sin medir). Volumen limitado por software (`ORBITA_PLAY_GAIN_Q15`, `arquitectura.md` §2).
 
 ## Prueba local de STT y respuesta por audio
 
@@ -89,7 +86,7 @@ python tools/ws_audio_server.py --stt-window-seconds 8
 
 El modelo `tiny` de faster-whisper se descarga la primera vez y corre localmente en CPU. El servidor imprime la transcripción y busca la palabra completa `Órbita` sin distinguir mayúsculas ni tilde. Si la encuentra, manda `orbita` y reproduce por WebSocket `tools/respuesta_orbita.wav`, si existe. Ese WAV todavía falta: al recibirlo, convertirlo a PCM mono, 16 kHz, 16-bit y guardarlo con ese nombre. Sin el WAV, la detección funciona y queda registrada, pero no hay audio de respuesta. La ventana se analiza una vez por conexión; no es escucha continua de wake word ni STT en tiempo real.
 
-## Downlink: respuesta por el parlante (integrado en `juani`)
+## Downlink: respuesta por el parlante
 
 | Quién | Mensaje | Para qué |
 |---|---|---|
@@ -111,7 +108,7 @@ El modelo `tiny` de faster-whisper se descarga la primera vez y corre localmente
 
 - Hoy no hay reenvío desde el último `ack` (se hace en el alfa, ver arriba): lo perdido por un corte largo (>~32 s) queda como hueco. Los `ack` hoy solo se cuentan.
 - Una toma cortada por reconexión termina en una sesión y sigue en otra; sin autenticación ni TLS (LAN de laboratorio). Envío ≤ 8 KiB; mensajes **recibidos** por la cola RX ≤ 512 B (`ORBITA_WS_MAX_CONTROL_BYTES`, S4: libera ≈ 46 KB de RAM interna), cola RX de 4.
-- **RX PLAY integrado con `orbita_playback` en `juani`:** buffer propio de 4096 B en PSRAM, fuera de la cola de 512 B. `audio_ws_playback` copia PCM al ring del parlante, asocia el ID de 64 bits del servidor con el token de 32 bits de playback y reporta fin/corte. Contrato binario v1 propuesto; validar el header con el servidor y medir recepción/reproducción simultánea en placa. Detalle: [audio_ws_playback/README.md](firmware/components/orbita_audio_ws/README.md) y [orbita_ws/README.md](firmware/components/orbita_ws/README.md).
+- **RX PLAY:** buffer propio de 4096 B en PSRAM, fuera de la cola de 512 B. `audio_ws_playback` copia el PCM al ring del parlante, asocia el ID de 64 bits del servidor con el token de 32 bits de playback y reporta fin/corte. Contrato binario v1 propuesto: acordarlo con el backend real. Detalle: [audio_ws_playback/README.md](firmware/components/orbita_audio_ws/README.md) y [orbita_ws/README.md](firmware/components/orbita_ws/README.md).
 - Diferencias con la FSM (backoff 1-8 s sin tope de intentos, sin timeout de 5 s de respuesta ni `srv_*`) siguen sin acordar con Juani. No modifican el vault.
 - Mono L (`mic_l`) o AFE: la decisión L/mezcla sigue abierta.
 
@@ -121,15 +118,6 @@ El modelo `tiny` de faster-whisper se descarga la primera vez y corre localmente
 python -m unittest discover -s tools/tests -v
 ```
 
-34 pruebas (1 salteada: fixture C): protocolo v1, sesión v2, helpers STT/PLAY, tono conocido y recorte exacto con devolución PLAY por socket real, verificando que el uplink y los ACK sigan funcionando.
+32 pruebas (1 salteada: fixture C): protocolo v1, sesión v2, helpers STT/PLAY y recorte exacto con devolución PLAY por socket real, verificando que el uplink y los ACK sigan funcionando. El parser del downlink tiene pruebas en C para PC (`tools/tests/downlink`).
 
 Estado en hardware (13/10/2026): warm-up, retención y corte de Wi-Fi validados con v1. **v2 probado en la placa**: sesión con `hello`/`ready`, 5 segmentos de 10 s, catch-up de 48 s de audio en 15 s tras un corte largo y huecos marcados (27 s perdidos al desbordar el ring). Falta: corte corto con la sesión en curso, tomas largas (10 min / 1 h) y mirar `sin_ack` y la pila del sink en el monitor.
-
-
-### Prueba integrada de playback (15/10/2026)
-
-Juani confirmó captura, envío continuo y reproducción del intervalo 2–12 s con el amplificador alimentado por una fuente externa de 5 V. El cambio de alimentación permitió que funcionara la prueba; no se midió la causa eléctrica del silencio anterior. Se conservan CRC de PCM recibido y retirado del ring, bytes I2S y errores.
-
-Modo actual: `DIAG_WS_SIN_CAPTURA=0` en `firmware/main/main.c`. Ejecutar `python tools/ws_audio_server.py --replay-window 2 12 --segment-seconds 10`; devuelve el intervalo una vez por conexión. Sigue habilitado el tono local de arranque de 1 s.
-
-Diagnóstico alternativo sin mics: poner `DIAG_WS_SIN_CAPTURA=1`, recompilar y usar `python tools/ws_audio_server.py --playback-diagnostic`. Secuencia: tono local, tono remoto de 3 s, espera de 5 s tras `play_done` y tres pitidos remotos. `diag_local_done` es exclusivo de este diagnóstico; no cambia el protocolo de producción.

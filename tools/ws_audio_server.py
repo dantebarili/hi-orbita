@@ -1,9 +1,11 @@
-"""Servidor de audio local del laboratorio, con devolucion opcional de PCM.
+"""Servidor de audio local del laboratorio (hace de backend mientras no exista el real).
 
-Ejecutar: python tools/ws_audio_server.py. El WAV y JSON se guardan en
+Ejecutar: python tools/ws_audio_server.py. Guarda el audio continuo en WAV + JSON en
 tools/prueba_websocket (ignorado por Git). Ctrl+C conserva tomas incompletas.
-La opcion --stt-window-seconds activa la prueba local opcional de STT y downlink PLAY.
---replay-window 2 12 devuelve una vez ese intervalo recibido, sin STT ni WAV externo.
+Demos de respuesta por el parlante (una por conexion, elegir una):
+  --replay-window 2 12     devuelve ese intervalo del audio recibido (demo actual).
+  --play-wav archivo.wav   envia un WAV conocido.
+  --stt-window-seconds 8   transcribe una ventana y, si oye "Orbita", responde con --reply-wav.
 """
 import argparse
 import asyncio
@@ -14,7 +16,6 @@ from pathlib import Path
 import secrets
 import wave
 import time
-import zlib
 
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
@@ -22,7 +23,7 @@ from ws_audio_protocol import Recording
 from ws_audio_session import Session
 from ws_audio_protocol import HEADER
 from ws_audio_speech import (SAMPLE_RATE, AudioWindow, FasterWhisperRecognizer,
-                             contains_orbita, load_reply_wav, play_frames, test_tone_pcm)
+                             contains_orbita, load_reply_wav, play_frames)
 
 LOG = logging.getLogger("audio_server")
 # Ultima sesion v2 de cada carpeta de salida, para medir el hueco entre sesiones cuando el equipo
@@ -58,7 +59,7 @@ def playback_report(message):
 
 
 async def handle(connection, output, segment_seconds=None, stt_window_seconds=None,
-                 recognizer=None, reply_pcm=None, replay_window=None, test_pcm=None):
+                 recognizer=None, reply_pcm=None, replay_window=None, play_pcm=None):
     """Decide v1 (toma con start/end) o v2 (sesion continua con hello) por el primer mensaje."""
     try:
         first = await asyncio.wait_for(connection.recv(), timeout=30)
@@ -66,16 +67,16 @@ async def handle(connection, output, segment_seconds=None, stt_window_seconds=No
         return
     if is_hello(first):
         await handle_session(connection, output, first, segment_seconds,
-                              stt_window_seconds, recognizer, reply_pcm, replay_window, test_pcm)
+                              stt_window_seconds, recognizer, reply_pcm, replay_window, play_pcm)
     else:
-        if replay_window is not None or test_pcm is not None:
+        if replay_window is not None or play_pcm is not None:
             LOG.warning("La devolucion de audio requiere una sesion continua v2 (hello)")
         await handle_take(connection, output, first)
 
 
 async def handle_session(connection, output, first, segment_seconds=None,
                          stt_window_seconds=None, recognizer=None, reply_pcm=None,
-                         replay_window=None, test_pcm=None):
+                         replay_window=None, play_pcm=None):
     key = str(output)
     kwargs = {} if segment_seconds is None else dict(segment_samples=int(segment_seconds * 16000))
     session = Session(output, previous=LAST_SESSION.get(key), **kwargs)
@@ -100,7 +101,6 @@ async def handle_session(connection, output, first, segment_seconds=None,
         identity = active_play_id = f"{play_id:016x}"
         frames_sent = 0
         try:
-            LOG.info("PLAY TX: id=%s bytes=%d crc32=%08x", identity, len(pcm), zlib.crc32(pcm))
             for frame in play_frames(play_id, pcm):
                 # El lock es por mensaje: los ACK pueden intercalarse entre los PLAY.
                 async with send_lock:
@@ -167,14 +167,9 @@ async def handle_session(connection, output, first, segment_seconds=None,
             elif response:
                 async with send_lock:
                     await connection.send(response)
-            if message is first and test_pcm is not None:
-                # Senal conocida independiente del audio recibido de los microfonos.
-                reference = Path(output) / f"test_play_{session.stamp}_{session.id}.wav"
-                with wave.open(str(reference), "wb") as wav:
-                    wav.setparams((1, 2, SAMPLE_RATE, 0, "NONE", "not compressed"))
-                    wav.writeframes(test_pcm)
-                LOG.info("Prueba directa PLAY: referencia %s; envio unico por conexion", reference)
-                start_background(send_playback(test_pcm, "Audio conocido de prueba"))
+            if message is first and play_pcm is not None:
+                LOG.info("Demo --play-wav: envio unico por conexion")
+                start_background(send_playback(play_pcm, "WAV conocido"))
             if isinstance(message, bytes) and speech_window is not None and not speech_window.complete:
                 # Session.process validated CRC and frame layout before this PCM enters STT.
                 window_pcm = speech_window.add(message[HEADER.size:])
@@ -258,49 +253,9 @@ async def handle_take(connection, output, first):
         LOG.info("Desconectado: %s", connection.remote_address)
 
 
-async def handle_playback_diagnostic(connection):
-    """Sin captura: tono local, tono remoto, pausa de 5 s y tres pitidos remotos."""
-    async def send_and_wait(pcm, label):
-        identity = secrets.randbits(64)
-        play_id = f"{identity:016x}"
-        LOG.info("%s: PLAY TX id=%s bytes=%d crc32=%08x", label, play_id, len(pcm), zlib.crc32(pcm))
-        for frame in play_frames(identity, pcm):
-            await connection.send(json.dumps(frame) if isinstance(frame, dict) else frame)
-            await asyncio.sleep(0)
-        # Solo el DONE del mismo id habilita el siguiente paso.
-        async with asyncio.timeout(20):
-            async for message in connection:
-                report = playback_report(message)
-                if report is None or report["play_id"] != play_id:
-                    continue
-                LOG.info("%s: %s", label, report)
-                if report["type"] != "play_done" or report.get("reason") != "end":
-                    raise ValueError("La ESP rechazo o interrumpio el audio de diagnostico")
-                return
-        raise ValueError("Conexion cerrada antes de play_done")
-
-    try:
-        first = await asyncio.wait_for(connection.recv(), 30)
-        if not isinstance(first, str) or json.loads(first).get("type") != "diag_local_done":
-            raise ValueError("Este modo requiere firmware de diagnostico sin captura")
-        LOG.info("Tono local terminado; enviando tono remoto de 3 segundos")
-        await send_and_wait(test_tone_pcm(), "Tono remoto")
-        LOG.info("Reproduccion confirmada; esperando 5 segundos para los tres pitidos")
-        await asyncio.sleep(5)
-        # Tres tonos de 250 ms separados por 250 ms de silencio, PCM mono 16 kHz.
-        beep = test_tone_pcm()[:8000]
-        silence = bytes(8000)
-        await send_and_wait(beep + silence + beep + silence + beep, "Tres pitidos")
-        LOG.info("Diagnostico terminado. RESET en la ESP para repetir")
-        async for message in connection:
-            LOG.info("Diagnostico RX: %s", message if isinstance(message, str) else "binario inesperado")
-    except (ConnectionClosed, asyncio.TimeoutError, ValueError) as error:
-        LOG.warning("Diagnostico finalizado: %s", error)
-
-
 async def run(args):
     recognizer = FasterWhisperRecognizer(args.stt_model) if args.stt_window_seconds else None
-    test_pcm = test_tone_pcm() if args.test_tone else (load_reply_wav(args.play_wav) if args.play_wav else None)
+    play_pcm = load_reply_wav(args.play_wav) if args.play_wav else None
     reply_pcm = None
     if args.stt_window_seconds and args.reply_wav.exists():
         reply_pcm = load_reply_wav(args.reply_wav)
@@ -308,9 +263,9 @@ async def run(args):
     elif args.stt_window_seconds:
         LOG.warning("No existe %s: el servidor transcribira y detectara Órbita, pero no podra responder con audio",
                     args.reply_wav)
-    async with serve(lambda ws: handle_playback_diagnostic(ws) if args.playback_diagnostic else handle(ws, args.output, args.segment_seconds,
-                                      args.stt_window_seconds, recognizer, reply_pcm,
-                                      args.replay_window, test_pcm), args.host, args.port,
+    async with serve(lambda ws: handle(ws, args.output, args.segment_seconds,
+                                       args.stt_window_seconds, recognizer, reply_pcm,
+                                       args.replay_window, play_pcm), args.host, args.port,
                      max_size=8192, max_queue=8, compression=None,
                      ping_interval=20, ping_timeout=20, close_timeout=5):
         LOG.info("Escuchando %s:%d; salida %s", args.host, args.port, args.output.resolve())
@@ -326,10 +281,6 @@ if __name__ == "__main__":
                         help="largo de cada archivo en modo continuo (por defecto 30 s). Un segmento "
                              "solo se puede abrir cuando se cerro: usar valores chicos para depurar.")
     demo = parser.add_mutually_exclusive_group()
-    demo.add_argument("--playback-diagnostic", action="store_true",
-                      help="sin mics: tono local, tono remoto, espera 5 s tras DONE y tres pitidos remotos")
-    demo.add_argument("--test-tone", action="store_true",
-                      help="envia una vez por conexion el tono de Dante: 1 kHz, 3 s, pico 16000; sin STT ni captura previa")
     demo.add_argument("--play-wav", type=Path,
                       help="envia una vez un WAV conocido PCM mono/16 kHz/16-bit de hasta 15 s, sin STT")
     demo.add_argument("--replay-window", type=float, nargs=2, metavar=("INICIO", "FIN"),

@@ -25,6 +25,6 @@ definir y acordar cuándo se marca cada mensaje con el servidor.
 
 El arranque de `main.c` reserva primero el ring de playback en PSRAM, antes de
 que el pipeline/AFE asigne sus buffers. La prioridad WebSocket sigue en 4,
-playback en 6 y sink en 5; queda pendiente medir el flujo simultáneo en placa.
+playback en 6 y sink en 5; flujo simultáneo validado en placa el 15/10; falta medir pilas y RAM.
 El formato binario entrante sigue siendo una propuesta hasta que el servidor
 confirme el encabezado.
