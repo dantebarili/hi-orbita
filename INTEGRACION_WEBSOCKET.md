@@ -62,6 +62,12 @@ El servidor sigue aceptando `start`/`end` (v1, toma fija) si el primer mensaje e
 
 ## Prueba de voz de vuelta al parlante (sin STT)
 
+### Aislar primero el downlink con una senal conocida
+
+`python tools/ws_audio_server.py --test-tone` envia una vez por conexion el mismo tono del ensayo local de Dante (1 kHz, 3 s, pico PCM 16000), por el camino normal `play/PLAY/play_end`. No espera audio util de los microfonos; el uplink sigue activo. La ganancia del firmware sigue en 0,25. Alternativa para voz conocida: `--play-wav archivo.wav` (mono, 16 kHz, PCM 16-bit, hasta 15 s). Ambos modos son excluyentes con replay y STT. Se guarda `test_play_*.wav` como referencia.
+
+El servidor muestra `PLAY TX: id=... bytes=... crc32=...`; el firmware actualizado muestra `PLAY RX` con el mismo ID, bytes y CRC al aceptar el fin (PCM antes de ganancia). Para el tono: `bytes=96000 crc32=6e479b9f`. Si coinciden, los bytes de red llegaron intactos hasta la entrada de playback; no verifica el contenido posterior del ring ni la salida electrica I2S. Si no suena, enfocar la salida bajo operacion simultanea de mics/red/parlante. Para esta comparacion hay que recompilar y flashear el firmware con el log RX.
+
 Integracion 15/10 en `juani` con `origin/dante`: conserva su ganancia Q15 (8192) y prueba de tono archivada. `main` inicia playback una sola vez antes del pipeline y registra `RAM antes de playback`, `despues de playback`, `despues de pipeline/AFE` y `arranque completo` (libre interna, mayor bloque interno y PSRAM). Los valores reales se deben recoger del monitor, aun pendientes.
 
 ```powershell
@@ -115,6 +121,6 @@ El modelo `tiny` de faster-whisper se descarga la primera vez y corre localmente
 python -m unittest discover -s tools/tests -v
 ```
 
-32 pruebas (1 salteada: fixture C): protocolo v1, sesión v2, helpers STT/PLAY y recorte exacto con devolución PLAY por socket real, verificando que el uplink y los ACK sigan funcionando.
+34 pruebas (1 salteada: fixture C): protocolo v1, sesión v2, helpers STT/PLAY, tono conocido y recorte exacto con devolución PLAY por socket real, verificando que el uplink y los ACK sigan funcionando.
 
 Estado en hardware (13/10/2026): warm-up, retención y corte de Wi-Fi validados con v1. **v2 probado en la placa**: sesión con `hello`/`ready`, 5 segmentos de 10 s, catch-up de 48 s de audio en 15 s tras un corte largo y huecos marcados (27 s perdidos al desbordar el ring). Falta: corte corto con la sesión en curso, tomas largas (10 min / 1 h) y mirar `sin_ack` y la pila del sink en el monitor.

@@ -14,6 +14,7 @@ from pathlib import Path
 import secrets
 import wave
 import time
+import zlib
 
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
@@ -21,7 +22,7 @@ from ws_audio_protocol import Recording
 from ws_audio_session import Session
 from ws_audio_protocol import HEADER
 from ws_audio_speech import (SAMPLE_RATE, AudioWindow, FasterWhisperRecognizer,
-                             contains_orbita, load_reply_wav, play_frames)
+                             contains_orbita, load_reply_wav, play_frames, test_tone_pcm)
 
 LOG = logging.getLogger("audio_server")
 # Ultima sesion v2 de cada carpeta de salida, para medir el hueco entre sesiones cuando el equipo
@@ -57,7 +58,7 @@ def playback_report(message):
 
 
 async def handle(connection, output, segment_seconds=None, stt_window_seconds=None,
-                 recognizer=None, reply_pcm=None, replay_window=None):
+                 recognizer=None, reply_pcm=None, replay_window=None, test_pcm=None):
     """Decide v1 (toma con start/end) o v2 (sesion continua con hello) por el primer mensaje."""
     try:
         first = await asyncio.wait_for(connection.recv(), timeout=30)
@@ -65,16 +66,16 @@ async def handle(connection, output, segment_seconds=None, stt_window_seconds=No
         return
     if is_hello(first):
         await handle_session(connection, output, first, segment_seconds,
-                              stt_window_seconds, recognizer, reply_pcm, replay_window)
+                              stt_window_seconds, recognizer, reply_pcm, replay_window, test_pcm)
     else:
-        if replay_window is not None:
+        if replay_window is not None or test_pcm is not None:
             LOG.warning("La devolucion de audio requiere una sesion continua v2 (hello)")
         await handle_take(connection, output, first)
 
 
 async def handle_session(connection, output, first, segment_seconds=None,
                          stt_window_seconds=None, recognizer=None, reply_pcm=None,
-                         replay_window=None):
+                         replay_window=None, test_pcm=None):
     key = str(output)
     kwargs = {} if segment_seconds is None else dict(segment_samples=int(segment_seconds * 16000))
     session = Session(output, previous=LAST_SESSION.get(key), **kwargs)
@@ -99,6 +100,7 @@ async def handle_session(connection, output, first, segment_seconds=None,
         identity = active_play_id = f"{play_id:016x}"
         frames_sent = 0
         try:
+            LOG.info("PLAY TX: id=%s bytes=%d crc32=%08x", identity, len(pcm), zlib.crc32(pcm))
             for frame in play_frames(play_id, pcm):
                 # El lock es por mensaje: los ACK pueden intercalarse entre los PLAY.
                 async with send_lock:
@@ -165,6 +167,14 @@ async def handle_session(connection, output, first, segment_seconds=None,
             elif response:
                 async with send_lock:
                     await connection.send(response)
+            if message is first and test_pcm is not None:
+                # Senal conocida independiente del audio recibido de los microfonos.
+                reference = Path(output) / f"test_play_{session.stamp}_{session.id}.wav"
+                with wave.open(str(reference), "wb") as wav:
+                    wav.setparams((1, 2, SAMPLE_RATE, 0, "NONE", "not compressed"))
+                    wav.writeframes(test_pcm)
+                LOG.info("Prueba directa PLAY: referencia %s; envio unico por conexion", reference)
+                start_background(send_playback(test_pcm, "Audio conocido de prueba"))
             if isinstance(message, bytes) and speech_window is not None and not speech_window.complete:
                 # Session.process validated CRC and frame layout before this PCM enters STT.
                 window_pcm = speech_window.add(message[HEADER.size:])
@@ -250,6 +260,7 @@ async def handle_take(connection, output, first):
 
 async def run(args):
     recognizer = FasterWhisperRecognizer(args.stt_model) if args.stt_window_seconds else None
+    test_pcm = test_tone_pcm() if args.test_tone else (load_reply_wav(args.play_wav) if args.play_wav else None)
     reply_pcm = None
     if args.stt_window_seconds and args.reply_wav.exists():
         reply_pcm = load_reply_wav(args.reply_wav)
@@ -259,7 +270,7 @@ async def run(args):
                     args.reply_wav)
     async with serve(lambda ws: handle(ws, args.output, args.segment_seconds,
                                       args.stt_window_seconds, recognizer, reply_pcm,
-                                      args.replay_window), args.host, args.port,
+                                      args.replay_window, test_pcm), args.host, args.port,
                      max_size=8192, max_queue=8, compression=None,
                      ping_interval=20, ping_timeout=20, close_timeout=5):
         LOG.info("Escuchando %s:%d; salida %s", args.host, args.port, args.output.resolve())
@@ -275,6 +286,10 @@ if __name__ == "__main__":
                         help="largo de cada archivo en modo continuo (por defecto 30 s). Un segmento "
                              "solo se puede abrir cuando se cerro: usar valores chicos para depurar.")
     demo = parser.add_mutually_exclusive_group()
+    demo.add_argument("--test-tone", action="store_true",
+                      help="envia una vez por conexion el tono de Dante: 1 kHz, 3 s, pico 16000; sin STT ni captura previa")
+    demo.add_argument("--play-wav", type=Path,
+                      help="envia una vez un WAV conocido PCM mono/16 kHz/16-bit de hasta 15 s, sin STT")
     demo.add_argument("--replay-window", type=float, nargs=2, metavar=("INICIO", "FIN"),
                       help="devuelve una vez este intervalo del PCM recibido usando PLAY; "
                            "ejemplo: --replay-window 2 12. No requiere STT. Duracion: 1..15 s")

@@ -2,12 +2,14 @@
 #if CONFIG_ORBITA_LAB_WEBSOCKET
 
 #include "audio_ws_playback.h"
+#include "audio_ws_wire.h"
 #include "orbita_playback.h"
 #include "orbita_ws.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include <limits.h>
+#include <inttypes.h>
 
 #define PLAY_MAP_CAPACITY 4
 #define PLAY_PREBUFFER_MS 400
@@ -27,6 +29,9 @@ static const char *TAG = "audio_ws_playback";
 static portMUX_TYPE s_map_lock = portMUX_INITIALIZER_UNLOCKED;
 static play_map_t s_play_map[PLAY_MAP_CAPACITY];
 static uint32_t s_next_token = 1;
+// Solo lo modifica el callback downlink serializado; nunca el callback de playback.
+// CRC sobre PCM recibido antes de la copia al ring y de la ganancia del parlante.
+static uint32_t s_rx_crc, s_rx_bytes;
 
 static play_map_t *find_token_locked(uint32_t token)
 {
@@ -189,6 +194,7 @@ bool audio_ws_playback_on_downlink(void *ctx, const orbita_ws_downlink_event_t *
             remove_token(token);
             return false; // orbita_ws encola el unico play_reject
         }
+        s_rx_crc = s_rx_bytes = 0;
         return true;
     }
     case ORBITA_WS_PLAY_DATA: {
@@ -200,13 +206,20 @@ bool audio_ws_playback_on_downlink(void *ctx, const orbita_ws_downlink_event_t *
         if (token == 0) return false;
         // push copia el PCM al ring antes de que el buffer WebSocket se reutilice.
         // En caso de ring lleno, false hace que orbita_ws envie reject y despache STOP.
-        return orbita_playback_push(event->pcm, event->pcm_bytes) == ESP_OK;
+        uint32_t crc = orbita_wire_crc(s_rx_crc, event->pcm, event->pcm_bytes);
+        if (orbita_playback_push(event->pcm, event->pcm_bytes) != ESP_OK) return false;
+        s_rx_crc = crc;
+        s_rx_bytes += event->pcm_bytes;
+        return true;
     }
     case ORBITA_WS_PLAY_END: {
         portENTER_CRITICAL(&s_map_lock);
         bool known = find_server_id_locked(event->connection_id, event->id) != NULL;
         portEXIT_CRITICAL(&s_map_lock);
-        return known && orbita_playback_end() == ESP_OK;
+        if (!known || orbita_playback_end() != ESP_OK) return false;
+        ESP_LOGI(TAG, "PLAY RX: id=%016" PRIx64 " bytes=%" PRIu32 " crc32=%08" PRIx32,
+                 event->id, s_rx_bytes, s_rx_crc);
+        return true;
     }
     case ORBITA_WS_PLAY_STOP:
         if (event->rejected) suppress_report(event->connection_id, event->id);

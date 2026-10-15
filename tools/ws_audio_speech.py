@@ -5,6 +5,7 @@ import re
 import math
 import unicodedata
 import wave
+import struct
 from pathlib import Path
 from struct import Struct
 
@@ -13,6 +14,13 @@ MAX_PLAY_SECONDS = 15
 MAX_WS_BYTES = 4096
 PLAY_HEADER = Struct("<4sBBHQII")
 assert PLAY_HEADER.size == 24
+
+
+def test_tone_pcm() -> bytes:
+    """Same 1 kHz / peak 16000 / 3 s signal as Dante's local playback test."""
+    cycle = (0, 6123, 11314, 14782, 16000, 14782, 11314, 6123,
+             0, -6123, -11314, -14782, -16000, -14782, -11314, -6123)
+    return struct.pack("<16h", *cycle) * 3000
 
 
 def contains_orbita(transcript: str) -> bool:
