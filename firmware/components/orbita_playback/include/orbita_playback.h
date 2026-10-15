@@ -27,6 +27,12 @@
 #define ORBITA_PLAY_WS_GPIO    15
 #define ORBITA_PLAY_DOUT_GPIO  16
 
+/* VOLUMEN LIMITADO POR SOFTWARE: este es el unico lugar donde se cambia. Toda muestra se multiplica por esta
+ * ganancia (Q15: 32768 = 1,0; 8192 = 0,25 = -12 dB) justo antes de i2s_channel_write, en aplicar_ganancia() de
+ * orbita_playback.c. Es el unico camino al I2S de salida: afecta a todo lo que suene, venga de donde venga.
+ * Protege parlante y alimentacion (DevKit a 3V3). Subirlo de a poco. Rango 0 a 32768. */
+#define ORBITA_PLAY_GAIN_Q15  8192
+
 /* EVENTOS: hechos ASINCRONOS que el modulo avisa hacia afuera por el callback (que se hace con ellos lo
  * decide quien escucha). Cada evento trae el `play_id` que se paso a orbita_playback_begin() para la
  * respuesta a la que pertenece: un DONE atrasado lleva el id de la respuesta que termino, no el de una nueva.

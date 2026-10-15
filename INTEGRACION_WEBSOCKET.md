@@ -62,6 +62,8 @@ El servidor sigue aceptando `start`/`end` (v1, toma fija) si el primer mensaje e
 
 ## Prueba de voz de vuelta al parlante (sin STT)
 
+Integracion 15/10 en `juani` con `origin/dante`: conserva su ganancia Q15 (8192) y prueba de tono archivada. `main` inicia playback una sola vez antes del pipeline y registra `RAM antes de playback`, `despues de playback`, `despues de pipeline/AFE` y `arranque completo` (libre interna, mayor bloque interno y PSRAM). Los valores reales se deben recoger del monitor, aun pendientes.
+
 ```powershell
 python tools/ws_audio_server.py --replay-window 2 12 --segment-seconds 10
 ```

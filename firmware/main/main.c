@@ -12,6 +12,7 @@
 #include "orbita_ws.h"
 #include "audio_ws_sink.h"
 #include "audio_ws_playback.h"
+#include "esp_heap_caps.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
@@ -32,6 +33,18 @@ static void arranque_fallo(const char *que, esp_err_t err)
     }
 }
 
+#if CONFIG_ORBITA_LAB_WEBSOCKET
+// Medir en placa: el ring va a PSRAM, pero DMA y pilas consumen RAM interna.
+static void log_memoria(const char *etapa)
+{
+    const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    ESP_LOGI("main", "RAM %s: interna_libre=%u bloque_max=%u psram_libre=%u",
+             etapa, (unsigned)heap_caps_get_free_size(caps),
+             (unsigned)heap_caps_get_largest_free_block(caps),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+}
+#endif
+
 void app_main(void)
 {
 #if CONFIG_ORBITA_LAB_WEBSOCKET
@@ -43,11 +56,14 @@ void app_main(void)
     esp_err_t err = orbita_audio_i2s_init();
     if (err != ESP_OK) arranque_fallo("I2S", err);
     // Reservar el ring del parlante en PSRAM antes de que pipeline/AFE asignen sus buffers.
+    log_memoria("antes de playback");
     err = audio_ws_playback_init();
     if (err != ESP_OK) arranque_fallo("playback", err);
+    log_memoria("despues de playback");
     // NULL: sin copias/callbacks del test UART. No enviar desde on_crudo ni on_afe.
     err = orbita_pipeline_start(NULL);
     if (err != ESP_OK) arranque_fallo("pipeline", err);
+    log_memoria("despues de pipeline/AFE");
     // Único consumidor del ring out. El adaptador usa la tarea sink ya existente.
     err = orbita_sink_start(orbita_audio_ws_sink());
     if (err != ESP_OK) arranque_fallo("sink WebSocket", err);
@@ -66,6 +82,7 @@ void app_main(void)
     };
     err = orbita_ws_start(&ws);
     if (err != ESP_OK) arranque_fallo("WebSocket", err);
+    log_memoria("arranque completo");
     ESP_LOGI("main", "Audio WebSocket activo; el resumen sale cada 30 s en audio_ws");
 #else
     // Drivers y rings del modulo de laboratorio (se borra cuando exista el sink de sockets).

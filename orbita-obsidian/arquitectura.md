@@ -110,11 +110,12 @@ Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). 
 | `fetch` (solo con AFE) | Salida del AFE → ring out | 1 | 5 | 4 KB | sin medir |
 | AFE interno (solo con AFE) | Procesa el audio | 0 | 5 | — | — |
 | `sink` | Ring out → mensajes → `send` | 0 | 5 | 6 KB | ~2,7 KB (libre ≥ 3,4 KB; `pruebas_socket.md`) |
-| `orbita_ws` | Cliente WebSocket (librería) | **sin fijar** | 4 | 6 KB | sin medir |
+| `orbita_ws` | Cliente WebSocket (librería) | 0 | 4 | 6 KB | sin medir |
+| `ws_play_reports` | Reportes PLAY por WebSocket | 0 | 3 | 6 KB | sin medir |
 | `orbita_wifi` | Conexión y reintentos | **sin fijar** | 3 | 4 KB | sin medir |
 | `app_main` | Arranque | 0 | 1 | 8 KB | sin medir |
 | `envio` (`test.c`, laboratorio) | WAV por UART0 | 0 | 5 | 4 KB | sin medir |
-| `orbita_playback` (S7) | Ring de salida → I2S del parlante (I2S todavía simulado) | 0 | 6 | 4 KB | sin medir |
+| `orbita_playback` (S7) | Ring de salida → I2S del parlante (I2S real, tono validado el 15/10; inicializado en modo WebSocket en juani, prueba por red pendiente) | 0 | 6 | 4 KB | sin medir |
 
 **REPARTO DE CORES:**
 - core 0: main, wifi, envio (sink) y recepcion (parlante, sink)
@@ -123,6 +124,7 @@ Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). 
 - **lwIP fijado al core 0** (`CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0`, nombre sin verificar contra el IDF): con prio 18 > captura 6, si corría en el core 1 le robaba CPU a la captura en cada ráfaga TCP. Confirmar con Wi-Fi activo (A9) que el DMA no se desborda.
 - **Prioridad de `orbita_ws` (4) vs. `sink` (5): a ver con Juani.** `orbita_ws` recibe los `PLAY` del parlante; hay que decidir si debe quedar por encima de quien envía. No se cambia sin él.
 - **Parlante (propuesta):** core 0 con prio 6 (> sink, para que el drenaje no la deje sin datos). Consume poco CPU y el colchón del DMA de salida absorbe las ráfagas de Wi-Fi; el core 1 queda para el audio de entrada. Si luego se agrega AEC, la referencia debe quedar alineada con `feed`: se revisa entonces.
+- **Volumen del parlante limitado por software (15/10):** `orbita_playback` multiplica todo el audio por `ORBITA_PLAY_GAIN_Q15` (hoy 8192 = 0,25 = −12 dB) antes del I2S, en `aplicar_ganancia()` ([orbita_playback.c](../firmware/components/orbita_playback/orbita_playback.c)); la constante está en `orbita_playback.h`. Motivo: DevKit con el amplificador a 3V3 (5 V sin resolver, ver `orbita_pinout.md`) y parlante de 4 Ω. Subir de a poco. Protección de hardware pendiente: pin `GAIN` y alimentación de 5 V en la PCB.
 - **Mejorable (latencia de arranque del parlante):** en reposo `orbita_playback` mira el estado cada 10 ms (polling, 100 despertares por segundo): hasta 10 ms de demora al empezar a sonar. Alternativa: `xTaskNotifyGive` desde `push`/`end` y `ulTaskNotifyTake` con timeout (arranque inmediato, sin polling). Se dejó el polling por tener menos formas de fallar en silencio; con el prebuffer de 400 ms no se nota. Tiempos en §3.7.
 
 ## 3. DSP y pipeline de audio
