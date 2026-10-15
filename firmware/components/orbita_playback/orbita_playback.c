@@ -114,6 +114,15 @@ static esp_err_t i2s_salida_iniciar(const orbita_playback_cfg_t *cfg){
     return ESP_OK;
 }
 
+// Aplica el tope de volumen (ORBITA_PLAY_GAIN_Q15) en el lugar. Q15: 32768 = 1,0, asi que `>> 15` divide por 32768.
+// Se multiplica en int32_t: una muestra de 16 bit por hasta 32768 no entra en 16 bit. `n_bytes` es par (todos los push lo son).
+static void aplicar_ganancia(void *datos, size_t n_bytes){
+    int16_t *m = (int16_t *)datos;
+    for (size_t i = 0; i < n_bytes / PLAY_BYTES_POR_MUESTRA; i++) {
+        m[i] = (int16_t)(((int32_t)m[i] * ORBITA_PLAY_GAIN_Q15) >> 15);
+    }
+}
+
 // TAREA DE REPRODUCCION: saca audio del ring y lo manda al I2S. Se coordina con el resto SOLO por el estado.
 // MEJORABLE (latencia): en reposo mira el estado cada PLAY_POLL_MS (hasta 10 ms de demora al arrancar,
 // 100 despertares/s). Alternativa: xTaskNotifyGive desde push/end con ulTaskNotifyTake con timeout
@@ -157,6 +166,7 @@ static void tarea_play(void *arg){
         void *trozo = xRingbufferReceiveUpTo(ring_play, &n, pdMS_TO_TICKS(PLAY_POLL_MS), PLAY_TROZO_BYTES);
         if (trozo != NULL) {
             en_underrun = false;
+            aplicar_ganancia(trozo, n);   // tope de volumen, sobre el trozo que esta en el ring (ya es nuestro)
             // i2s_channel_write se bloquea hasta que el DMA tiene lugar: es la que marca el ritmo real (16 kHz).
             size_t escritos = 0;
             esp_err_t err = i2s_channel_write(tx_chan, trozo, n, &escritos, PLAY_I2S_WRITE_TIMEOUT_MS);
