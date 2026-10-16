@@ -66,6 +66,40 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(s.close(), ACK_EVERY * 2 * 4)
         self.assertEqual(s.gaps, [])
 
+    def test_single_wav_by_default(self):
+        s = self.session()
+        for i in range(ACK_EVERY * 3 + 2):
+            s.process(packet(i))
+        s.close()
+        wavs = list(Path(self.temp.name).glob("*.wav"))
+        self.assertEqual(len(wavs), 1)
+        with wave.open(str(wavs[0])) as wav:
+            self.assertEqual(wav.getnframes(), (ACK_EVERY * 3 + 2) * 2048)
+
+    def test_wav_readable_if_process_dies_without_close(self):
+        s = self.session()
+        for i in range(ACK_EVERY * 2 + 3):               # sin close(): como un corte de luz
+            s.process(packet(i))
+        path = next(Path(self.temp.name).glob("*.wav"))
+        with wave.open(str(path)) as wav:                # legible hasta el ultimo sync (cada ACK_EVERY mensajes)
+            self.assertEqual(wav.getnframes(), ACK_EVERY * 2 * 2048)
+        self.assertTrue(next(Path(self.temp.name).glob("sesion_*[0-9a-f].json")).exists())
+        s.close()
+
+    def test_config_name_and_afe_in_json(self):
+        s = Session(self.temp.name, info=dict(test_name="prueba_x", server_args="--replay-window 2 12"))
+        message = json.loads(hello())
+        message["source"] = "afe"
+        message["config"] = dict(afe=1, vad_mode=4, play_gain_q15=32768, malo=[1, 2], x="y" * 100)
+        s.process(json.dumps(message))
+        s.process(packet(0))
+        s.close()
+        info = json.loads(next(Path(self.temp.name).glob("sesion_*[0-9a-f].json")).read_text())
+        self.assertEqual((info["test_name"], info["afe"], info["source"]), ("prueba_x", True, "afe"))
+        self.assertEqual(info["server_args"], "--replay-window 2 12")
+        self.assertEqual(info["config"], dict(afe=1, vad_mode=4, play_gain_q15=32768))   # lo no escalar/largo se descarta
+        self.assertEqual(info["status"], "closed")
+
     def test_rotation_into_segments(self):
         s = self.session(segment_samples=2048 * 3)     # 3 mensajes por archivo
         for i in range(7):

@@ -14,7 +14,7 @@ from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
 import ws_audio_server
 from ws_audio_protocol import HEADER
-from ws_audio_speech import AudioWindow, PLAY_HEADER
+from ws_audio_speech import AudioWindow, PLAY_HEADER, normalize_pcm
 
 IDENTITY = "0123456789abcdef"
 
@@ -106,7 +106,7 @@ class ReplaySocketTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(length, len(frame) - 24)
                         received.extend(frame[24:])
                     expected = b"".join(pcm_for(i) for i in range(96))[64000:384000]
-                    self.assertEqual(bytes(received), expected)
+                    self.assertEqual(bytes(received), normalize_pcm(expected))  # sube volumen; el WAV guardado queda igual
                     await ws.send(json.dumps(dict(type="play_done", play_id=begin["play_id"],
                                                   reason="end", played_ms=10000)))
                     for index in range(112, 120):

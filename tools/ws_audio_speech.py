@@ -6,7 +6,8 @@ import math
 import unicodedata
 import wave
 from pathlib import Path
-from struct import Struct, pack
+from array import array
+from struct import Struct
 
 SAMPLE_RATE = 16_000
 MAX_PLAY_SECONDS = 15
@@ -15,20 +16,48 @@ PLAY_HEADER = Struct("<4sBBHQII")
 assert PLAY_HEADER.size == 24
 
 
-def diagnostic_tones_pcm() -> bytes:
-    """Tres tonos de 1 kHz y 1 s, separados por 1 s de silencio; pico 16000."""
-    cycle = (0, 6123, 11314, 14782, 16000, 14782, 11314, 6123,
-             0, -6123, -11314, -14782, -16000, -14782, -11314, -6123)
-    tone = pack("<16h", *cycle) * 1000
-    silence = bytes(SAMPLE_RATE * 2)
-    return tone + silence + tone + silence + tone
+def _highpass(samples, cutoff: float = 250.0):
+    """Pasa-altos Butterworth de 4to orden (dos biquads) sobre una lista de numeros; devuelve floats.
+
+    Saca el retumbo grave del mic crudo (sin AFE) y lo que un parlante chico no reproduce: sin esto la
+    ganancia se gasta subiendo graves inaudibles y la voz casi no sube.
+    """
+    out = [float(x) for x in samples]
+    k = math.tan(math.pi * cutoff / SAMPLE_RATE)
+    for q in (0.5412, 1.3066):                      # polos del Butterworth de 4to orden
+        norm = 1 / (1 + k / q + k * k)
+        b0, b1, b2 = norm, -2 * norm, norm
+        a1, a2 = 2 * (k * k - 1) * norm, (1 - k / q + k * k) * norm
+        x1 = x2 = y1 = y2 = 0.0
+        for i, x in enumerate(out):
+            y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+            x2, x1, y2, y1 = x1, x, y1, y
+            out[i] = y
+    return out
 
 
-def periodic_tones_pcm() -> bytes:
-    """Tres pitidos de 250 ms separados por 250 ms; total 1,25 s."""
-    tone = diagnostic_tones_pcm()[:SAMPLE_RATE // 4 * 2]
-    silence = bytes(SAMPLE_RATE // 4 * 2)
-    return tone + silence + tone + silence + tone
+def normalize_pcm(pcm: bytes, target_rms: int = 8_000, max_gain: float = 60.0, ceiling: int = 30_000) -> bytes:
+    """Prepara un PCM s16le mono para el parlante: saca graves y sube el nivel promedio (RMS).
+
+    1) Pasa-altos a 250 Hz (ver _highpass). 2) Ganancia que lleva el RMS de los tramos con voz (bloques de
+    100 ms hasta 25 dB bajo el mas fuerte) a target_rms (~-12 dBFS; el tono de prueba esta en -9): normalizar
+    por pico no alcanza, la voz tiene picos mucho mas altos que su promedio. 3) Limitador suave (tanh) que
+    nunca pasa de `ceiling`, en vez de recorte duro. Solo amplifica; max_gain acota la subida para no inflar
+    un tramo que es solo ruido.
+    """
+    samples = array("h")
+    samples.frombytes(pcm)
+    filtered = _highpass(samples)
+    block = SAMPLE_RATE // 10
+    rms = [math.sqrt(sum(x * x for x in filtered[i:i + block]) / block)
+           for i in range(0, len(filtered) - block + 1, block)]
+    loudest = max(rms, default=0)
+    if loudest == 0:
+        return pcm
+    active = [r * r for r in rms if r >= loudest * 10 ** (-25 / 20)]
+    gain = min(target_rms / math.sqrt(sum(active) / len(active)), max_gain)
+    # tanh: lineal para valores chicos, se aplana hacia `ceiling` en vez de recortar.
+    return array("h", (int(ceiling * math.tanh(x * gain / ceiling)) for x in filtered)).tobytes()
 
 
 def contains_keyword(transcript: str, keyword: str) -> bool:

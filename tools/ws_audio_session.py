@@ -3,26 +3,58 @@
 Mensajes de texto (JSON): ESP -> servidor `hello`; servidor -> ESP `ready` y `ack`.
 Audio: binarios con el mismo header ORBA de v1; el id del header es el id de sesion y el
 indice de mensaje sigue creciendo sin cortes. Los huecos se anotan, no se rellenan.
-El audio se guarda en archivos de SEGMENT_SECONDS; cada uno con su JSON de huecos.
+El audio de una conexion se guarda en UN solo WAV (con su JSON); si se pide, se parte cada N segundos.
+El encabezado del WAV se corrige cada ~1 s: si el proceso muere de golpe, el archivo queda legible hasta ahi.
 """
 import json
 from pathlib import Path
 import re
+import struct
 import time
-import wave
 import zlib
 
 from ws_audio_protocol import HEADER
 
-SEGMENT_SECONDS = 30
+SEGMENT_SECONDS = None   # None: un solo archivo por conexion
+CONFIG_MAX_ITEMS = 16   # `config` del hello: lo que informa la ESP de su menuconfig (solo se guarda)
 ACK_EVERY = 8          # mensajes de 128 ms: un ack cada ~1 s
 MASK = 0xffffffff
+
+
+class LiveWav:
+    """WAV mono 16 kHz / 16 bit que se puede leer aunque el proceso muera sin cerrarlo.
+
+    El encabezado se escribe con tamano 0 y `sync()` lo corrige (RIFF en el byte 4, `data` en el 40) y
+    vuelve al final. Una lib normal (`wave`) lo hace solo al cerrar: un corte brusco deja un WAV de tamano 0.
+    """
+    def __init__(self, path):
+        self.file = open(path, "wb")
+        self.size = 0
+        self.file.write(struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36, b"WAVE", b"fmt ", 16, 1, 1,
+                                    16000, 32000, 2, 16, b"data", 0))
+
+    def write(self, pcm):
+        self.file.write(pcm)
+        self.size += len(pcm)
+
+    def sync(self):
+        size = min(self.size, 0xffffffff - 36)
+        self.file.seek(4)
+        self.file.write(struct.pack("<I", 36 + size))
+        self.file.seek(40)
+        self.file.write(struct.pack("<I", size))
+        self.file.seek(0, 2)
+        self.file.flush()
+
+    def close(self):
+        self.sync()
+        self.file.close()
 
 
 class Session:
     """record=False conserva validacion/ACK sin crear archivos; huecos acotados a 128."""
     def __init__(self, directory, previous_expected_seq=None,
-                 segment_samples=SEGMENT_SECONDS * 16000, previous=None, record=True):
+                 segment_samples=SEGMENT_SECONDS, previous=None, record=True, info=None):
         self.closed = False
         self.record = record
         self.gap_count = 0
@@ -40,6 +72,7 @@ class Session:
         self.messages = 0
         self.samples = 0
         self.gaps = []                # posicion global (muestras) de cada hueco
+        self.extra_info = dict(info or {})   # nombre de la prueba, argumentos del servidor (lo pone quien crea la sesion)
         self.info = {}
 
     # -- archivos ---------------------------------------------------------
@@ -48,8 +81,7 @@ class Session:
 
     def _open_segment(self):
         path = self._segment_path(".wav")
-        self.wav = wave.open(str(path), "wb")
-        self.wav.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        self.wav = LiveWav(path)
         self.segment = dict(file=path.name, first_message=self.messages, start_sample=self.samples,
                             samples=0, messages=0, gaps=[], status="open")
 
@@ -85,10 +117,22 @@ class Session:
         self.started = time.monotonic()
         if self.record:
             self.directory.mkdir(parents=True, exist_ok=True)
-        self.info = dict(id=identity, source=obj["source"], protocol="orbita-pcm-v2")
+        self.info = dict(id=identity, source=obj["source"], afe=obj["source"] == "afe",
+                         protocol="orbita-pcm-v2", **self.extra_info)
+        self.info["config"] = self._clean_config(obj.get("config"))
         if self.record:
             self._open_segment()
+            self._write_summary("open")      # existe aunque el servidor muera antes de cerrar
         return json.dumps(dict(type="ready", id=identity), separators=(",", ":"))
+
+    @staticmethod
+    def _clean_config(config):
+        """`config` del hello (menuconfig de la ESP): solo numeros y textos cortos; lo demas se descarta."""
+        if not isinstance(config, dict):
+            return {}
+        return {k: v for k, v in list(config.items())[:CONFIG_MAX_ITEMS]
+                if isinstance(k, str) and len(k) <= 32 and
+                (isinstance(v, (int, float, bool)) or (isinstance(v, str) and len(v) <= 64))}
 
     def binary(self, data):
         """Procesa un mensaje de audio. Devuelve un ack (JSON) cuando toca, si no None."""
@@ -122,16 +166,20 @@ class Session:
                 del self.gaps[0]  # diagnostico acotado en sesiones STT de duracion indefinida
         self.expected_seq = (seq + slots) & MASK
         if self.record:
-            self.wav.writeframesraw(pcm)
+            self.wav.write(pcm)
         self.samples += samples
         self.messages += 1
         if self.record:
             self.segment["samples"] += samples
             self.segment["messages"] += 1
-            if self.segment["samples"] >= self.segment_samples:
+            if self.segment_samples and self.segment["samples"] >= self.segment_samples:
                 self._close_segment("complete")
                 self._open_segment()
         if self.messages % ACK_EVERY == 0:
+            if self.record and self.wav is not None:
+                self.wav.sync()                          # ~1 s: lo escrito ya es legible aunque el proceso muera
+                if self.messages % (ACK_EVERY * 30) == 0:
+                    self._write_summary("open")          # ~30 s: JSON con huecos y duracion hasta ahora
             return json.dumps(dict(type="ack", index=index), separators=(",", ":"))
         return None
 

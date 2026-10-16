@@ -26,12 +26,12 @@ Arranque (`main.c`): I2S de los mics, parlante (su ring en PSRAM va antes que el
 1. En una PowerShell, desde la raíz del repo (sirve `websockets` 16 o el 17.1 de `tools/requirements-websocket.txt`):
 
    ```powershell
-   python tools/ws_audio_server.py --segment-seconds 10
+   python tools/ws_audio_server.py --nombre mi_prueba --output C:\orbita_pruebas
    ```
 
    **Ojo con OneDrive:** la carpeta de salida por defecto (`tools/prueba_websocket`) queda dentro de OneDrive si el repo está en el Escritorio. En una prueba de 10 min el servidor se congeló ~173 s (sospecha: escritura bloqueada por la sincronización). Para tomas largas usar `--output` fuera de OneDrive (por ejemplo `C:\orbita_pruebas`).
 
-   Abrirlo **antes** de la ESP. Permitir Python en el firewall de la red privada. `Ctrl+C` cierra el segmento en curso y deja el WAV legible.
+   Abrirlo **antes** de la ESP. Permitir Python en el firewall de la red privada. `Ctrl+C` cierra el WAV y deja todo legible.
 
 2. En la terminal de ESP-IDF 5.5.5, en `firmware`: `idf.py menuconfig` → `Orbita integration`: WebSocket, SSID, contraseña y URI `ws://IP-DE-LA-PC:8765` (la IP de la PC puede cambiar). La opción "Segundos nominales por toma" ya no se usa. Si el `sdkconfig` es viejo, verificar `CONFIG_I2S_ISR_IRAM_SAFE=y`. No subir SSID/contraseña ni `sdkconfig`.
 
@@ -42,11 +42,12 @@ Arranque (`main.c`): I2S de los mics, parlante (su ring en PSRAM va antes que el
 En `tools/prueba_websocket/` (fuera de Git), por sesión (una por conexión):
 
 ```
-sesion_<fecha>_<id>_000.wav / .json   segmentos de --segment-seconds (30 s por defecto)
-sesion_<fecha>_<id>.json              resumen: mensajes, duración, huecos, hueco vs sesión anterior
+sesion_<fecha>_<id>_000.wav          UN solo WAV por conexión (--segment-seconds N lo parte cada N s)
+sesion_<fecha>_<id>.json              resumen: nombre de la prueba (--nombre), argumentos del servidor, source/afe,
+                                      config de menuconfig que informa la ESP (VAD, ganancia), mensajes, duración, huecos
 ```
 
-El segmento en curso no se puede abrir hasta que se cierra (por rotación o `Ctrl+C`); un cierre brusco del proceso lo deja con el header sin completar. Los huecos se anotan en el JSON, no se rellenan. Para analizar: `python tools/analizador_wav_generico.py tools/prueba_websocket/`.
+El encabezado del WAV se corrige cada ~1 s y el JSON cada ~30 s: si el servidor muere de golpe, el WAV queda legible hasta el último segundo (el JSON dice `status: open`). Los huecos se anotan en el JSON, no se rellenan. Para analizar: `python tools/analizador_wav_generico.py tools/prueba_websocket/`.
 
 ## Contrato del cable (provisional)
 
@@ -139,50 +140,12 @@ El modelo `tiny` de faster-whisper se descarga la primera vez y corre localmente
 python -m unittest discover -s tools/tests -v
 ```
 
-48 pruebas (1 salteada: fixture C): protocolo v1, sesión v2, helpers STT/PLAY y recorte exacto con devolución PLAY por socket real, verificando que el uplink y los ACK sigan funcionando. El parser del downlink tiene pruebas en C para PC (`tools/tests/downlink`).
+47 pruebas (1 salteada: fixture C): protocolo v1, sesión v2, helpers STT/PLAY y recorte exacto con devolución PLAY por socket real, verificando que el uplink y los ACK sigan funcionando. El parser del downlink tiene pruebas en C para PC (`tools/tests/downlink`).
 
 Estado en hardware (13/10/2026): warm-up, retención y corte de Wi-Fi validados con v1. **v2 probado en la placa**: sesión con `hello`/`ready`, 5 segmentos de 10 s, catch-up de 48 s de audio en 15 s tras un corte largo y huecos marcados (27 s perdidos al desbordar el ring). Falta: corte corto con la sesión en curso, tomas largas (10 min / 1 h) y mirar `sin_ack` y la pila del sink en el monitor.
 
 
-## Diagnóstico local del parlante
-
-En `menuconfig` → `Orbita integration`, activar `Diagnostico: solo tono local del parlante (sin captura ni red)` y recompilar/flashear. Repite 1 kHz durante 1 s y silencio de 3 s, con la ganancia y pines existentes de `orbita_playback.h`. Muestra STARTED/DONE y errores de begin/push/end; no inicia mics, AFE, Wi-Fi ni sockets. No requiere servidor. Desactivar la opción y volver a flashear para retomar STT/replay. Opción desactivada por defecto; no modifica credenciales.
-
-
-### Captura continua y tonos desde el servidor
-
-Con el diagnóstico local **desactivado** en menuconfig, ejecutar `python tools/ws_audio_server.py --test-tones --segment-seconds 10 --output C:\orbita_pruebas`. La ESP captura/envía continuamente y el servidor guarda WAV/JSON normales y devuelve una secuencia PLAY de tres tonos de 1 s, separados por 1 s de silencio, una vez por conexión. No usa STT, G/P ni wake word. RESET en la ESP para repetir desde un arranque nuevo.
-
-
-### Diagnóstico integrado con CRC y pitidos periódicos
-
-El prototipo WebSocket vuelve a encolar un tono local de 1 kHz/1 s al inicializar playback, antes de pipeline/red (token 0, sin reportarlo al servidor). Captura y red arrancan normalmente. Mantener desactivado `Diagnostico: solo tono local...` en menuconfig.
-
-```powershell
-python tools/ws_audio_server.py --test-tones-every 5 --segment-seconds 10 --output C:\orbita_pruebas
-```
-
-Tras ready, el servidor espera 5 s y envía tres pitidos de 250 ms separados por 250 ms (1,25 s, 40000 B de PCM), repitiendo el inicio de la tanda cada 5 s mientras sigue guardando la subida. Si aún espera play_done/play_reject, omite la tanda y avisa; no superpone respuestas. Cada conexión tiene su propio temporizador, cancelado al desconectar. No usa STT ni G/P.
-
-Comparar `PLAY TX` (Python) y `PLAY RX` (ESP): mismo id, bytes y CRC. `PLAY BEGIN` asocia id a token; `DIAG DONE token=...` imprime bytes/CRC retirados del ring **antes de ganancia**, bytes aceptados por I2S, errores y picos antes/después. Para el tono local: token=0, 32000 B, CRC `5df4a34c`. Para estos tonos el pico esperado antes/después es 16000/4000 con la ganancia actual. El diagnóstico toma un snapshot antes de liberar la respuesta para no mezclar contadores entre IDs. CRC/contadores correctos no demuestran que las señales físicas lleguen al amplificador: si sigue el silencio, medir alimentación y salida I2S.
-
-
-### Solo downlink, micrófonos inactivos
-
-Desde la carpeta actual `hi-orbita`, en menuconfig → Orbita integration, desactivar `Diagnostico: solo tono local...` y activar `Diagnostico: WebSocket y parlante SIN microfonos`. Recompilar y flashear. Este modo excluye la llamada a orbita_audio_i2s_init, pipeline/AFE y sink: no genera relojes de captura ni manda hello/PCM. Los módulos pueden seguir alimentados físicamente; el firmware no inicia su interfaz I2S. Conserva tono local de 1 s y CRC; espera su fin antes de iniciar Wi-Fi/WebSocket. Una espera de 5 s agotada detiene el arranque con error. Main mantiene el keepalive que normalmente hace el sink.
-
-Servidor: `python tools/ws_audio_server.py --downlink-tones-only`. No espera subida ni crea grabaciones; envía tres pitidos cortos cada 5 s desde la conexión y recibe play_done/play_reject. Si una tanda sigue sin confirmación, omite la siguiente para no superponer audio. Logs esperados de ESP: `SIN MICROFONOS...`, `LOCAL BOOT`, `DIAG DONE token=0`, `Tono local terminado; iniciando red SIN captura`, conexión y PLAY/DIAG periódicos. No debe aparecer `orbita_audio: I2S inicializado` ni warm-up/sesión de audio_ws. Para retomar captura, desactivar la opción y reflashear.
-
-
-### Captura cruda y pitidos locales, sin red
-
-En Orbita integration, dejar el modo prototipo, desactivar los dos diagnósticos anteriores y activar `Diagnostico: microfonos y pitidos locales SIN red`. Flashear desde `hi-orbita/firmware`. No requiere servidor.
-
-Usa los drivers actuales: inicia I2S de micrófonos y después playback; una tarea en core 1 lee continuamente bloques estéreo de 1024 frames y descarta los datos tras medir picos. No inicia pipeline, AFE, sink, Wi-Fi ni WebSocket. La memoria no crece: un bloque crudo reutilizado de 8192 B y buffers fijos de tono, además del ring acotado de playback. No almacena una grabación ni hace loopback de la voz.
-
-La ESP genera tres tonos locales de 250 ms (1 kHz) con silencios de 250 ms, comenzando una tanda cada 5 s. Se mantienen CRC/bytes/picos de playback. Log `mics_parlante`: STARTED/DONE, frames leídos, errores, overflows DMA, picoL/picoR y RAM/PSRAM libres. Hablar cerca de cada micrófono permite comprobar que sus picos cambian. Si suena, luego se prueba el pipeline y finalmente la red por separado; no demuestra todavía funcionamiento con AFE ni con todo el integrado.
-
-### Prueba STT con un microfono
+## Prueba STT con un micrófono
 
 Con equipo apagado, desconectar solo SD del mic con L/R a GND. Dejar SD del mic con L/R a 3V3 conectado. En Orbita pipeline: AFE desactivado y `Sin AFE: enviar microfono derecho` activado. En Orbita integration: prototipo WebSocket y los tres diagnosticos desactivados. El hello informa `source=mic_r`; captura sigue estereo, salida mono derecha. Esto no deshabilita electricamente ningun microfono ni resuelve la causa del fallo de banco.
 
