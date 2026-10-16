@@ -44,7 +44,7 @@ En `tools/prueba_websocket/` (fuera de Git), por sesión (una por conexión):
 ```
 sesion_<fecha>_<id>_000.wav          UN solo WAV por conexión (--segment-seconds N lo parte cada N s)
 sesion_<fecha>_<id>.json              resumen: nombre de la prueba (--nombre), argumentos del servidor, source/afe,
-                                      config de menuconfig que informa la ESP (VAD, ganancia), mensajes, duración, huecos
+                                      config de menuconfig que informa la ESP (VAD, ganancia), voz según el VAD (`vad`: %, slots con voz por segundo; solo con AFE), mensajes, duración, huecos
 ```
 
 El encabezado del WAV se corrige cada ~1 s y el JSON cada ~30 s: si el servidor muere de golpe, el WAV queda legible hasta el último segundo (el JSON dice `status: open`). Los huecos se anotan en el JSON, no se rellenan. Para analizar: `python tools/analizador_wav_generico.py tools/prueba_websocket/`.

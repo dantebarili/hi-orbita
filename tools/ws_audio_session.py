@@ -72,6 +72,10 @@ class Session:
         self.messages = 0
         self.samples = 0
         self.gaps = []                # posicion global (muestras) de cada hueco
+        self.slots_total = 0          # slots de 32 ms recibidos
+        self.vad_slots = 0            # slots que el VAD del AFE evaluo (0 sin AFE)
+        self.voice_slots = 0          # de esos, los que marco como voz
+        self.voice_by_second = []     # slots de voz en cada segundo de audio (solo con AFE)
         self.extra_info = dict(info or {})   # nombre de la prueba, argumentos del servidor (lo pone quien crea la sesion)
         self.info = {}
 
@@ -96,6 +100,10 @@ class Session:
         self.segments += 1
 
     def _write_summary(self, status, reason=""):
+        self.info["vad"] = dict(
+            slots_total=self.slots_total, slots_evaluados=self.vad_slots, slots_con_voz=self.voice_slots,
+            voz_porcentaje=round(100 * self.voice_slots / self.vad_slots, 1) if self.vad_slots else None,
+            slots_con_voz_por_segundo=self.voice_by_second)   # ~31 slots por segundo: 0 = silencio, ~31 = voz
         self.info.update(status=status, close_reason=reason, messages=self.messages,
                          samples=self.samples, duration_seconds=self.samples / 16000,
                          segments=self.segments, next_expected_seq=self.expected_seq,
@@ -165,6 +173,13 @@ class Session:
             elif len(self.gaps) > 128:
                 del self.gaps[0]  # diagnostico acotado en sesiones STT de duracion indefinida
         self.expected_seq = (seq + slots) & MASK
+        self.slots_total += slots
+        self.vad_slots += vad
+        self.voice_slots += voice
+        if vad:                                   # sin AFE el header trae vad=0: no hay nada que anotar
+            second = self.samples // 16000
+            self.voice_by_second.extend([0] * (second + 1 - len(self.voice_by_second)))
+            self.voice_by_second[second] += voice
         if self.record:
             self.wav.write(pcm)
         self.samples += samples

@@ -100,6 +100,21 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(info["config"], dict(afe=1, vad_mode=4, play_gain_q15=32768))   # lo no escalar/largo se descarta
         self.assertEqual(info["status"], "closed")
 
+    def test_vad_voice_in_json(self):
+        def with_vad(index, voice, vad):
+            data = bytearray(packet(index))
+            struct.pack_into("<HH", data, 34 - 2, voice, vad)    # voice en el byte 32, vad en el 34
+            return bytes(data)
+        s = self.session()
+        s.process(with_vad(0, 0, 4))
+        s.process(with_vad(1, 3, 4))
+        s.process(with_vad(2, 0, 0))                              # sin evaluar (como sin AFE)
+        s.close()
+        info = json.loads(next(Path(self.temp.name).glob("sesion_*[0-9a-f].json")).read_text())["vad"]
+        self.assertEqual((info["slots_total"], info["slots_evaluados"], info["slots_con_voz"]), (12, 8, 3))
+        self.assertEqual(info["voz_porcentaje"], 37.5)
+        self.assertEqual(info["slots_con_voz_por_segundo"], [3])
+
     def test_rotation_into_segments(self):
         s = self.session(segment_samples=2048 * 3)     # 3 mensajes por archivo
         for i in range(7):
