@@ -193,13 +193,13 @@ static void tarea_feed(void *arg)
         }
 #else
         if (n == ORBITA_CHUNK_BYTES) {
-            // Estereo intercalado L,R,L,R...: el frame f tiene su L en la posicion 2*f. Se descarta R.
+            // Estereo L,R,L,R...: se selecciona un canal sin cambiar la captura I2S.
             const int16_t *estereo = (const int16_t *)p;
             // Lo perdido antes de este chunk va en el primer slot; el segundo es continuo con el primero.
             uint32_t perdidas = muestras_perdidas_nuevas();
             for (size_t b = 0; b < BLOQUES_POR_CHUNK; b++) {
                 for (size_t k = 0; k < ORBITA_SLOT_SAMPLES; k++) {
-                    s_mono_buf[b][k] = estereo[2 * (b * ORBITA_SLOT_SAMPLES + k)];
+                    s_mono_buf[b][k] = estereo[2 * (b * ORBITA_SLOT_SAMPLES + k) + ORBITA_RAW_MIC_INDEX];
                 }
                 s_bloques_mono++;
                 // flags = 0: sin AFE no hay VAD, compuerta abierta (se manda igual).
@@ -285,6 +285,9 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
         s_cfg = *cfg;
     }
 
+#if !ORBITA_PIPELINE_USA_AFE
+    ESP_LOGI(TAG, "Audio crudo mono: %s", ORBITA_RAW_MIC_SOURCE);
+#endif
     // El ring out se reserva ANTES del AFE (bloque contiguo de PSRAM; esp-sr la fragmenta) y antes
     // de crear las tareas que lo usan. Si ya estaba iniciado (otro modulo), se sigue con ese.
     esp_err_t ring_err = orbita_ring_out_init();

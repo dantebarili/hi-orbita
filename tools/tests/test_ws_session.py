@@ -47,6 +47,16 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(json.loads(s.process(hello())), dict(type="ready", id=IDENTITY))
         return s
 
+    def test_right_microphone_source(self):
+        s = Session(self.temp.name, record=False)
+        message = json.loads(hello())
+        message["source"] = "mic_r"
+        self.assertEqual(json.loads(s.process(json.dumps(message)))["type"], "ready")
+        self.assertEqual(s.info["source"], "mic_r")
+        s.process(packet(0))
+        s.close()
+        self.assertEqual(list(Path(self.temp.name).iterdir()), [])
+
     def test_continuous_and_ack(self):
         s = self.session()
         acks = [s.process(packet(i)) for i in range(ACK_EVERY * 2)]

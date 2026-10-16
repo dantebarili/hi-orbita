@@ -39,6 +39,15 @@
 #define ORBITA_PIPELINE_USA_AFE  0
 #endif
 
+// El mismo criterio alimenta el ring mono y el campo source del protocolo.
+#if defined(CONFIG_ORBITA_RAW_MIC_RIGHT) && CONFIG_ORBITA_RAW_MIC_RIGHT
+#define ORBITA_RAW_MIC_INDEX 1
+#define ORBITA_RAW_MIC_SOURCE "mic_r"
+#else
+#define ORBITA_RAW_MIC_INDEX 0
+#define ORBITA_RAW_MIC_SOURCE "mic_l"
+#endif
+
 /**
  * @brief   Callback por cada chunk capturado.
  *

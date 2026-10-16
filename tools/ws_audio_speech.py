@@ -6,7 +6,7 @@ import math
 import unicodedata
 import wave
 from pathlib import Path
-from struct import Struct
+from struct import Struct, pack
 
 SAMPLE_RATE = 16_000
 MAX_PLAY_SECONDS = 15
@@ -15,11 +15,36 @@ PLAY_HEADER = Struct("<4sBBHQII")
 assert PLAY_HEADER.size == 24
 
 
+def diagnostic_tones_pcm() -> bytes:
+    """Tres tonos de 1 kHz y 1 s, separados por 1 s de silencio; pico 16000."""
+    cycle = (0, 6123, 11314, 14782, 16000, 14782, 11314, 6123,
+             0, -6123, -11314, -14782, -16000, -14782, -11314, -6123)
+    tone = pack("<16h", *cycle) * 1000
+    silence = bytes(SAMPLE_RATE * 2)
+    return tone + silence + tone + silence + tone
+
+
+def periodic_tones_pcm() -> bytes:
+    """Tres pitidos de 250 ms separados por 250 ms; total 1,25 s."""
+    tone = diagnostic_tones_pcm()[:SAMPLE_RATE // 4 * 2]
+    silence = bytes(SAMPLE_RATE // 4 * 2)
+    return tone + silence + tone + silence + tone
+
+
+def contains_keyword(transcript: str, keyword: str) -> bool:
+    """Palabra/frase completa, ignorando mayusculas y tildes; sin coincidencias difusas."""
+    def normalize(value):
+        value = unicodedata.normalize("NFKD", value.casefold())
+        return "".join(c for c in value if not unicodedata.combining(c))
+    keyword = normalize(keyword.strip())
+    if not keyword:
+        return False
+    return re.search(r"(?<![\w])" + re.escape(keyword) + r"(?![\w])",
+                     normalize(transcript), flags=re.UNICODE) is not None
+
+
 def contains_orbita(transcript: str) -> bool:
-    """Match the spoken word, ignoring case and the accent on Ó."""
-    normalized = unicodedata.normalize("NFKD", transcript.casefold())
-    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
-    return re.search(r"(?<![\w])orbita(?![\w])", normalized, flags=re.UNICODE) is not None
+    return contains_keyword(transcript, "orbita")
 
 
 class AudioWindow:
@@ -59,7 +84,7 @@ class FasterWhisperRecognizer:
         self.model_size = model_size
         self._model = None
 
-    def transcribe(self, pcm: bytes) -> str:
+    def _segments(self, pcm: bytes, words=False):
         import numpy as np
         from faster_whisper import WhisperModel
 
@@ -71,9 +96,18 @@ class FasterWhisperRecognizer:
             language="es",
             beam_size=1,
             condition_on_previous_text=False,
-            vad_filter=False,
+            vad_filter=words,
+            word_timestamps=words,
         )
-        return " ".join(segment.text.strip() for segment in segments).strip()
+        return list(segments)
+
+    def transcribe(self, pcm: bytes) -> str:
+        return " ".join(segment.text.strip() for segment in self._segments(pcm)).strip()
+
+    def transcribe_words(self, pcm: bytes):
+        """Timestamps de palabras para no repetir el texto del solapamiento."""
+        return [dict(word=word.word, start=float(word.start), end=float(word.end))
+                for segment in self._segments(pcm, words=True) for word in (segment.words or [])]
 
 
 def load_reply_wav(path: Path) -> bytes:

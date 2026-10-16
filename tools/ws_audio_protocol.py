@@ -57,7 +57,7 @@ class Recording:
             raise ValueError("id invalido")
         if (obj.get("protocol") != "orbita-pcm-v1" or obj.get("format") != "s16le" or
                 obj.get("rate") != 16000 or obj.get("channels") != 1 or
-                obj.get("source") not in ("mic_l", "afe")):
+                obj.get("source") not in ("mic_l", "mic_r", "afe")):
             raise ValueError("formato no soportado")
         target = integer(obj.get("target_samples"), 16000, 16000*600, "target_samples")
         dropped = integer(obj.get("dropped_before"), 0, 2**64-1, "dropped_before")

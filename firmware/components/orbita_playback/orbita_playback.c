@@ -51,6 +51,43 @@ static uint32_t prebuffer_bytes_play = 0;     // cuantos bytes hay que juntar an
 static i2s_chan_handle_t tx_chan = NULL;      // canal I2S de salida (hacia el MAX98357A)
 static volatile bool iniciado_play = false;   // true recien cuando init termino TODO (mutex, ring y tarea)
 
+// Diagnostico PCM antes de la ganancia, y bytes aceptados por el driver (no mide los pines).
+typedef struct {
+    uint32_t crc, bytes_ring, bytes_i2s, errors, peak_before, peak_after;
+} play_diag_t;
+static play_diag_t s_diag;
+
+static uint32_t diag_crc32(uint32_t previous, const uint8_t *data, size_t size)
+{
+    uint32_t crc = ~previous;
+    for (size_t i = 0; i < size; ++i) {
+        crc ^= data[i];
+        for (unsigned bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ ((crc & 1) ? 0xedb88320u : 0);
+    }
+    return ~crc;
+}
+
+static uint32_t peak_pcm(const void *data, size_t bytes)
+{
+    const int16_t *samples = data;
+    uint32_t peak = 0;
+    for (size_t i = 0; i < bytes / 2; ++i) {
+        int32_t sample = samples[i];
+        uint32_t magnitude = sample < 0 ? (uint32_t)-sample : (uint32_t)sample;
+        if (magnitude > peak) peak = magnitude;
+    }
+    return peak;
+}
+
+static void log_diag(uint32_t token, const play_diag_t *diag, const char *reason)
+{
+    ESP_LOGI(TAG, "DIAG %s token=%lu: ring_bytes=%lu crc32=%08lx i2s_bytes=%lu errores=%lu pico_antes=%lu pico_despues=%lu",
+             reason, (unsigned long)token, (unsigned long)diag->bytes_ring, (unsigned long)diag->crc,
+             (unsigned long)diag->bytes_i2s, (unsigned long)diag->errors,
+             (unsigned long)diag->peak_before, (unsigned long)diag->peak_after);
+}
+
 // Avisa un evento a quien registro el callback (puede no haber). Llamar SIEMPRE fuera del mutex y SOLO
 // desde tarea_play: asi los eventos salen en orden. `id` se captura bajo el mutex junto con el cambio de
 // estado que lo origina, para que un evento atrasado lleve el id de SU respuesta.
@@ -148,9 +185,11 @@ static void tarea_play(void *arg){
         if (est == DETENIENDO) {         // stop pedido: aca no hay ningun trozo en la mano, se puede vaciar
             vaciar_ring();               // lo que ya esta en el DMA (hasta PLAY_DMA_MS) suena igual: disable/enable no lo limpia
             xSemaphoreTake(mutex_play, portMAX_DELAY);
+            play_diag_t diag = s_diag; // snapshot ANTES de publicar LIBRE: otro begin puede resetear s_diag
             estado_play = LIBRE;
             xSemaphoreGive(mutex_play);
             en_underrun = false;
+            log_diag(id, &diag, "STOP");
             emitir(ORBITA_PLAY_EV_STOPPED, id);   // fuera del mutex
             continue;
         }
@@ -166,11 +205,19 @@ static void tarea_play(void *arg){
         void *trozo = xRingbufferReceiveUpTo(ring_play, &n, pdMS_TO_TICKS(PLAY_POLL_MS), PLAY_TROZO_BYTES);
         if (trozo != NULL) {
             en_underrun = false;
+            s_diag.crc = diag_crc32(s_diag.crc, trozo, n);
+            s_diag.bytes_ring += (uint32_t)n;
+            uint32_t peak = peak_pcm(trozo, n);
+            if (peak > s_diag.peak_before) s_diag.peak_before = peak;
             aplicar_ganancia(trozo, n);   // tope de volumen, sobre el trozo que esta en el ring (ya es nuestro)
             // i2s_channel_write se bloquea hasta que el DMA tiene lugar: es la que marca el ritmo real (16 kHz).
+            peak = peak_pcm(trozo, n);
+            if (peak > s_diag.peak_after) s_diag.peak_after = peak;
             size_t escritos = 0;
             esp_err_t err = i2s_channel_write(tx_chan, trozo, n, &escritos, PLAY_I2S_WRITE_TIMEOUT_MS);
-            if (err != ESP_OK) {
+            s_diag.bytes_i2s += (uint32_t)escritos;
+            if (err != ESP_OK || escritos != n) {
+                s_diag.errors++;
                 ESP_LOGW(TAG, "i2s_channel_write: %s (%u de %u B)", esp_err_to_name(err), (unsigned)escritos, (unsigned)n);
             }
             vRingbufferReturnItem(ring_play, trozo);
@@ -184,8 +231,10 @@ static void tarea_play(void *arg){
             vTaskDelay(pdMS_TO_TICKS(PLAY_DMA_MS));
             bool fin = false;
             uint32_t underruns = 0;
+            play_diag_t diag = {0};
             xSemaphoreTake(mutex_play, portMAX_DELAY);
             if (estado_play == VACIANDO) {   // si entro un stop (DETENIENDO) no se toca: lo atiende la proxima vuelta
+                diag = s_diag; // snapshot antes de permitir el proximo begin
                 estado_play = LIBRE;
                 fin = true;
                 underruns = underruns_play;
@@ -194,6 +243,7 @@ static void tarea_play(void *arg){
             if (fin) {
                 ESP_LOGI(TAG, "respuesta terminada: underruns=%u, pila libre=%u B",
                          (unsigned)underruns, (unsigned)uxTaskGetStackHighWaterMark(NULL));
+                log_diag(id, &diag, "DONE");
                 emitir(ORBITA_PLAY_EV_DONE, id);  // fuera del mutex
             }
         } else if (!en_underrun) {       // SONANDO con el ring vacio: llego tarde el audio, se oye un corte
@@ -287,6 +337,7 @@ esp_err_t orbita_playback_begin(uint32_t play_id){
             started_pendiente = false;
             bytes_recibidos_play = 0;
             underruns_play = 0;
+            s_diag = (play_diag_t){0};
             libre = true;
         }
         xSemaphoreGive(mutex_play);

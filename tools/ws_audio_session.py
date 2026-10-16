@@ -20,8 +20,12 @@ MASK = 0xffffffff
 
 
 class Session:
+    """record=False conserva validacion/ACK sin crear archivos; huecos acotados a 128."""
     def __init__(self, directory, previous_expected_seq=None,
-                 segment_samples=SEGMENT_SECONDS * 16000, previous=None):
+                 segment_samples=SEGMENT_SECONDS * 16000, previous=None, record=True):
+        self.closed = False
+        self.record = record
+        self.gap_count = 0
         self.directory = Path(directory)
         self.segment_samples = segment_samples
         self.previous_expected_seq = previous_expected_seq   # fijo (pruebas); si hay `previous`, manda el vivo
@@ -74,19 +78,21 @@ class Session:
             raise ValueError("id invalido")
         if (obj.get("protocol") != "orbita-pcm-v2" or obj.get("format") != "s16le" or
                 obj.get("rate") != 16000 or obj.get("channels") != 1 or
-                obj.get("source") not in ("mic_l", "afe")):
+                obj.get("source") not in ("mic_l", "mic_r", "afe")):
             raise ValueError("formato no soportado")
         self.id = identity
         self.stamp = time.strftime("sesion_%Y%m%d_%H%M%S")
         self.started = time.monotonic()
-        self.directory.mkdir(parents=True, exist_ok=True)
+        if self.record:
+            self.directory.mkdir(parents=True, exist_ok=True)
         self.info = dict(id=identity, source=obj["source"], protocol="orbita-pcm-v2")
-        self._open_segment()
+        if self.record:
+            self._open_segment()
         return json.dumps(dict(type="ready", id=identity), separators=(",", ":"))
 
     def binary(self, data):
         """Procesa un mensaje de audio. Devuelve un ack (JSON) cuando toca, si no None."""
-        if self.wav is None or len(data) < HEADER.size:
+        if self.closed or self.id is None or len(data) < HEADER.size:
             raise ValueError("audio sin hello o header incompleto")
         magic, version, size, flags, identity, index, seq, lost, slots, samples, voice, vad, crc = \
             HEADER.unpack_from(data)
@@ -108,17 +114,23 @@ class Session:
         if lost or missing:
             # `lost` y `missing` pueden describir el mismo hueco: no sumarlos.
             gap = dict(at_sample=self.samples, seq=seq, lost_samples=lost, missing_slots=missing)
+            self.gap_count += 1
             self.gaps.append(gap)
-            self.segment["gaps"].append(gap)
+            if self.record:
+                self.segment["gaps"].append(gap)
+            elif len(self.gaps) > 128:
+                del self.gaps[0]  # diagnostico acotado en sesiones STT de duracion indefinida
         self.expected_seq = (seq + slots) & MASK
-        self.wav.writeframesraw(pcm)
+        if self.record:
+            self.wav.writeframesraw(pcm)
         self.samples += samples
         self.messages += 1
-        self.segment["samples"] += samples
-        self.segment["messages"] += 1
-        if self.segment["samples"] >= self.segment_samples:
-            self._close_segment("complete")
-            self._open_segment()
+        if self.record:
+            self.segment["samples"] += samples
+            self.segment["messages"] += 1
+            if self.segment["samples"] >= self.segment_samples:
+                self._close_segment("complete")
+                self._open_segment()
         if self.messages % ACK_EVERY == 0:
             return json.dumps(dict(type="ack", index=index), separators=(",", ":"))
         return None
@@ -166,5 +178,7 @@ class Session:
                 self._segment_path(".wav").unlink(missing_ok=True)
             else:
                 self._close_segment("interrupted")
-        self._write_summary("closed", reason)
+        if not self.closed and self.record:
+            self._write_summary("closed", reason)
+        self.closed = True
         return self.expected_seq

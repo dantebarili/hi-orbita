@@ -9,6 +9,15 @@ menu "Orbita pipeline"
             Es una sola opcion para todo el proyecto, asi pipeline.c y main/ nunca
             se compilan con valores distintos.
 
+    config ORBITA_RAW_MIC_RIGHT
+        bool "Sin AFE: enviar microfono derecho (L/R a 3V3)"
+        default n
+        depends on !ORBITA_PIPELINE_USA_AFE
+        help
+            Selecciona R para el audio mono del ring de salida; por defecto se usa L.
+            No apaga ningun microfono ni cambia el bus I2S estereo.
+            Para la prueba con un solo SD conectado, dejar conectado el del mic R.
+
     config ORBITA_AFE_VAD_MODE
         int "VAD del AFE: modo (0 normal ... 4 el mas agresivo)"
         range 0 4

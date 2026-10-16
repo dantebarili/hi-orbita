@@ -160,7 +160,7 @@ static bool start_session(uint32_t connection)
         int n = snprintf(s.control, sizeof(s.control),
             "{\"type\":\"hello\",\"protocol\":\"orbita-pcm-v2\",\"id\":\"%016" PRIx64
             "\",\"rate\":16000,\"channels\":1,\"format\":\"s16le\",\"source\":\"%s\"}",
-            s.id, ORBITA_PIPELINE_USA_AFE ? "afe" : "mic_l");
+            s.id, ORBITA_PIPELINE_USA_AFE ? "afe" : ORBITA_RAW_MIC_SOURCE);
         if (n <= 0 || (size_t)n >= sizeof(s.control) ||
             orbita_ws_send(ORBITA_WS_TEXT, s.control, n, SEND_TIMEOUT_MS) != ESP_OK) return false;
         s.hello_conn = connection;

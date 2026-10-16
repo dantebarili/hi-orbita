@@ -20,6 +20,15 @@
 #include "test.h"
 #endif
 
+#if CONFIG_ORBITA_PLAYBACK_LOCAL_TEST
+// Implementado en playback_local_test.c; devuelve solo si falla el diagnostico.
+esp_err_t playback_local_test_run(void);
+#endif
+
+#if CONFIG_ORBITA_MIC_PLAYBACK_TEST
+esp_err_t mic_playback_test_run(void);
+#endif
+
 // Falla de arranque: en laboratorio el equipo NO se reinicia (un reinicio en bucle tapa el
 // motivo). Queda parado repitiendo el error, para leerlo en el monitor. En producto esto
 // cambia: ahi si corresponde reiniciar (ver A10 del plan).
@@ -47,19 +56,45 @@ static void log_memoria(const char *etapa)
 
 void app_main(void)
 {
+#if CONFIG_ORBITA_MIC_PLAYBACK_TEST
+    esp_err_t mic_test_err = mic_playback_test_run();
+    if (mic_test_err != ESP_OK) arranque_fallo("microfonos + parlante", mic_test_err);
+    return;
+#endif
+#if CONFIG_ORBITA_PLAYBACK_LOCAL_TEST
+    esp_err_t test_err = playback_local_test_run();
+    if (test_err != ESP_OK) arranque_fallo("tono local", test_err);
+    return;
+#endif
 #if CONFIG_ORBITA_LAB_WEBSOCKET
     // S2: la captura va PRIMERO y no espera a la red. Wi-Fi y WebSocket se levantan despues y
     // se reconectan solos (Wi-Fi cada 5 s, WebSocket con backoff 1-2-4-8 s); mientras tanto el
     // sink retiene el audio en el ring (S1).
     if (!CONFIG_ORBITA_WIFI_SSID[0] || !CONFIG_ORBITA_WS_URI[0])
         arranque_fallo("Configurar Wi-Fi y URI en Orbita integration", ESP_ERR_INVALID_ARG);
-    esp_err_t err = orbita_audio_i2s_init();
+    esp_err_t err;
+#if !CONFIG_ORBITA_WS_NO_CAPTURE_TEST
+    err = orbita_audio_i2s_init();
     if (err != ESP_OK) arranque_fallo("I2S", err);
+#else
+    ESP_LOGW("main", "SIN MICROFONOS: no se inicializan I2S de entrada, pipeline/AFE ni sink");
+#endif
     // El ring del parlante (PSRAM) se reserva antes de que el pipeline/AFE asignen sus buffers.
     log_memoria("antes de playback");
     err = audio_ws_playback_init();
     if (err != ESP_OK) arranque_fallo("playback", err);
     log_memoria("despues de playback");
+#if CONFIG_ORBITA_WS_NO_CAPTURE_TEST
+    // Terminar el tono local antes de iniciar la red: prueba separada y audible.
+    TickType_t tone_start = xTaskGetTickCount();
+    while (audio_ws_playback_is_active()) {
+        if (xTaskGetTickCount() - tone_start >= pdMS_TO_TICKS(5000))
+            arranque_fallo("timeout tono local", ESP_ERR_TIMEOUT);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    ESP_LOGI("main", "Tono local terminado; iniciando red SIN captura");
+#endif
+#if !CONFIG_ORBITA_WS_NO_CAPTURE_TEST
     // NULL: sin callbacks del modo UART. No enviar desde on_crudo ni on_afe.
     err = orbita_pipeline_start(NULL);
     if (err != ESP_OK) arranque_fallo("pipeline", err);
@@ -67,6 +102,7 @@ void app_main(void)
     // Unico consumidor del ring out: arma los mensajes y los manda por el WebSocket.
     err = orbita_sink_start(orbita_audio_ws_sink());
     if (err != ESP_OK) arranque_fallo("sink WebSocket", err);
+#endif
     err = nvs_flash_init();
     if (err != ESP_OK) arranque_fallo("NVS", err);
     err = esp_netif_init();
@@ -84,7 +120,16 @@ void app_main(void)
     err = orbita_ws_start(&ws);
     if (err != ESP_OK) arranque_fallo("WebSocket", err);
     log_memoria("arranque completo");
+#if CONFIG_ORBITA_WS_NO_CAPTURE_TEST
+    ESP_LOGW("main", "Solo downlink: no se envia hello ni audio; servidor --downlink-tones-only");
+    for (;;) {
+        // Normalmente lo hace el sink, ausente en este diagnostico.
+        orbita_ws_keepalive();
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+#else
     ESP_LOGI("main", "Audio WebSocket activo; el resumen sale cada 30 s en audio_ws");
+#endif
 #else
     // Drivers y rings del modulo de laboratorio (se borra cuando exista el sink de sockets).
     test_init();
