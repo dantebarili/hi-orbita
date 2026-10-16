@@ -9,30 +9,6 @@ menu "Orbita integration"
             select ESP_WS_CLIENT_SEPARATE_TX_LOCK
     endchoice
 
-    config ORBITA_PLAYBACK_LOCAL_TEST
-        bool "Diagnostico: solo tono local del parlante (sin captura ni red)"
-        default n
-        depends on ORBITA_LAB_WEBSOCKET
-        help
-            Repite un tono de 1 s con 3 s de silencio. No inicia mics, AFE ni red.
-            Desactivar para volver al prototipo; no cambia credenciales ni pines.
-
-    config ORBITA_WS_NO_CAPTURE_TEST
-        bool "Diagnostico: WebSocket y parlante SIN microfonos"
-        default n
-        depends on ORBITA_LAB_WEBSOCKET && !ORBITA_PLAYBACK_LOCAL_TEST
-        help
-            No inicializa I2S de entrada, pipeline/AFE ni sink. Mantiene red y playback.
-            Usar servidor con --downlink-tones-only. El tono local de arranque se conserva.
-
-    config ORBITA_MIC_PLAYBACK_TEST
-        bool "Diagnostico: microfonos y pitidos locales SIN red"
-        default n
-        depends on ORBITA_LAB_WEBSOCKET && !ORBITA_PLAYBACK_LOCAL_TEST && !ORBITA_WS_NO_CAPTURE_TEST
-        help
-            Captura cruda continua en un buffer reutilizado; se mide y descarta.
-            Tres pitidos locales cada 5 s. No inicia Wi-Fi, WebSocket, pipeline ni AFE.
-
     config ORBITA_WIFI_SSID
         string "Wi-Fi SSID"
         default ""

@@ -9,9 +9,9 @@ Un solo lugar con todos los pines y dónde están en el código. Es la fuente de
 | 4 | I2S mics: BCLK | En uso | `ORBITA_I2S_BCLK_GPIO`, `audio_capture.h` | BCLK de ambos mics |
 | 5 | I2S mics: WS | En uso | `ORBITA_I2S_WS_GPIO`, `audio_capture.h` | WS de ambos mics |
 | 6 | I2S mics: DIN | En uso | `ORBITA_I2S_DIN_GPIO`, `audio_capture.h` | DOUT de ambos mics (cada uno en su slot con el pin `L/R`) |
-| 7 | I2S parlante: BCLK | Propuesto (14/10) | `ORBITA_PLAY_BCLK_GPIO`, `orbita_playback.h` | BCLK del MAX98357A |
-| 15 | I2S parlante: WS | Propuesto (14/10) | `ORBITA_PLAY_WS_GPIO`, `orbita_playback.h` | LRC del MAX98357A |
-| 16 | I2S parlante: DOUT | Propuesto (14/10) | `ORBITA_PLAY_DOUT_GPIO`, `orbita_playback.h` | DIN del MAX98357A |
+| 15 | I2S parlante: BCLK | En uso (PCB, 16/10) | `ORBITA_PLAY_BCLK_GPIO`, `orbita_playback.h` | BCLK del MAX98357A |
+| 7 | I2S parlante: WS | En uso (PCB, 16/10) | `ORBITA_PLAY_WS_GPIO`, `orbita_playback.h` | LRC del MAX98357A |
+| 16 | I2S parlante: DOUT | En uso (PCB, 16/10) | `ORBITA_PLAY_DOUT_GPIO`, `orbita_playback.h` | DIN del MAX98357A |
 | 19 / 20 | USB-Serial-JTAG (DM / DP) | Reservado | — | Comandos y datos (`tools/orbita_serial.py`) |
 | 43 / 44 | UART0 (TX / RX) | Reservado | — | Logs (`idf.py monitor`) |
 

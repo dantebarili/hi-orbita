@@ -23,15 +23,15 @@
  * Ojo: GPIO 15 y 16 son XTAL_32K en el ESP32-S3: si la PCB lleva cristal de 32 kHz, cambiarlos.
  * Alternativa sin ese compromiso: 7, 8, 9. Pines de alimentacion y control del MAX98357A (VIN, SD, GAIN):
  * sin verificar contra su datasheet. */
-#define ORBITA_PLAY_BCLK_GPIO   7
-#define ORBITA_PLAY_WS_GPIO    15
+#define ORBITA_PLAY_BCLK_GPIO  15   // igual que la PCB impresa (BCLK y LRC estaban al reves en el firmware anterior)
+#define ORBITA_PLAY_WS_GPIO     7
 #define ORBITA_PLAY_DOUT_GPIO  16
 
 /* VOLUMEN LIMITADO POR SOFTWARE: este es el unico lugar donde se cambia. Toda muestra se multiplica por esta
- * ganancia (Q15: 32768 = 1,0; 8192 = 0,25 = -12 dB) justo antes de i2s_channel_write, en aplicar_ganancia() de
+ * ganancia (Q15: 32768 = 1,0 = sin atenuar; 16384 = 0,5 = -6 dB; 8192 = 0,25 = -12 dB) justo antes de i2s_channel_write, en aplicar_ganancia() de
  * orbita_playback.c. Es el unico camino al I2S de salida: afecta a todo lo que suene, venga de donde venga.
- * Protege parlante y alimentacion (hoy el ampli va a 5 V externos). Subirlo de a poco. Rango 0 a 32768. */
-#define ORBITA_PLAY_GAIN_Q15  8192
+ * Protege parlante y alimentacion (hoy el ampli va a 5 V externos). Rango 0 a 32768: el firmware solo atenua, no amplifica (mas volumen: normalizar en el servidor o GAIN del ampli). */
+#define ORBITA_PLAY_GAIN_Q15  32768
 
 /* EVENTOS: hechos ASINCRONOS que el modulo avisa hacia afuera por el callback (que se hace con ellos lo
  * decide quien escucha). Cada evento trae el `play_id` que se paso a orbita_playback_begin() para la

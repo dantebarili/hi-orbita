@@ -11,6 +11,7 @@
 #include "audio_ws_wire.h"
 #include "orbita_ws.h"
 #include "pipeline.h"
+#include "orbita_playback.h"      // ORBITA_PLAY_GAIN_Q15, para informarlo en el hello
 #include "audio_ring_out.h"
 #include "audio_capture.h"
 #include "esp_random.h"
@@ -62,7 +63,7 @@ static struct {
     uint64_t id, dropped_samples;
     uint32_t failed_attempts;
     uint8_t packet[ORBITA_WIRE_HEADER + ORBITA_WIRE_MAX_SAMPLES*2];
-    char control[256];
+    char control[384];
     orbita_ws_message_t reply;
 } s = { .last_ack = -1 };
 
@@ -149,6 +150,18 @@ static bool wait_ready(uint32_t connection, uint32_t timeout_ms)
 // Abre la sesion: manda `hello` (UNO por conexion) y espera `ready`. Id nuevo por conexion.
 // Si el ready no llega, la proxima llamada en la misma conexion solo vuelve a esperarlo: un segundo
 // hello lo rechaza el servidor y cerraria la conexion.
+// Config que viaja en el hello y queda en el JSON de la toma, para saber despues con que se hizo.
+// Las perillas del VAD solo existen en el Kconfig con el AFE activado: sin AFE se informa -1.
+#ifdef CONFIG_ORBITA_AFE_VAD_MODE
+#define HELLO_VAD_MODE      CONFIG_ORBITA_AFE_VAD_MODE
+#define HELLO_VAD_SPEECH_MS CONFIG_ORBITA_AFE_VAD_MIN_SPEECH_MS
+#define HELLO_VAD_NOISE_MS  CONFIG_ORBITA_AFE_VAD_MIN_NOISE_MS
+#else
+#define HELLO_VAD_MODE      (-1)
+#define HELLO_VAD_SPEECH_MS (-1)
+#define HELLO_VAD_NOISE_MS  (-1)
+#endif
+
 static bool start_session(uint32_t connection)
 {
     if (s.hello_conn != connection) {
@@ -159,8 +172,12 @@ static bool start_session(uint32_t connection)
         s.no_window = false;
         int n = snprintf(s.control, sizeof(s.control),
             "{\"type\":\"hello\",\"protocol\":\"orbita-pcm-v2\",\"id\":\"%016" PRIx64
-            "\",\"rate\":16000,\"channels\":1,\"format\":\"s16le\",\"source\":\"%s\"}",
-            s.id, ORBITA_PIPELINE_USA_AFE ? "afe" : ORBITA_RAW_MIC_SOURCE);
+            "\",\"rate\":16000,\"channels\":1,\"format\":\"s16le\",\"source\":\"%s\","
+            "\"config\":{\"afe\":%d,\"vad_mode\":%d,\"vad_speech_ms\":%d,\"vad_noise_ms\":%d,"
+            "\"play_gain_q15\":%d}}",
+            s.id, ORBITA_PIPELINE_USA_AFE ? "afe" : ORBITA_RAW_MIC_SOURCE,
+            ORBITA_PIPELINE_USA_AFE, HELLO_VAD_MODE, HELLO_VAD_SPEECH_MS, HELLO_VAD_NOISE_MS,
+            ORBITA_PLAY_GAIN_Q15);
         if (n <= 0 || (size_t)n >= sizeof(s.control) ||
             orbita_ws_send(ORBITA_WS_TEXT, s.control, n, SEND_TIMEOUT_MS) != ESP_OK) return false;
         s.hello_conn = connection;
