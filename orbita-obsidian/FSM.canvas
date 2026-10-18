@@ -1,0 +1,43 @@
+{
+	"nodes":[
+		{"id":"errors","type":"group","x":-460,"y":1190,"width":3570,"height":1200,"color":"1","label":"02 · ERRORES Y REINTENTOS · detalle del loop principal"},
+		{"id":"main","type":"group","x":-460,"y":-120,"width":3570,"height":1120,"color":"5","label":"01 · LOOP PRINCIPAL · FSM de diseño"},
+		{"id":"notes","type":"group","x":3230,"y":440,"width":750,"height":1950,"color":"3","label":"LECTURA Y DECISIONES PENDIENTES"},
+		{"id":"start","type":"text","text":"## Inicio","x":-400,"y":150,"width":200,"height":100,"color":"4"},
+		{"id":"init","type":"text","text":"## audio_init\nInicialización local de hardware.\n\nI2S / PSRAM.","x":0,"y":110,"width":360,"height":180,"color":"5"},
+		{"id":"play","type":"text","text":"## audio_play\nReproduce la respuesta.\n\nSi no hay audio, no reproduce contenido.","x":2300,"y":680,"width":400,"height":200,"color":"5"},
+		{"id":"send","type":"text","text":"## server_send\nEnvía audio de fondo o del pedido urgente.\n\nUna nueva wake word pausa el resumen y prioriza lo urgente.","x":1380,"y":110,"width":430,"height":165,"color":"5"},
+		{"id":"dback","type":"text","text":"## server_back\nMismo estado del diagrama 01.","x":-300,"y":1440,"width":400,"height":170,"color":"5"},
+		{"id":"derror","type":"text","text":"## error_reintento\nSeparar fallo de request (WS vivo)\nde fallo del socket.","x":850,"y":1440,"width":440,"height":120,"color":"1"},
+		{"id":"wake","type":"text","text":"## audio_wake · LOCAL\nEspera y detección local de la wake word.","x":700,"y":165,"width":400,"height":110,"color":"5"},
+		{"id":"timeouts","type":"text","text":"## Política de errores documentada\n\n**Request, socket vivo:** timeout de 5 s desde el último byte enviado; backoff fijo de 1 s; máximo 2 intentos. Agotado: descartar segmento y clip local error_conexion.\n\n**Socket caído:** ping cada 10 s; sin pong en 3 s se considera caído. Backoff 1–2–4–8–16 s; máximo 5 intentos. Agotado: clip local error_wifi.\n\nLos clips terminan por dev_msg_local_fin(), no por una decisión srv_.","x":3280,"y":510,"width":650,"height":470,"color":"1"},
+		{"id":"priority","type":"text","text":"## Interrupción urgente\n\n**Durante envío:** cortar el segmento de fondo, avisar urgencia, enviar pedido urgente y retomar el resumen después de la respuesta.\n\n**Durante reproducción:** cortar el playback, avisar urgencia y pasar al envío del pedido urgente.\n\nEl documento define un camino secuencial: no mezclar audio urgente y audio de resumen.\n\nLa prioridad y la pausa/reanudación del procesamiento las administra el backend.","x":3280,"y":1030,"width":650,"height":450,"color":"2"},
+		{"id":"pending","type":"text","text":"## Puntos abiertos · no resueltos aquí\n\n1. Tamaño y criterio de corte del segmento: tiempo, VAD o buffer.\n2. Tras interrumpir playback: ¿retomar, reiniciar o descartar?\n3. Socket caído durante server_send o audio_play: faltan arcos explícitos; evaluar heartbeat global.\n4. Ubicación y reproducción de clips de error en el ESP32; uso de LED además del audio.\n\nEstos pendientes se conservan tal como aparecen en la fuente, aunque otros documentos o el prototipo hayan avanzado.","x":3280,"y":1530,"width":650,"height":560,"color":"3"},
+		{"id":"maintenance","type":"text","text":"## Actualización\n\nEditar [[órbita..md|la fuente]] y este canvas juntos si cambia la FSM.\n\nLos eventos de las flechas conservan los nombres y condiciones de los diagramas originales.","x":3280,"y":2140,"width":650,"height":190,"color":"5"},
+		{"id":"dsend","type":"text","text":"## server_send\nReintenta el envío.","x":2050,"y":1300,"width":400,"height":160,"color":"5"},
+		{"id":"dplay","type":"text","text":"## audio_play\nReproduce el clip local de error.\n\nerror_conexion / error_wifi","x":2050,"y":1940,"width":400,"height":200,"color":"2"},
+		{"id":"dwake","type":"text","text":"## audio_wake\nVuelve a la escucha local.","x":2720,"y":1560,"width":350,"height":160,"color":"4"},
+		{"id":"back","type":"text","text":"## server_back\nEspera la respuesta del backend.","x":2300,"y":220,"width":400,"height":190,"color":"5"},
+		{"id":"error","type":"text","text":"## error_reintento\nReintento del request o reconexión del socket.\n\nVer diagrama 02.","x":2620,"y":-35,"width":430,"height":200,"color":"1"}
+	],
+	"edges":[
+		{"id":"m01","fromNode":"start","fromSide":"right","toNode":"init","toSide":"left","color":"5","label":"Inicio"},
+		{"id":"m02","fromNode":"init","fromSide":"right","toNode":"wake","toSide":"left","color":"5","label":"dev_init_ok()"},
+		{"id":"m04","fromNode":"wake","fromSide":"right","toNode":"send","toSide":"left","color":"5","label":"dev_wake_word()"},
+		{"id":"m05","fromNode":"send","fromSide":"top","toNode":"send","toSide":"right","color":"2","label":"dev_wake_word_durante_envio()\n/ dev_push_flag_urgente(pausa_resumen)"},
+		{"id":"m06","fromNode":"send","fromSide":"right","toNode":"back","toSide":"left","color":"5","label":"dev_fin_segmento()"},
+		{"id":"m07","fromNode":"back","fromSide":"bottom","toNode":"play","toSide":"top","color":"6","label":"srv_respuesta_recibida()"},
+		{"id":"m08","fromNode":"back","fromSide":"left","toNode":"error","toSide":"top","color":"1","label":"Ver diagrama 02"},
+		{"id":"m09","fromNode":"play","fromSide":"bottom","toNode":"wake","toSide":"bottom","color":"6","label":"srv_fin_conversacion()"},
+		{"id":"m10","fromNode":"play","fromSide":"left","toNode":"send","toSide":"bottom","color":"6","label":"srv_sigue_conversacion()"},
+		{"id":"m11","fromNode":"play","fromSide":"right","toNode":"send","toSide":"right","color":"2","label":"dev_wake_word_durante_playback()\n/ dev_push_flag_urgente(pausa_playback)"},
+		{"id":"d01","fromNode":"dback","fromSide":"top","toNode":"derror","toSide":"top","color":"1","label":"dev_timeout_respuesta()\n[5s, WS vivo]"},
+		{"id":"d02","fromNode":"dback","fromSide":"bottom","toNode":"derror","toSide":"bottom","color":"1","label":"dev_ws_desconectado()\n[heartbeat sin pong]"},
+		{"id":"d03","fromNode":"derror","fromSide":"top","toNode":"dsend","toSide":"left","color":"4","label":"dev_reintento_ok()\n[backoff fijo 1s, intento<2]"},
+		{"id":"d04","fromNode":"derror","fromSide":"right","toNode":"dsend","toSide":"bottom","color":"4","label":"dev_ws_reconectado()\n[backoff exp. 1-2-4-8-16s, intento<5]"},
+		{"id":"d05","fromNode":"derror","fromSide":"bottom","toNode":"dplay","toSide":"left","color":"2","label":"dev_reintentos_agotados()\n[2 requests fallidos, WS vivo → clip local \"error_conexion\"]"},
+		{"id":"d06","fromNode":"derror","fromSide":"right","toNode":"dplay","toSide":"top","color":"1","label":"dev_ws_reintentos_agotados()\n[5 reconexiones fallidas → clip local \"error_wifi\"]"},
+		{"id":"d07","fromNode":"dplay","fromSide":"right","toNode":"dwake","toSide":"left","color":"4","label":"dev_msg_local_fin()\n[clip local terminó, decide el ESP32]"},
+		{"id":"m03","fromNode":"wake","fromSide":"top","toNode":"wake","toSide":"right","color":"5","label":"dev_no_wake_word()"}
+	]
+}
