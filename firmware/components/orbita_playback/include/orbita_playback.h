@@ -23,8 +23,8 @@
  * Ojo: GPIO 15 y 16 son XTAL_32K en el ESP32-S3: si la PCB lleva cristal de 32 kHz, cambiarlos.
  * Alternativa sin ese compromiso: 7, 8, 9. Pines de alimentacion y control del MAX98357A (VIN, SD, GAIN):
  * sin verificar contra su datasheet. */
-#define ORBITA_PLAY_BCLK_GPIO   7
-#define ORBITA_PLAY_WS_GPIO    15
+#define ORBITA_PLAY_BCLK_GPIO  15   // igual que la PCB impresa (BCLK y LRC estaban al reves en el firmware anterior)
+#define ORBITA_PLAY_WS_GPIO     7
 #define ORBITA_PLAY_DOUT_GPIO  16
 
 /* VOLUMEN LIMITADO POR SOFTWARE: este es el unico lugar donde se cambia. Toda muestra se multiplica por esta
