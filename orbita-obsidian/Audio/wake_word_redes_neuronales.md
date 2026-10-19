@@ -17,13 +17,26 @@ No se encontraron números de KWS en ESP32-S3. Las referencias son de otro hardw
 - En un ESP32 (no S3), con ESP-NN la clasificación bajó de 20 a 5 ms, pero el DSP tardó 140 ms ([blog EI](https://edgeimpulse.com/blog/announcing-official-support-for-the-espressif-esp-eye-esp32)). No se sabe cuánto se traslada al S3.
 - Con el N16R8 (8 MB PSRAM) el modelo en sí no es el problema. El presupuesto lo van a apretar el AFE (beamforming, NSNet, VADNet) más el modelo corriendo a la vez. Hay que medirlo; encaja con el presupuesto RAM/CPU pendiente.
 
-## La alternativa: microWakeWord
-Ya existe un pipeline casi idéntico a lo que se quiere, y es abierto:
-- [microWakeWord](https://github.com/OHF-Voice/micro-wake-word) (Apache-2.0) usa un modelo MixConv chico, cuantizado y en streaming para TFLite Micro.
-- Entrena con **voces sintéticas** (Piper TTS) más aumentación con ruido y reverb, y tiene un notebook de entrenamiento (`basic_training_notebook.ipynb`).
-- Corre en ESP32-S3 en Home Assistant ([blog](https://home-assistant.io/blog/2024/02/21/voice-chapter-6)).
-- Features: 40 bandas cada 10 ms con ventana de 30 ms, usando el preprocesador de `micro_speech`; inferencia cada 30 ms. No hay cifras de RAM/CPU en el S3.
-- El autor avisa que el notebook es para usuarios avanzados y puede no dar un modelo usable de entrada. Home Assistant también dice que cada palabra puede necesitar varias iteraciones.
+## La alternativa: entrenar con microWakeWord, runtime propio
+microWakeWord está pensado para Home Assistant/ESPHome, pero se separa en dos partes:
+- **Entrenamiento** ([repo](https://github.com/OHF-Voice/micro-wake-word), Apache-2.0): genera un `.tflite` int8 en streaming (MixConv, voces sintéticas de Piper, aumentación con ruido y reverb). Es independiente de Home Assistant: un `.tflite` es solo pesos y grafo. Corre en ESP32-S3 en Home Assistant ([blog](https://home-assistant.io/blog/2024/02/21/voice-chapter-6)).
+- **Runtime** (lo que corre en el chip): en ESPHome es el componente `micro_wake_word` (`micro_wake_word.cpp`, `streaming_model.cpp`, `preprocessor_settings.h`). No se abrió el código, así que no se sabe cuánto depende de las APIs de ESPHome. **Acá no se usa: el runtime se escribe en ESP-IDF** con [`esp-tflite-micro`](https://components.espressif.com/components/espressif/esp-tflite-micro), usando el componente de ESPHome solo como referencia.
+- Features: 40 bandas cada 10 ms con ventana de 30 ms (preprocesador de `micro_speech`); inferencia cada 30 ms; detección cuando la probabilidad supera un umbral de forma consistente en varias ventanas. No hay cifras de RAM/CPU en el S3.
+- El autor avisa que el notebook oficial es para usuarios avanzados y puede no dar un modelo usable de entrada; Home Assistant dice que cada palabra puede necesitar varias iteraciones.
+
+### Notebooks de Colab candidatos
+Ambos son wrappers de microWakeWord, jóvenes (3-4 commits, 0-2 estrellas) y se evaluaron solo por su README, no se abrieron los notebooks.
+
+| | [alfiedennen](https://github.com/alfiedennen/microwakeword-trainer) | [pafernanr](https://github.com/pafernanr/custom-microwakeword-training-colab) |
+|---|---|---|
+| GPU | A100 con RAM alta (en T4 dice quedarse sin memoria) | T4 gratis, ~20 min, 10.000 pasos |
+| Muestras | Modo `generate` (Piper, ~30.000 positivas + frases confundibles) y modo `bundle` (datos propios, ElevenLabs opcional) | Piper, cualquier idioma soportado; no dice si admite grabaciones propias |
+| Aumentación | No detallada | MIT RIRs, AudioSet, FMA |
+| Salida | `.tflite` + `.json` (`probability_cutoff`, `sliding_window_size`, `tensor_arena_size`) | `.tflite`; el `.json` solo se menciona en la parte ESPHome |
+| Licencia | MIT | No indicada |
+| Probado en | M5Stack Atom Echo (ESP32 básico) | Modelos en español (Gertrudis, Hey Charo) |
+
+**Recomendación:** empezar con **pafernanr** para el primer baseline (gratis, rápido, español, aumentación explícita), y pasar a **alfiedennen** solo si se necesita el modo `bundle` para mezclar ElevenLabs y grabaciones reales (requiere A100, que en Colab es de pago). Ninguno de los dos resuelve el problema de fondo: la validación con voz real. De cualquier salida hay que extraer `probability_cutoff`, `sliding_window_size` y `tensor_arena_size`, porque el runtime propio los necesita.
 
 ## Comparación para Órbita
 
@@ -34,6 +47,7 @@ Ya existe un pipeline casi idéntico a lo que se quiere, y es abierto:
 | Preprocesado | Lo da EI | Hay que replicarlo | Se define propio |
 | Esfuerzo de integración | Bajo | Medio | Medio-alto |
 | Componente C++ | Sí | Sí | Solo TFLite Micro |
+| Variante microWakeWord | | | Entrena con su notebook, runtime propio |
 
 ## Riesgos a decidir ahora
 1. **Licencia de ElevenLabs.** No se verificaron sus términos sobre usar el audio generado para entrenar modelos. Leerlos antes de comprometer el dataset. Piper es la alternativa abierta y gratuita.
@@ -42,7 +56,8 @@ Ya existe un pipeline casi idéntico a lo que se quiere, y es abierto:
 ## Decisiones sugeridas
 1. La entrada del modelo es la salida ya filtrada del AFE, como dice el vault. Entrenar con audio crudo sin pasar por AFE sería un error de dominio.
 2. El preprocesado (features) es parte del contrato del modelo: se define una sola vez y se comparte entre notebook y firmware.
-3. Probar primero microWakeWord con "Órbita" como baseline, antes de escribir arquitectura propia.
+3. Entrenar un baseline con "Órbita" usando un notebook de microWakeWord (ver arriba) y escribir el runtime propio en ESP-IDF. Si el baseline sirve, no hace falta arquitectura propia.
+4. El preprocesado del firmware debe coincidir bit a bit con el del entrenamiento; si no, el modelo da salida basura aunque esté bien entrenado.
 
 ---
 
@@ -74,7 +89,7 @@ Ya existe un pipeline casi idéntico a lo que se quiere, y es abierto:
 
 ## Código para estudiar
 - [`espressif/esp-tflite-micro`](https://components.espressif.com/components/espressif/esp-tflite-micro): componente oficial para ESP-IDF, Apache-2.0. Incluye `hello_world`, `micro_speech` y `person_detection`. Para ESP32-S3 pide ESP-IDF 4.4 o superior. Se instala con `idf.py add-dependency "espressif/esp-tflite-micro^1.4.1"`. Las páginas de las versiones 1.4.x mencionan ESP32-P4 en la descripción y no se confirmó el detalle para S3: revisar el README de la versión usada. Tampoco se verificó su relación con `esp-nn`.
-- [microWakeWord](https://github.com/OHF-Voice/micro-wake-word): pipeline completo de entrenamiento con TTS sintético; leerlo como ejemplo de arquitectura y preparación de datos.
+- [microWakeWord](https://github.com/OHF-Voice/micro-wake-word): pipeline de entrenamiento con TTS sintético; y el componente `micro_wake_word` de ESPHome como referencia de runtime (preprocesado, streaming, umbral). Solo para leer, no como dependencia.
 
 ## Plan de estudio sugerido
 1. 3Blue1Brown y capítulos 1 a 3 de Nielsen (el concepto).
