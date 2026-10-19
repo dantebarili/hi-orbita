@@ -1,7 +1,7 @@
 /**
  * @file    orbita_playback.h
  * @brief   Parlante: recibe PCM por partes, lo guarda en un ring en PSRAM y lo reproduce por I2S.
- * @details Interfaz acordada en el Paso 0 (plan_prototipo_alfa.md, INTEGRACION_WEBSOCKET.md "Downlink").
+ * @details Interfaz acordada en el Paso 0 (plan_prototipo_alfa.md, INTEGRACION_WEBSOCKET.md "Downlink", en el historial: git show 6694f2c).
  *          Este modulo no sabe de sockets: quien reciba los frames PLAY llama a begin/push/end/stop.
  *          Formato de entrada: PCM s16le, 16 kHz, mono. Tarea de salida: core 0, prioridad 6
  *          (arquitectura.md §2).

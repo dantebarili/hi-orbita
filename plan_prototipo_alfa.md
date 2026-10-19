@@ -1,6 +1,6 @@
 # Plan — Prototipo alfa (mono continuo por sockets + parlante)
 
-Actualizado 2026-10-13. Deriva de un plan anterior de captura/AFE/wake word (`plan_dante.md`, borrado el 19/10; sigue en el historial: `git show 3da73c6:plan_dante.md`). Detalle técnico del cable y del servidor: `INTEGRACION_WEBSOCKET.md`.
+Actualizado 2026-10-13. Deriva de un plan anterior de captura/AFE/wake word (`plan_dante.md`, borrado el 19/10; sigue en el historial: `git show 3da73c6:plan_dante.md`). Detalle técnico del cable y del servidor: `INTEGRACION_WEBSOCKET.md` (borrado el 19/10; sigue en el historial: `git show 6694f2c:INTEGRACION_WEBSOCKET.md`).
 
 ## Objetivo
 
@@ -18,7 +18,7 @@ El equipo manda **audio mono 16 kHz / 16-bit sin parar** al servidor. El **servi
 - [x] **S2 Reconexión.** Backoff 1-2-4-8 s, heartbeat 10 s / pong 3 s, tarea de red en core 0, un solo `hello` por conexión, captura antes que Wi-Fi. Warm-up de 5 s (arranque del mic y 21 overflows del DMA, informados como `dma_boot`).
 - [x] **S3 Servidor continuo + firmware v2.** Segmentos de 30 s con su JSON de huecos, `ack`, hueco entre sesiones. Probado en la placa (sesión de 48 s, hueco de 27 s bien marcado). 22 pruebas automáticas.
 - [x] Revisión `embedded-reviewer` (13/10) aplicada, salvo lo de S4 y "Producción".
-- [x] Prueba 1 del registro (`pruebas_socket.md`) y toma de 10 min: ESP estable.
+- [x] Prueba 1 del registro (`pruebas_socket.md`, en el historial) y toma de 10 min: ESP estable.
 
 ## Protocolo `orbita-pcm-v2` (implementado salvo lo marcado)
 
@@ -26,12 +26,12 @@ Una conexión WebSocket larga, una sesión por conexión, sin `end`:
 
 - ESP → servidor: `hello` (JSON) una vez; después binarios `ORBA` (header 40 B + hasta 4 slots = 128 ms de PCM), `index` creciente sin cortes. Los huecos se anotan (`lost`, `seq`), no se rellenan.
 - Servidor → ESP: `ready` (JSON) y `ack` (último `index` recibido) cada ~1 s.
-- **Downlink acordado el 14/10** (`orbita`, `play`, `play_end`, `play_stop`, `play_done`, ...): ver `INTEGRACION_WEBSOCKET.md`.
+- **Downlink acordado el 14/10** (`orbita`, `play`, `play_end`, `play_stop`, `play_done`, ...): ver `INTEGRACION_WEBSOCKET.md` (en el historial).
 - Tras reconectar: sesión nueva (id nuevo); el servidor mide el hueco por `seq`. Todavía no hay reenvío desde el último `ack`.
 
 ## Paso 0 — Juntos (14/10)
 
-Contrato en `INTEGRACION_WEBSOCKET.md` ("Downlink"). Decidido:
+Contrato en `INTEGRACION_WEBSOCKET.md` ("Downlink", en el historial). Decidido:
 
 - [x] **`orbita` informativo:** el servidor detecta "Órbita" (STT + comparación aproximada) y avisa; el ESP lo registra y enciende un **LED de conversación** (es la idea del producto final); `conversation_end` lo apaga. El detalle de la conversación con el LLM no afecta al ESP.
 - [x] **Audio del parlante:** PCM s16le 16 kHz mono, frames `PLAY` ≤ 4 KB, **streaming con prebuffer** (inicial 400 ms) para reproducir en tiempo real y bajar la latencia. El servidor puede mandar más rápido que tiempo real; el buffer en PSRAM absorbe la diferencia.
@@ -52,7 +52,7 @@ Carpetas: `firmware/components/orbita_audio`, `orbita_pipeline`, `orbita_playbac
   - **Mal alojado:** el módulo WebSocket pasa de 60 KB internos (cola RX 4 × 8,2 KB, `s_rx`, `s.reply`, buffer de la librería 8 KB, pila 6 KB, `packet` 4 KB). Es S4: más de la mitad de lo que queda.
   - **Bien alojado:** ring out (1,04 MB) y ring in (33 KB) en PSRAM; DMA del I2S (~15 KB) y buffers de captura/sink (~25 KB) en interna.
   - **Pulir:** (1) medir `ram_int` con parlante + AFE (si se activa) antes de elegir `ws://` o `wss://`: TLS suma decenas de KB internos; (2) pilas fijas en ~37 KB con `highwater` medido solo para el sink (queda 3,7 KB libres de 6): medir las demás; (3) `ram_int` bajó de 82 a 61 KB en 12 handshakes fallidos (~1,7 KB cada uno) y se recuperó: confirmar con un corte largo; (4) buffer de reproducción en PSRAM con tamaño que fija el Paso 0 (largo máximo de la respuesta).
-- [ ] **Pruebas en la placa** (registro en `pruebas_socket.md`):
+- [ ] **Pruebas en la placa** (registro en `pruebas_socket.md` (borrado el 19/10; `git show 75534c5:pruebas_socket.md`)):
   2. Corte corto de Wi-Fi (~10 s) con la sesión en curso: reconecta, el servidor no cierra con error, hueco entre sesiones = 0.
   3. Corte largo (> 40 s): no salta el watchdog (el sink drena el atraso sin dormir, prio 5 > red 4) y el descarte del mensaje retenido aparece en el log.
 - [x] **S7 Parlante.** Módulo `orbita_playback` (ring de 480 KB en PSRAM, prebuffer 400 ms, `underrun`, I2S_NUM_1 con DMA de 120 ms, tope de volumen por software; pines en `orbita_pinout.md`). Tono local validado el 15/10 (Dante) y respuesta por red validada el 15/10 (Juani, demo `--replay-window`). **El amplificador va a 5 V externos:** desde el 3V3 del DevKit no sonaba. Pendiente: anotar la pila en `arquitectura.md` §2, afinar el DMA (S9) y verificar el MAX98357A contra su datasheet (`SD`, `GAIN`).

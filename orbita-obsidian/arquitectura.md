@@ -46,7 +46,7 @@ Puntos abiertos:
 
 | Concepto | KB | Origen |
 |---|---|---|
-| **Libre hoy** (Wi-Fi + socket corriendo, sin AFE ni parlante) | **≈ 80** (74 a 84) | medido (`ram_int`, `pruebas_socket.md`) |
+| **Libre hoy** (Wi-Fi + socket corriendo, sin AFE ni parlante) | **≈ 80** (74 a 84) | medido (`ram_int`, `pruebas_socket.md`, en el historial) |
 | Heap total disponible al arrancar | sin medir | falta un log al arranque (ver abajo) |
 | **Usado por Orbita** | | |
 | `orbita_ws`: cola RX (4 × 8 KB) | 33 | calculado |
@@ -109,7 +109,7 @@ Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). 
 | `feed` | Ring in → AFE (o mono → ring out) | 1 | 5 | 4 KB | sin medir |
 | `fetch` (solo con AFE) | Salida del AFE → ring out | 1 | 5 | 4 KB | sin medir |
 | AFE interno (solo con AFE) | Procesa el audio | 0 | 5 | — | — |
-| `sink` | Ring out → mensajes → `send` | 0 | 5 | 6 KB | ~2,7 KB (libre ≥ 3,4 KB; `pruebas_socket.md`) |
+| `sink` | Ring out → mensajes → `send` | 0 | 5 | 6 KB | ~2,7 KB (libre ≥ 3,4 KB; `pruebas_socket.md`, en el historial) |
 | `orbita_ws` | Cliente WebSocket (librería) | 0 | 4 | 6 KB | sin medir |
 | `ws_play_reports` | Reportes PLAY por WebSocket | 0 | 3 | 6 KB | sin medir |
 | `orbita_wifi` | Conexión y reintentos | **sin fijar** | 3 | 4 KB | sin medir |
