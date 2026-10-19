@@ -31,7 +31,7 @@ Estado: **medido** (en la placa) · **calculado** (del código, sin medir) · **
 | bootloader, tabla, `nvs`, `otadata`, `phy_init` | Fijos del chip; datos que sobreviven al reinicio; slot activo; calibración de radio | 0x0 | 36 + 24 + 8 + 4 KB |
 | *(hueco)* | La app empieza en múltiplo de 64 KB | 0x12000 | 56 KB |
 | `ota_0` / `ota_1` | App / siguiente actualización | 0x20000 / 0x320000 | 3 MB c/u |
-| `model` | Modelos de `esp-sr`: **solo NS y VAD** (la wake word es de Edge Impulse y va en la app) | 0x620000 | 2 MB |
+| `model` | Modelos de `esp-sr`: **solo NS y VAD** (la wake word es un modelo propio `.tflite` y va en la app) | 0x620000 | 2 MB |
 | `clips` | Audios locales de error para `audio_play` (1 MB ≈ 32 s a 16 kHz/16 bit mono) | 0x820000 | 1 MB |
 | **TOTAL usado** | | 0x0 – 0x920000 | **9,125 MB** |
 | **LIBRE** | Reserva (SD offline, logs) | 0x920000 – 0x1000000 | **6,875 MB** |
@@ -72,7 +72,7 @@ El resto (IDF, Wi-Fi, lwIP, TLS futuro) no está itemizado: es la diferencia ent
 | *Previsto:* ring out a 60 s (1875 slots) | +0,9 | estimado (diseño) |
 | *Previsto:* buffer del parlante (una respuesta) | 0,48 | plan alfa (S7) |
 | *Previsto:* AFE | 1,15 a 1,2 | estimado (benchmark de Espressif, ver abajo) |
-| *Previsto:* wake word (Edge Impulse) | sin medir | |
+| *Previsto:* wake word (modelo propio, microWakeWord) | sin medir | |
 | **Total con todo lo previsto** | **≈ 3,6** (45 % de 8) | estimado |
 
 La PSRAM no es el problema. Sí importa el orden de arranque: el ring out se reserva en un bloque contiguo **antes** de iniciar el AFE, porque `esp-sr` fragmenta la PSRAM.
@@ -145,7 +145,7 @@ mics ─▶ I2S/DMA ─▶ captura ─▶ RING IN ─▶ tarea feed ─┤      
 | 3 | Ring in | Cola siempre activa, con o sin AFE | 8 chunks = 32 KB (~0,5 s), PSRAM |
 | 4 | `feed` | Con AFE: intercala los canales (mic, mic; con AEC, también la referencia) y alimenta al AFE. Sin AFE: reduce a mono (L por ahora) y parte el chunk en 2 bloques de 512 | int16 a 16 kHz |
 | 5 | AFE (`esp-sr`), opcional | VAD (modo 4); audio mono. Sin beamforming: no actuaba (medido 12/10) y se sacó (14/10) | `fetch` = 512 muestras mono = 32 ms; 2 `fetch` por `feed`; latencia 64 ms |
-| 6 | Wake word (Edge Impulse) | Consume todo el audio de `fetch`, con su propia ventana | 32 KB/s |
+| 6 | Wake word (modelo propio) | Consume todo el audio de `fetch`, con su propia ventana | 32 KB/s |
 | 7 | Ring out | Slots (header de 16 B + 512 muestras mono) y tabla de segmentos | 1040 B por slot; 60 s ≈ 1,9 MB en PSRAM |
 | 8 | `sink` | Saca slots, los junta en mensajes de 4 slots y los pasa al `send` registrado | ≈ 4 KB por mensaje; ≈ 270 kbit/s con TLS (estimado) |
 
@@ -184,8 +184,8 @@ La tarea `captura` lee el I2S (slots de 32 bit, 24 útiles en el INMP441), convi
 
 ### 3.3 AFE y wake word
 
-- **AFE (`esp-sr`):** solo VAD (NS, AGC y WakeNet apagados). Desactivable en compilación (`CONFIG_ORBITA_PIPELINE_USA_AFE`); **apagado por defecto; en el alfa se enciende para AEC y VAD** (`plan_prototipo_alfa.md`, S9). NS y beamforming siguen en pausa (decisión 11/10, `plan_dante.md`). El beamforming (BSS) no actuaba con 2 mics (medido 12/10) y se sacó el 14/10 (`se_init = false`). Sin BSS el AFE pide `feed` de 512 frames: el pipeline alimenta cada chunk de 1024 en 2 llamadas (15/10, compila; sin probar en placa con el AFE encendido); el VAD queda en modo 4 por defecto. El NS del AFE solo existe en `AFE_TYPE_VC`. La cifra "~1,2 MB de PSRAM y ~46 % de un núcleo" es estimación sin fuente.
-- **Wake word "Órbita":** modelo propio de Edge Impulse, con su propio búfer de ventana; consume todo el audio siempre. Si corre sobre audio crudo o sobre la salida del AFE se decide con datos (`plan_dante.md`).
+- **AFE (`esp-sr`):** solo VAD (NS, AGC y WakeNet apagados). Desactivable en compilación (`CONFIG_ORBITA_PIPELINE_USA_AFE`); **apagado por defecto; en el alfa se enciende para AEC y VAD** (`plan_prototipo_alfa.md`, S9). NS y beamforming siguen en pausa (decisión 11/10; `plan_dante.md` se borró el 19/10, queda en el historial de git: `git show 3da73c6:plan_dante.md`). El beamforming (BSS) no actuaba con 2 mics (medido 12/10) y se sacó el 14/10 (`se_init = false`). Sin BSS el AFE pide `feed` de 512 frames: el pipeline alimenta cada chunk de 1024 en 2 llamadas (15/10, compila; sin probar en placa con el AFE encendido); el VAD queda en modo 4 por defecto. El NS del AFE solo existe en `AFE_TYPE_VC`. La cifra "~1,2 MB de PSRAM y ~46 % de un núcleo" es estimación sin fuente.
+- **Wake word "Órbita":** modelo propio entrenado con el pipeline de microWakeWord, con su propio búfer de ventana; consume todo el audio siempre. Si corre sobre audio crudo o sobre la salida del AFE se decide con datos (plan en `orbita-dataset/plan_wakeword.md`).
 - **Mono:** al ring out va audio mono (salida del AFE, o canal L del crudo sin AFE; L o mezcla: a decidir con Comunicación). Se reduce lo más tarde posible, nunca antes del ring in.
 - **AEC (diseño, 15/10; pasos y pendientes en `plan_prototipo_alfa.md` S9):**
   - **Cómo funciona:** el parlante reproduce `x(n)`; el mic oye la voz más el eco, `d(n) = voz + h * x(n)` (`h` = camino parlante → aire → mic). Un filtro FIR de `L` coeficientes `w` estima el eco `ŷ(n) = w * x(n)` a partir de la referencia, se resta (`e(n) = d(n) − ŷ(n)`) y `e(n)` ajusta `w` (tipo LMS/NLMS) para minimizar el residuo. Sigue un NLP (supresor del eco que queda) y el VAD. Todo ocurre **dentro** del AFE: `feed` solo entrega mic, mic, ref (`"MMR"`, referencia al final).
@@ -201,7 +201,7 @@ La tarea `captura` lee el I2S (slots de 32 bit, 24 útiles en el INMP441), convi
 
   - **Medición de `D` (pendiente):** reproducir un chirp con `orbita_playback`, capturar el mic crudo y anotar el índice de captura en que se escribió el primer trozo; la correlación cruzada da el retardo. **Repetir siempre que cambie** el DMA, el tamaño de trozo, el ruteo de la PCB o la versión de `esp-sr`/IDF. Valor medido: *sin medir*.
   - **A decidir:** AEC dentro del AFE (A) o suelto (B) midiendo RAM; `τ` fijo en Kconfig o calculado en ejecución; DMA mínimo con `underruns = 0`; quién expone la referencia (`orbita_playback` no lo hace aún); convergencia entre respuestas y doble habla (el NLP agresivo puede dañar la voz propia). Condiciona el ruteo del parlante en la PCB.
-- Pendientes (`vad_cache`, falsos negativos y positivos de la wake word): en `plan_dante.md`.
+- Pendientes (`vad_cache`, falsos negativos y positivos de la wake word): en el historial de git (`git show 3da73c6:plan_dante.md`).
 
 ### 3.4 Rings, header y tabla de segmentos
 

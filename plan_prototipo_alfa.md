@@ -1,10 +1,10 @@
 # Plan — Prototipo alfa (mono continuo por sockets + parlante)
 
-Actualizado 2026-10-13. Deriva de `plan_dante.md` (captura/AFE/wake word). Detalle técnico del cable y del servidor: `INTEGRACION_WEBSOCKET.md`.
+Actualizado 2026-10-13. Deriva de un plan anterior de captura/AFE/wake word (`plan_dante.md`, borrado el 19/10; sigue en el historial: `git show 3da73c6:plan_dante.md`). Detalle técnico del cable y del servidor: `INTEGRACION_WEBSOCKET.md`.
 
 ## Objetivo
 
-El equipo manda **audio mono 16 kHz / 16-bit sin parar** al servidor. El **servidor** transcribe y detecta "Órbita": ahí corta el procesamiento de fondo y responde con un audio que el equipo reproduce (`audio_play`). **Sin wake word en el chip.** El **AFE entra al alfa** solo para dos cosas: **AEC** (que el equipo no se escuche a sí mismo por el parlante) y **VAD** (cortar la respuesta cuando el usuario habla encima, `barge_in`). Fuera de alcance (sigue en `plan_dante.md`): wake word on-device, NS/beamforming, VAD como compuerta de envío, FSM `dev_wake_word*`. La FSM del vault no aplica a este prototipo: es "modo prototipo", no se actualiza.
+El equipo manda **audio mono 16 kHz / 16-bit sin parar** al servidor. El **servidor** transcribe y detecta "Órbita": ahí corta el procesamiento de fondo y responde con un audio que el equipo reproduce (`audio_play`). **Sin wake word en el chip.** El **AFE entra al alfa** solo para dos cosas: **AEC** (que el equipo no se escuche a sí mismo por el parlante) y **VAD** (cortar la respuesta cuando el usuario habla encima, `barge_in`). Fuera de alcance (detalle en el historial de git, `plan_dante.md`): wake word on-device, NS/beamforming, VAD como compuerta de envío, FSM `dev_wake_word*`. La FSM del vault no aplica a este prototipo: es "modo prototipo", no se actualiza.
 
 ## Cómo se trabaja: 3 pasos
 
@@ -68,13 +68,13 @@ Carpetas: `firmware/components/orbita_audio`, `orbita_pipeline`, `orbita_playbac
   - **Para decidir (15/10, con el parlante andando):** elegir (A) o (B) midiendo RAM interna y retardo; achicar el DMA de salida (hoy 120 ms: es retardo de la referencia y cola tras `stop`) hasta el mínimo con `underruns = 0` con Wi-Fi activo; alinear la referencia con una línea de retardo del tamaño del DMA contando muestras (no tiempo de reloj).
 - [ ] **A6 Reenvío:** tercer cursor del ring ("confirmado por el servidor"), el sink retoma desde el `last_index` del `ready` (la parte del `hello`/`ready` es de Juani). Ver `arquitectura.md` §3.4.
 - [ ] **LED de conversación:** un GPIO (con `pin-map-check`) que se enciende con `orbita` y se apaga con `conversation_end`. Es una prueba simple, pero ya fija un pin de la PCB.
-- [ ] **Deuda que afecta al alfa** (detalle en `plan_dante.md`):
+- [ ] **Deuda que afecta al alfa** (detalle en el historial de git, `plan_dante.md`):
   - **A9:** confirmar en una toma con Wi-Fi que `CONFIG_I2S_ISR_IRAM_SAFE` y el DMA de 8 descriptores aguantan (quien ya tenga `sdkconfig` debe regenerarlo o activarlo en menuconfig).
   - **A16:** limitar el `ESP_LOGE` de fallo de lectura I2S (hasta ~100 logs/s).
   - **A5b:** `_Static_assert` de `ORBITA_MSG_SLOTS * 512 <= UINT16_MAX` y de `ORBITA_SLOT_SAMPLES == ORBITA_AFE_FETCH_FRAMES`.
   - **A10 mínimo:** guarda de `s_rx_chan == NULL`. Para la hora de prueba, `arranque_fallo()` queda como está.
 - [ ] **S8 VAD como compuerta (opcional, mínimo).** Anotar los números de la prueba del 13/10 (modo 4 anduvo bien; el 100 % de voz era del modo 0) y reservar en el header un flag de "silencio salteado" (≠ pérdida).
-- [ ] **En paralelo:** wake word y tomas de las tres fuentes (`plan_dante.md`); no bloquea nada.
+- [ ] **En paralelo:** wake word y tomas de las tres fuentes (`orbita-dataset/plan_wakeword.md`); no bloquea nada.
 
 ## Paso 1b — Rama `juani` (comunicación y servidor)
 
