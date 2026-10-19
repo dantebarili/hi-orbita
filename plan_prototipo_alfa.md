@@ -101,3 +101,53 @@ Una hora seguida con el servidor transcribiendo, un corte de red de 20 s sin pé
 ## Producción (no bloquea el prototipo)
 
 SSID/clave/URI en Kconfig → aprovisionamiento por NVS; `ws://` → `wss://` (CA, reloj, +RAM y +pila); `nvs_flash_init` sin el caso `NO_FREE_PAGES` (borrar la NVS destruiría las credenciales); warm-up fijo de 5 s propio del INMP441 (en la placa final conviene un pasa-altos); `arranque_fallo` en bucle (A10); sin reenvío desde el último `ack` (A6).
+
+---
+
+## Anexo — pendientes que vivían en `plan_dante.md` (borrado el 19/10)
+
+Revisado contra el código y los documentos del 19/10. El plan original sigue en el historial: `git show 3da73c6:plan_dante.md`. Lo marcado ❓ no se pudo confirmar en el código.
+
+**Regla de "terminado" para toda captura:** `overruns = 0` y `dma_overflows = 0`; los huecos se marcan, nunca se rellenan; el consumidor es intercambiable sin tocar captura ni ring. **No tocar la ganancia/shift de captura** (picos en −25 a −30 dBFS): invalida lo grabado.
+
+### Sigue abierto
+
+**Deuda técnica**
+- **A5b:** contador de `vad_cache_size > 0` (no existe en el código); la pérdida se anota hasta ~0,5 s después del hueco real: si hace falta precisión, que la captura marque el hueco en el chunk; ❓ que `orbita_ring_out_get_stats` avise si falla.
+- **A10:** `arranque_fallo()` queda en bucle (en producto: reinicio con contador en RTC o aviso por LED); en `test.c` las escrituras al USB-JTAG usan `portMAX_DELAY` (lab); ❓ `uart_write` sin chequear resultado y framing con secuencia en el UART (también de lab).
+- **A11:** verificar en el datasheet que el ICS-43434 soporta 16 kHz (`arquitectura.md` sigue diciendo "falta el datasheet").
+- **A13:** borrar `wav_pack_chunk_24bit` (sigue en `wav_writer.c`); agregar la capacidad de `out_buf` a `wav_pack_chunk_16bit`; contadores `volatile` de `pipeline.c` → `stdatomic`.
+- **A15:** toma con AFE y anotar máximos en `arquitectura.md` §3.7 (hoy son "sin AFE salvo que se diga").
+- **A16:** `#define` nombrados para stack/prioridad/core (en `pipeline.c` están como números sueltos); liberar `afe_config` (no se libera en `audio_afe.c`).
+
+**Decisiones abiertas con Juani**
+- **Ring in lleno:** hoy descarta el chunk nuevo (hueco de 64 ms que afecta la wake word, `pipeline.c`); evaluar descartar el más viejo.
+- **Capacidad del ring out:** hoy 1024 slots ≈ 32,8 s; el diseño pedía ~60 s. Ajustar con el `max_ocupados` real.
+- **FSM:** cuando entre la wake word on-device, actualizar `órbita..md` (arco de la wake word en `server_back`, sacar "buffer lleno" de los motivos de `dev_fin_segmento`) y definir eventos `srv_` para falsos negativos y positivos, id de segmento y de sesión. En el alfa las diferencias con la FSM están aceptadas.
+
+**AFE y VAD**
+- **AFE y NS en pausa (decisión 11/10):** NS y beamforming solo si los datos de la wake word muestran que el ruido es un problema; en ese caso, primero offline en la PC sobre las tomas L+R (alternativas: NS WebRTC `esp_ns.h`, `mase_process`, NSNet). Medir CPU por core y RAM interna/PSRAM con el pipeline que quede.
+- **VAD como compuerta de envío** (más allá del mínimo de S8): el VAD no reemplaza la wake word (en un consultorio hay voz todo el día). Compuerta **en el sink, no en el productor**: el ring out guarda todo con `VAD_OK`/`VOZ` y el sink decide con pre-roll (~300–500 ms) y hangover, como interruptor continuo o por `VOZ`; segmento mínimo para no mandar una palabra suelta. Medir si `vad_cache_size > 0` alguna vez. **Privacidad:** mandar todo lo que suene a voz es política de captura; decidirla con el compañero y el cliente, no por ancho de banda.
+- **Fase B, AFE medido** (❓ sin confirmar si algo se hizo): cómo carga `esp-sr` NSNet/VADNet (partición `model`) y cómo se flashean; comparar WebRTC (`SR_NSN_WEBRTC` + `SR_VADN_WEBRTC`) contra NSNet/VADNet (`NSNET2`/`NSNET3` + `VADNET1_MEDIUM`) midiendo CPU por core, RAM, contadores en 0 y calidad (SNR; que no se coma la r ni la b); grabador de test con duración variable (hoy fija en 64 bloques); documentar RAM/CPU en `arquitectura.md`.
+
+**Wake word: tomas de laboratorio** (el plan de entrenamiento ahora es `orbita-dataset/plan_wakeword.md`)
+- **Pregunta abierta:** ¿sirve entrenar con audio de celu? Se averigua grabando **las mismas tomas a la vez** con tres fuentes: celu, ESP crudo (ch0) y ESP + AFE (ch1, válida solo si el AFE procesa). Primera comparación (una toma, cerca, silencio): celu y ESP se parecen; falta ruido, distancia y más voces.
+- **Tomas:** "órbita" a 0,5 / 1 / 2 m × con y sin barbijo × ~5, más 1–2 min de ruido de labo; ruido continuo para ver el AFE. Se alinea con `--alinear` (`tools/comparar_canales.py`).
+- **`test.c`** es el único camino que graba el WAV de 2 canales (L y R crudos, o crudo + AFE) para esa comparación; hoy solo se compila con `CONFIG_ORBITA_LAB_UART`.
+
+| Resultado | Qué hacer |
+|---|---|
+| Celu y ESP se parecen | Entrenar con celu + ruido de la placa mezclado |
+| Difieren de forma pareja | Estimar el filtro celu → ESP y aplicarlo a los audios de celu |
+| Difieren en ruido o nivel | Mezclar ruido de la placa y normalizar ganancia |
+| El AFE cambia mucho la señal | Entrenar con salida del AFE o con crudo + ruido, y comparar |
+| El AFE no aporta o rompe "órbita" | Dejarlo afuera (ahorra PSRAM y CPU) |
+
+### Ya resuelto o reemplazado (no se migra)
+- **Medidas del AFE de `plan_dante.md`:** el `feed` de 1024 ya no vale (sin BSS pide 512, `arquitectura.md`); el BSS que no actuaba y el NS ausente en `AFE_TYPE_SR` ya están en `arquitectura.md`; "VAD modo 0 = 100 % de voz" quedó superado (modo 4 anduvo bien, S8); el AEC como candidato es hoy S9.
+- **Decisiones con el compañero:** quién cierra el pedido urgente, tamaño del segmento de fondo (hoy segmentos de 30 s) y qué resumen de `VOZ` va en el header (hoy 4 slots = 128 ms) quedaron resueltas por el protocolo `orbita-pcm-v2` y la detección en el servidor; "si `send` falla" lo resuelve S1 (retención).
+- **A7** (`uart_sink`, `throttled_sink`, `open/close`) y **A8** (`main.c` traduce comandos): reemplazados por el sink WebSocket; `main.c` hoy solo arranca.
+- **A5b parcial:** los `_Static_assert` de `ORBITA_MSG_SLOTS` y `ORBITA_SLOT_SAMPLES` ya están (`audio_ws_sink.c`, `pipeline.c`).
+- **A16 parcial:** `tarea_fetch` ya espera 10 ms ante error rápido; existe `orbita_audio_reset_dma_overflows()`.
+- **`test.c`:** ya no es el camino principal; `CMakeLists.txt` lo compila solo con la opción de laboratorio.
+- **Wake word v0 en Edge Impulse:** reemplazado por `orbita-dataset/plan_wakeword.md`.
