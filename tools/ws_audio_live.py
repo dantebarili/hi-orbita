@@ -102,7 +102,7 @@ class RollingWindows:
 
 class LiveProcessor:
     def __init__(self, control, recognizer, output, session_id, send_beep,
-                 seconds=4, overlap=1, save_audio=False, wake_word="orbita"):
+                 seconds=4, overlap=1, save_audio=False, wake_word="orbita", on_detect=None):
         self.control = control
         self.recognizer = recognizer
         self.output = Path(output)
@@ -110,6 +110,7 @@ class LiveProcessor:
         self.send_beep = send_beep
         self.save_audio = save_audio
         self.wake_word = wake_word
+        self.on_detect = on_detect   # modo nube: reemplaza al pitido
         self.windows = RollingWindows(seconds, overlap)
         self.queue = asyncio.Queue(maxsize=2)
         self.closed = False
@@ -201,8 +202,12 @@ class LiveProcessor:
                 LOG.info("STT [%.2f s, CPU %.2f s]: %s", offset, record["inference_seconds"], text or "<sin texto nuevo>")
                 if detected:
                     self.last_detection_end = wake_end
-                    LOG.info("Detectada %s: enviando pitido por PLAY", self.wake_word.upper())
-                    await self.send_beep()
+                    if self.on_detect:
+                        LOG.info("Detectada %s", self.wake_word.upper())
+                        await self.on_detect(wake_end)
+                    else:
+                        LOG.info("Detectada %s: enviando pitido por PLAY", self.wake_word.upper())
+                        await self.send_beep()
                 if self.valid(window) and (self.save_audio or text):
                     await asyncio.to_thread(self.save, window, record)
             except asyncio.CancelledError:
@@ -220,7 +225,7 @@ class LiveProcessor:
         await asyncio.gather(self.task, return_exceptions=True)
 
 
-async def handle_live(connection, output, control, recognizer, seconds=4, overlap=1, save_audio=False, wake_word="orbita"):
+async def handle_live(connection, output, control, recognizer, seconds=4, overlap=1, save_audio=False, wake_word="orbita", cloud=None):
     """Una ESP por consola. Sin timeout de audio; ping/pong detecta cortes reales."""
     if control.connection is not None:
         await connection.close(code=1013, reason="STT de laboratorio ocupado por otra ESP")
@@ -229,10 +234,12 @@ async def handle_live(connection, output, control, recognizer, seconds=4, overla
     session = Session(output, record=False)
     send_lock = asyncio.Lock()
     processor = None
+    conversation = None
     active_play = None
     play_deadline = 0.0
+    play_done = asyncio.Event()   # lo marca play_done/play_reject del ESP; el modo nube espera el fin del parlante
 
-    async def send_beep():
+    async def send_pcm(pcm):
         nonlocal active_play, play_deadline
         if active_play is not None and time.monotonic() > play_deadline:
             # No acumular respuestas ni bloquear todos los pitidos para siempre.
@@ -246,11 +253,15 @@ async def handle_live(connection, output, control, recognizer, seconds=4, overla
             return
         identity = secrets.randbits(64)
         active_play = f"{identity:016x}"
-        play_deadline = time.monotonic() + 5
-        for frame in play_frames(identity, detection_beep()):
+        play_deadline = time.monotonic() + 5 + len(pcm) / BYTES_SECOND
+        play_done.clear()
+        for frame in play_frames(identity, pcm):
             async with send_lock:
                 await connection.send(json.dumps(frame) if isinstance(frame, dict) else frame)
             await asyncio.sleep(0)
+
+    async def send_beep():
+        await send_pcm(detection_beep())
 
     try:
         async for message in connection:
@@ -260,6 +271,7 @@ async def handle_live(connection, output, control, recognizer, seconds=4, overla
                     if obj.get("play_id") == active_play:
                         LOG.info("Respuesta del parlante: %s", obj)
                         active_play = None
+                        play_done.set()
                     continue
             previous_seq = session.expected_seq
             sample_start = session.samples
@@ -268,13 +280,18 @@ async def handle_live(connection, output, control, recognizer, seconds=4, overla
                 async with send_lock:
                     await connection.send(response)
             if processor is None:
+                if cloud:
+                    conversation = cloud.start(output, session.id, send_pcm, play_done, save_audio)
                 processor = LiveProcessor(control, recognizer, output, session.id, send_beep,
-                                          seconds, overlap, save_audio, wake_word)
+                                          seconds, overlap, save_audio, wake_word,
+                                          conversation.on_detect if conversation else None)
                 LOG.info("ESP conectada: sesion=%s fuente=%s; RX/ACK continuos", session.id, session.info["source"])
                 control.status()
             elif isinstance(message, bytes):
                 fields = HEADER.unpack_from(message)
                 gap = bool(fields[7]) or (previous_seq is not None and fields[6] != previous_seq)
+                if conversation:
+                    conversation.feed(message[HEADER.size:], sample_start)
                 processor.add(message[HEADER.size:], sample_start, gap)
                 if session.messages % 240 == 0:
                     LOG.info("RX continuo: msgs=%d, %.1f s; STT=%s cola=%d omitidas=%d huecos=%d",
@@ -287,6 +304,8 @@ async def handle_live(connection, output, control, recognizer, seconds=4, overla
         LOG.exception("Sesion de audio invalida")
         await connection.close(code=1008, reason="Audio invalido")
     finally:
+        if conversation is not None:
+            await conversation.close()
         if processor is not None:
             await processor.close()
         session.close()

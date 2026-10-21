@@ -24,3 +24,6 @@ tools/prueba_*/
 
 # Estado de la interfaz de Obsidian (cambia en cada maquina)
 orbita-obsidian/.obsidian/workspace.json
+
+# Claves de ElevenLabs/Anthropic (cargadas con ws_audio_server.py --set-keys)
+tools/.orbita_keys.json
