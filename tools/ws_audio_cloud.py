@@ -1,11 +1,9 @@
-"""Conversación por nube para el prototipo de laboratorio (corre en la PC, no en el ESP).
+"""Conversación de voz por nube para el prototipo de laboratorio (corre en la PC, no en el ESP).
 
-Flujo: wake word local (Whisper, ws_audio_live) -> captura hasta silencio -> STT -> LLM (Claude) -> TTS
--> PLAY al ESP. Mide la latencia de cada etapa en cada turno. Las claves se cargan una sola vez con
-`python ws_audio_server.py --set-keys` (quedan en tools/.orbita_keys.json, fuera de git) o por variable de entorno.
+Escucha todo el tiempo (sin wake word): detecta cuando hablás, espera un silencio, y hace STT -> LLM -> TTS -> PLAY
+al ESP. Mide la latencia de cada etapa. Todo se configura en cloud_config.py; el servidor está en chat_nube.py.
 """
 import asyncio
-import getpass
 import io
 import json
 import logging
@@ -21,61 +19,34 @@ import requests
 from ws_audio_speech import MAX_PLAY_SECONDS, SAMPLE_RATE
 
 LOG = logging.getLogger("audio_cloud")
-KEYS_FILE = Path(__file__).resolve().parent / ".orbita_keys.json"
-KEY_NAMES = {"ELEVENLABS_API_KEY": "ElevenLabs", "ANTHROPIC_API_KEY": "Anthropic"}
 
-BLOCK = SAMPLE_RATE // 10          # 100 ms: unidad del detector de fin de frase
+BLOCK = SAMPLE_RATE // 10          # 100 ms: unidad del detector de voz
+ONSET_BLOCKS = 3                   # 0.3 s seguidos sobre el umbral = empezaste a hablar
 END_QUIET_BLOCKS = 8               # 0.8 s de silencio cierran la frase
-START_TIMEOUT_BLOCKS = 40          # 4 s sin que nadie hable: se aborta la captura
-MAX_UTTERANCE_SAMPLES = 12 * SAMPLE_RATE
-RING_SAMPLES = 12 * SAMPLE_RATE    # historial para recuperar lo dicho mientras Whisper detectaba
+MAX_UTTERANCE_SAMPLES = 15 * SAMPLE_RATE
+RING_SAMPLES = 20 * SAMPLE_RATE    # historial de audio recibido
 MIN_THRESHOLD = 50                 # RMS mínimo para considerar "voz" (el mic crudo es muy bajo)
-POST_PLAY_GUARD = SAMPLE_RATE      # tras el PLAY se ignora el wake word 1 s (el mic oye el parlante)
-
-SYSTEM_PROMPT = (
-    "Sos Órbita, un asistente de voz de escritorio para consultorios médicos. Tu respuesta se lee en voz alta: "
-    "español rioplatense, máximo dos frases cortas, sin listas, sin markdown, sin emojis. "
-    "No des diagnósticos ni indicaciones de tratamiento; si te lo piden, decí que lo decide el profesional."
-)
+POST_PLAY_GUARD = SAMPLE_RATE      # tras el PLAY se ignora el mic 1 s (oye el propio parlante)
+HISTORY_MESSAGES = 12
 
 
-# -- claves -----------------------------------------------------------------
-def load_keys():
-    """Variable de entorno primero, después el archivo local. Devuelve {nombre: valor o None}."""
-    saved = {}
-    try:
-        saved = json.loads(KEYS_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        pass
-    return {name: os.environ.get(name) or saved.get(name) for name in KEY_NAMES}
+def _key(cfg, name):
+    return getattr(cfg, name, "") or os.environ.get(name, "")
 
 
-def set_keys():
-    """Pide las claves por consola (sin eco) y las guarda con permisos 600. Enter conserva la actual."""
-    keys = load_keys()
-    for name, label in KEY_NAMES.items():
-        value = getpass.getpass(f"Clave de {label} ({'Enter conserva la guardada' if keys[name] else 'obligatoria'}): ").strip()
-        if value:
-            keys[name] = value
-    fd = os.open(KEYS_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as file:
-        json.dump({name: value for name, value in keys.items() if value}, file)
-    print(f"Claves guardadas en {KEYS_FILE}")
-
-
-# -- clientes ---------------------------------------------------------------
-def _check(response):
+def _check(response, who):
     if not response.ok:
-        raise RuntimeError(f"ElevenLabs HTTP {response.status_code}: {response.text[:300]}")
+        raise RuntimeError(f"{who} HTTP {response.status_code}: {response.text[:300]}")
     return response
 
 
+# -- clientes ---------------------------------------------------------------
 class ElevenLabs:
     BASE = "https://api.elevenlabs.io/v1"
 
     def __init__(self, key, voice_id, tts_model, stt_model):
         self.voice_id, self.tts_model, self.stt_model = voice_id, tts_model, stt_model
-        self.http = requests.Session()   # reusa la conexión TLS entre pedidos: ahorra ~100-200 ms por turno
+        self.http = requests.Session()   # reusa la conexión TLS entre pedidos
         self.http.headers["xi-api-key"] = key
 
     def transcribe(self, pcm):
@@ -86,67 +57,121 @@ class ElevenLabs:
         response = self.http.post(f"{self.BASE}/speech-to-text",
                                   data={"model_id": self.stt_model, "language_code": "es"},
                                   files={"file": ("voz.wav", wav.getvalue(), "audio/wav")}, timeout=30)
-        return _check(response).json().get("text", "").strip()
+        return _check(response, "ElevenLabs STT").json().get("text", "").strip()
 
     def speak(self, text):
         """PCM s16le mono 16 kHz, el formato que espera PLAY."""
         response = self.http.post(f"{self.BASE}/text-to-speech/{self.voice_id}",
                                   params={"output_format": "pcm_16000"},
                                   json={"text": text, "model_id": self.tts_model}, timeout=30)
-        pcm = _check(response).content
+        pcm = _check(response, "ElevenLabs TTS").content
         return pcm[:len(pcm) - len(pcm) % 2]
 
 
-class Claude:
-    def __init__(self, key, model):
-        import anthropic
-        self.client = anthropic.Anthropic(api_key=key)
-        self.model = model
-        self.history = []
+class History:
+    """Historial común: lista de (rol, texto) con rol 'user'/'assistant'; se olvida tras 2 min de silencio."""
+
+    def __init__(self):
+        self.turns = []
         self.last_used = 0.0
 
-    def reply(self, text):
-        """Devuelve (respuesta, tokens_in, tokens_out). La conversación se olvida tras 2 min de silencio."""
+    def with_user(self, text):
         if time.monotonic() - self.last_used > 120:
-            self.history.clear()
-        messages = self.history + [{"role": "user", "content": text}]
+            self.turns.clear()
+        return self.turns + [("user", text)]
+
+    def commit(self, turns, answer):
+        self.turns = (turns + [("assistant", answer)])[-HISTORY_MESSAGES:]
+        self.last_used = time.monotonic()
+
+
+class Claude:
+    def __init__(self, key, model, system):
+        import anthropic
+        self.client = anthropic.Anthropic(api_key=key)
+        self.model, self.system, self.history = model, system, History()
+
+    def reply(self, text):
+        """Devuelve (respuesta, tokens_in, tokens_out)."""
+        turns = self.history.with_user(text)
         response = self.client.messages.create(
-            model=self.model, max_tokens=300, system=SYSTEM_PROMPT,
+            model=self.model, max_tokens=300, system=self.system,
             output_config={"effort": "low"},   # voz: prioriza latencia sobre razonamiento profundo
-            messages=messages)
+            messages=[{"role": role, "content": content} for role, content in turns])
         answer = "".join(block.text for block in response.content if block.type == "text").strip()
         if response.stop_reason == "refusal" or not answer:
             answer = "No puedo ayudarte con eso."
-        self.history = (messages + [{"role": "assistant", "content": answer}])[-12:]
-        self.last_used = time.monotonic()
+        self.history.commit(turns, answer)
         return answer, response.usage.input_tokens, response.usage.output_tokens
 
 
-class CloudServices:
-    """Clientes compartidos por todas las conexiones (la historia del LLM vive acá)."""
+class Gemini:
+    BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
-    def __init__(self, keys, llm_model, voice_id, tts_model, stt_model, local_recognizer=None):
-        missing = [label for name, label in KEY_NAMES.items() if not keys.get(name)]
-        if missing:
-            raise ValueError("faltan claves: " + ", ".join(missing) + ". Cargarlas con --set-keys")
-        self.eleven = ElevenLabs(keys["ELEVENLABS_API_KEY"], voice_id, tts_model, stt_model)
-        self.claude = Claude(keys["ANTHROPIC_API_KEY"], llm_model)
-        self.local_recognizer = local_recognizer   # si no es None, el STT es Whisper local en vez de ElevenLabs
+    def __init__(self, key, model, system):
+        self.model, self.system, self.history = model, system, History()
+        self.http = requests.Session()
+        self.http.headers["x-goog-api-key"] = key
+
+    def reply(self, text):
+        turns = self.history.with_user(text)
+        body = dict(
+            system_instruction={"parts": [{"text": self.system}]},
+            contents=[{"role": "user" if role == "user" else "model", "parts": [{"text": content}]}
+                      for role, content in turns],
+            # Sin "thinking": para voz la latencia importa más, y el razonamiento se comería los tokens de salida.
+            generationConfig={"maxOutputTokens": 300, "thinkingConfig": {"thinkingBudget": 0}})
+        response = self.http.post(f"{self.BASE}/{self.model}:generateContent", json=body, timeout=30)
+        data = _check(response, "Gemini").json()
+        try:
+            answer = "".join(part.get("text", "") for part in data["candidates"][0]["content"]["parts"]).strip()
+        except (KeyError, IndexError):
+            answer = ""
+        answer = answer or "No pude responder eso."
+        self.history.commit(turns, answer)
+        usage = data.get("usageMetadata", {})
+        return answer, usage.get("promptTokenCount", 0), usage.get("candidatesTokenCount", 0)
+
+
+class CloudServices:
+    """STT + LLM + TTS según cloud_config; compartido por las conexiones (la historia del LLM vive acá)."""
+
+    def __init__(self, cfg):
+        eleven_key = _key(cfg, "ELEVENLABS_API_KEY")
+        if not eleven_key:
+            raise ValueError("falta ELEVENLABS_API_KEY en tools/cloud_config.py (hace falta para la voz)")
+        self.eleven = ElevenLabs(eleven_key, cfg.VOICE_ID, cfg.TTS_MODEL, cfg.STT_MODEL)
+        provider = {"gemini": (Gemini, "GEMINI_API_KEY", cfg.GEMINI_MODEL),
+                    "claude": (Claude, "ANTHROPIC_API_KEY", cfg.CLAUDE_MODEL)}.get(cfg.LLM)
+        if provider is None:
+            raise ValueError('LLM debe ser "gemini" o "claude"')
+        cls, key_name, model = provider
+        if not _key(cfg, key_name):
+            raise ValueError(f"falta {key_name} en tools/cloud_config.py (LLM = {cfg.LLM!r})")
+        self.llm = cls(_key(cfg, key_name), model, cfg.SYSTEM_PROMPT)
+        self.llm_name = f"{cfg.LLM}:{model}"
+        self.local_stt = None
+        if cfg.STT == "local":
+            from ws_audio_speech import FasterWhisperRecognizer
+            self.local_stt = FasterWhisperRecognizer(cfg.LOCAL_WHISPER_MODEL)
+        elif cfg.STT != "elevenlabs":
+            raise ValueError('STT debe ser "elevenlabs" o "local"')
+        self.save_audio = bool(getattr(cfg, "SAVE_AUDIO", False))
 
     def stt(self, pcm):
-        return (self.local_recognizer or self.eleven).transcribe(pcm)
+        return (self.local_stt or self.eleven).transcribe(pcm)
 
-    def start(self, output, session_id, send_pcm, play_done, save_audio):
-        return Conversation(self, output, session_id, send_pcm, play_done, save_audio)
+    def start(self, output, session_id, send_pcm, play_done):
+        return Conversation(self, output, session_id, send_pcm, play_done)
 
 
 # -- una conexión -----------------------------------------------------------
 class Conversation:
-    """Estados: idle (solo bufferea) -> capturing (hasta silencio) -> busy (nube + reproducción) -> idle."""
+    """Estados: idle (espera voz) -> capturing (hasta silencio) -> busy (nube + reproducción) -> idle."""
 
-    def __init__(self, services, output, session_id, send_pcm, play_done, save_audio):
+    def __init__(self, services, output, session_id, send_pcm, play_done):
         self.services, self.output, self.session_id = services, Path(output), session_id
-        self.send_pcm, self.play_done, self.save_audio = send_pcm, play_done, save_audio
+        self.send_pcm, self.play_done = send_pcm, play_done
         self.buf = bytearray()
         self.buf_start = 0            # índice (en muestras) del primer byte de buf
         self.state = "idle"
@@ -160,12 +185,14 @@ class Conversation:
     def latest(self):
         return self.buf_start + len(self.buf) // 2
 
-    def feed(self, pcm, start_sample):
+    def feed(self, pcm):
         self.buf += pcm
         excess = len(self.buf) // 2 - RING_SAMPLES
         if excess > 0:
             del self.buf[:excess * 2]
             self.buf_start += excess
+        if self.state == "idle":
+            self._watch()
         if self.state == "capturing":
             self._scan()
 
@@ -177,44 +204,41 @@ class Conversation:
         blocks = audio[:count * BLOCK].astype(np.float32).reshape(count, BLOCK)
         return audio, np.sqrt((blocks ** 2).mean(axis=1))
 
-    async def on_detect(self, wake_end_seconds):
-        wake_end = int(wake_end_seconds * SAMPLE_RATE)
-        if self.state != "idle" or wake_end < self.ignore_until:
-            LOG.info("Wake word ignorada (%s)", "turno en curso" if self.state != "idle" else "eco del parlante")
+    def _watch(self):
+        """Busca el inicio de voz: ONSET_BLOCKS bloques seguidos sobre 3x el piso de ruido."""
+        first = max(self.ignore_until, self.buf_start)
+        _, ring = self._blocks_rms(self.buf_start)
+        _, rms = self._blocks_rms(first)
+        if len(ring) < 10 or len(rms) < ONSET_BLOCKS:
             return
-        _, rms = self._blocks_rms(self.buf_start)
-        floor = float(np.percentile(rms, 20)) if len(rms) else 0.0
-        self.threshold = max(3 * floor, MIN_THRESHOLD)
-        self.cap_from, self.state = wake_end, "capturing"
-        LOG.info("Capturando frase (piso de ruido RMS %.0f, umbral de voz %.0f)", floor, self.threshold)
-        self._scan()
+        self.threshold = max(3 * float(np.percentile(ring, 20)), MIN_THRESHOLD)
+        loud = rms > self.threshold
+        for i in range(len(loud) - ONSET_BLOCKS + 1):
+            if loud[i:i + ONSET_BLOCKS].all():
+                self.cap_from = first + max(i - 3, 0) * BLOCK   # 0.3 s antes: no comerse el arranque de la frase
+                self.state = "capturing"
+                LOG.info("Voz detectada (umbral RMS %.0f); escuchando hasta silencio", self.threshold)
+                return
 
     def _scan(self):
         audio, rms = self._blocks_rms(self.cap_from)
         loud = np.nonzero(rms > self.threshold)[0]
-        if len(loud):
-            if len(rms) - 1 - loud[-1] >= END_QUIET_BLOCKS or len(audio) >= MAX_UTTERANCE_SAMPLES:
-                self._finish(audio[:(loud[-1] + 2) * BLOCK].tobytes())
-        elif len(rms) >= START_TIMEOUT_BLOCKS:
-            LOG.info("Nadie habló tras la wake word; captura abortada")
-            self.state = "idle"
-
-    def _finish(self, pcm):
-        self.state = "busy"
-        self.task = asyncio.create_task(self._turn(pcm, time.monotonic()))
+        if len(loud) and (len(rms) - 1 - loud[-1] >= END_QUIET_BLOCKS or len(audio) >= MAX_UTTERANCE_SAMPLES):
+            self.state = "busy"
+            self.task = asyncio.create_task(self._turn(audio[:(loud[-1] + 2) * BLOCK].tobytes(), time.monotonic()))
 
     async def _turn(self, pcm, t_end):
         record = dict(time=datetime.now(timezone.utc).isoformat(), session=self.session_id,
                       utterance_seconds=round(len(pcm) / (2 * SAMPLE_RATE), 2),
-                      stt="local" if self.services.local_recognizer else "elevenlabs")
+                      stt="local" if self.services.local_stt else "elevenlabs", llm=self.services.llm_name)
         try:
             question = await asyncio.to_thread(self.services.stt, pcm)
             t_stt = time.monotonic()
             record["question"] = question
             if not question:
-                LOG.info("STT sin texto; se descarta el turno")
+                LOG.info("STT sin texto (ruido); se descarta")
                 return
-            answer, tokens_in, tokens_out = await asyncio.to_thread(self.services.claude.reply, question)
+            answer, tokens_in, tokens_out = await asyncio.to_thread(self.services.llm.reply, question)
             t_llm = time.monotonic()
             speech = (await asyncio.to_thread(self.services.eleven.speak, answer))[:MAX_PLAY_SECONDS * SAMPLE_RATE * 2]
             t_tts = time.monotonic()
@@ -228,7 +252,7 @@ class Conversation:
             LOG.info("Turno %d: %r -> %r | STT %.2f s, LLM %.2f s, TTS %.2f s, envío %.2f s | fin de habla -> PLAY: %.2f s "
                      "(+%.1f s de silencio que espera el detector)", self.turns + 1, question, answer, record["stt_s"],
                      record["llm_s"], record["tts_s"], record["send_s"], record["total_s"], END_QUIET_BLOCKS / 10)
-            if self.save_audio:
+            if self.services.save_audio:
                 await asyncio.to_thread(self._save_wavs, pcm, speech)
             # Esperar el fin de la reproducción para no tomar el propio parlante como pregunta nueva.
             try:
@@ -239,7 +263,7 @@ class Conversation:
             raise
         except Exception as error:
             record["error"] = str(error)
-            LOG.exception("Falló el turno de nube; se sigue escuchando")
+            LOG.error("Falló el turno: %s. Se sigue escuchando", error)
         finally:
             self.turns += 1
             self.ignore_until = self.latest + POST_PLAY_GUARD

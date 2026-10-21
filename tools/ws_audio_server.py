@@ -6,7 +6,6 @@ Demos de respuesta por el parlante (una por conexion, elegir una):
   --replay-window 2 12     devuelve ese intervalo del audio recibido (demo actual).
   --play-wav archivo.wav   envia un WAV conocido.
   --stt-continuous         STT continuo con teclas G/P/E y pitido al detectar Orbita.
-  --stt-continuous --cloud  tras "Orbita": STT -> Claude -> TTS (ElevenLabs) por PLAY, con latencias. Claves: --set-keys.
   --stt-window-seconds 8   transcribe una ventana y, si oye "Orbita", responde con --reply-wav.
 """
 import argparse
@@ -264,15 +263,9 @@ async def run(args):
         from ws_audio_live import LiveControl, handle_live, keyboard
         control = LiveControl(args.start_recording)
         recognizer = FasterWhisperRecognizer(args.stt_model)
-        cloud = None
-        if args.cloud:
-            from ws_audio_cloud import CloudServices, load_keys
-            cloud = CloudServices(load_keys(), args.llm_model, args.voice_id, args.tts_model, args.cloud_stt_model,
-                                  recognizer if args.cloud_stt == "local" else None)
-            LOG.info("Modo nube: STT %s -> %s -> TTS %s (voz %s)", args.cloud_stt, args.llm_model, args.tts_model, args.voice_id)
         async with serve(lambda ws: handle_live(ws, args.output, control, recognizer,
                                                args.stt_chunk_seconds, args.stt_overlap_seconds,
-                                               args.save_audio, args.wake_word, cloud), args.host, args.port,
+                                               args.save_audio, args.wake_word), args.host, args.port,
                          max_size=8192, max_queue=8, compression=None,
                          ping_interval=20, ping_timeout=20, close_timeout=5):
             LOG.info("STT continuo en %s:%d | ventana %.1f s, solapamiento %.1f s | WAV %s",
@@ -326,16 +319,6 @@ if __name__ == "__main__":
     demo.add_argument("--stt-window-seconds", type=float, default=None,
                         help="analiza una sola ventana inicial de audio de esta duracion (1..30 s); "
                              "el flujo WebSocket continua abierto para devolver la respuesta")
-    parser.add_argument("--set-keys", action="store_true",
-                        help="pedir las claves de ElevenLabs y Anthropic una sola vez y guardarlas en tools/.orbita_keys.json")
-    parser.add_argument("--cloud", action="store_true",
-                        help="con --stt-continuous: tras la wake word, STT -> Claude -> TTS en la nube y responde por PLAY; mide latencias")
-    parser.add_argument("--cloud-stt", choices=("elevenlabs", "local"), default="elevenlabs",
-                        help="STT del modo nube: ElevenLabs Scribe (por defecto) o el Whisper local, para comparar latencia")
-    parser.add_argument("--cloud-stt-model", default="scribe_v1", help="model_id de ElevenLabs STT (scribe_v1)")
-    parser.add_argument("--llm-model", default="claude-haiku-5-5", help="modelo de Claude para la conversacion (claude-haiku-5-5)")
-    parser.add_argument("--tts-model", default="eleven_flash_v2_5", help="modelo TTS de ElevenLabs (eleven_flash_v2_5)")
-    parser.add_argument("--voice-id", default="21m00Tcm4TlvDq8ikWAM", help="voice_id de ElevenLabs (por defecto Rachel, voz premade)")
     parser.add_argument("--wake-word", default="orbita", help="palabra disparadora del STT continuo (orbita); ejemplo: gato")
     parser.add_argument("--stt-model", default="tiny",
                         help="modelo faster-whisper para la prueba local (por defecto: tiny)")
@@ -344,17 +327,6 @@ if __name__ == "__main__":
                         help="respuesta PCM WAV mono/16 kHz/16-bit; archivo opcional por ahora")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if args.set_keys:
-        from ws_audio_cloud import set_keys
-        set_keys()
-        sys.exit(0)
-    if args.cloud:
-        if not args.stt_continuous:
-            parser.error("--cloud requiere --stt-continuous")
-        from ws_audio_cloud import KEY_NAMES, load_keys
-        missing = [label for name, label in KEY_NAMES.items() if not load_keys()[name]]
-        if missing:
-            parser.error("faltan claves de " + ", ".join(missing) + "; cargarlas una vez con: python ws_audio_server.py --set-keys")
     if args.replay_window is not None:
         start, end = args.replay_window
         if not math.isfinite(start) or not math.isfinite(end) or start < 0 or not 1 <= end - start <= 15:

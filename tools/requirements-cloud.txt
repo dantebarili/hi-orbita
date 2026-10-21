@@ -1,3 +1,0 @@
-# Opcional: modo --cloud (ElevenLabs + Claude) del servidor de laboratorio.
-requests>=2.32
-anthropic>=1.0
