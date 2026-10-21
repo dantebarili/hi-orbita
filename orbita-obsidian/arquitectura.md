@@ -201,6 +201,7 @@ La tarea `captura` lee el I2S (slots de 32 bit, 24 útiles en el INMP441), convi
 
   - **Medición de `D` (pendiente):** reproducir un chirp con `orbita_playback`, capturar el mic crudo y anotar el índice de captura en que se escribió el primer trozo; la correlación cruzada da el retardo. **Repetir siempre que cambie** el DMA, el tamaño de trozo, el ruteo de la PCB o la versión de `esp-sr`/IDF. Valor medido: *sin medir*.
   - **A decidir:** AEC dentro del AFE (A) o suelto (B) midiendo RAM; `τ` fijo en Kconfig o calculado en ejecución; DMA mínimo con `underruns = 0`; quién expone la referencia (`orbita_playback` no lo hace aún); convergencia entre respuestas y doble habla (el NLP agresivo puede dañar la voz propia). Condiciona el ruteo del parlante en la PCB.
+  - **Plan B si el AEC por software falla** (porque `D` no se puede fijar; decidir antes de la PCB): pasar a códec, con referencia por loopback de hardware (mismo reloj que los mics, `D` fijo). Combo: mics analógicos + ADC multicanal (ES7210) + DAC/ampli (ES8311 + NS4150B). Cambia la regla de mics digitales de `CLAUDE.md`/`AGENTS.md`. Referencia a mirar: ESP-Mosaico (ES8311 + NS4150B + mic analógico LMA2718B331-OE1; [guía](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s31/esp-mosaico/user_guide.html)). Hoy se sigue con mics digitales + MAX98357A (decisión 21/10).
 - Pendientes (`vad_cache`, falsos negativos y positivos de la wake word): en el historial de git (`git show 3da73c6:plan_dante.md`).
 
 ### 3.4 Rings, header y tabla de segmentos
