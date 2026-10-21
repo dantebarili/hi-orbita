@@ -151,3 +151,10 @@ Revisado contra el código y los documentos del 19/10. El plan original sigue en
 - **A16 parcial:** `tarea_fetch` ya espera 10 ms ante error rápido; existe `orbita_audio_reset_dma_overflows()`.
 - **`test.c`:** ya no es el camino principal; `CMakeLists.txt` lo compila solo con la opción de laboratorio.
 - **Wake word v0 en Edge Impulse:** reemplazado por `orbita-dataset/plan_wakeword.md`.
+
+## Notas para el backend
+
+- **Gestionar conversaciones abiertas:** el backend decide cuándo abrir y cerrar cada conversación con el LLM.
+  - **Abrir:** al llegar el aviso de wake word del ESP (`dev_wake_word`) o al detectar "Órbita" en la transcripción (S6). Las dos vías terminan en la misma conversación (no abrir dos).
+  - **Cerrar:** decisión semántica del backend (`srv_fin_conversacion()` en `órbita..md`): el médico se despidió o no hay más para tratar.
+  - **Contexto:** mientras está abierta guarda el historial de esa conversación (contexto local, corto) para que cada respuesta tenga en cuenta lo anterior.
