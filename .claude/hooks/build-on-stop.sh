@@ -10,12 +10,13 @@ cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 git status --porcelain -- 'firmware/*.c' 'firmware/*.h' 'firmware/*/CMakeLists.txt' \
   'firmware/CMakeLists.txt' 'firmware/sdkconfig.defaults' 'firmware/partitions.csv' \
   'firmware/*Kconfig*' 2>/dev/null | grep -q . || exit 0
-command -v idf.py >/dev/null 2>&1 || exit 0
 
 # Desde Git Bash idf.py no compila (avisa "MSys/Mingw is no longer supported" y sale con 0, o sea
-# falla en silencio): se lo llama por PowerShell, sin MSYSTEM.
-out=$(powershell.exe -NoProfile -Command "\$env:MSYSTEM=\$null; idf.py -C firmware build" 2>&1)
-if [ $? -ne 0 ]; then
+# falla en silencio): se lo llama por PowerShell, que activa ESP-IDF solo (idf-build.ps1).
+out=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/idf-build.ps1" 2>&1)
+rc=$?
+[ $rc -eq 3 ] && exit 0   # no hay ESP-IDF instalado: se salta
+if [ $rc -ne 0 ]; then
   echo "idf.py build fallo. Ultimas lineas:" >&2
   echo "$out" | tail -n 25 >&2
   exit 2
