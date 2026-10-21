@@ -1,0 +1,13 @@
+menu "Orbita WiFi"
+
+    config ORBITA_WIFI_TX_POWER
+        int "Potencia maxima de transmision (0 = la del driver; 8..84, unidad 0.25 dBm)"
+        range 0 84
+        default 0
+        help
+            PRUEBA de ruido audible: las rafagas de consumo del WiFi hacen "cantar" a los
+            capacitores ceramicos y la placa suena. Bajar la potencia achica esas rafagas.
+            8 = 2 dBm, 40 = 10 dBm, 84 = 20 dBm (el maximo). Con la notebook cerca alcanza
+            con poco; si se corta la conexion, subirla. 0 no toca nada.
+
+endmenu
