@@ -43,6 +43,7 @@ def _check(response, who):
 # -- clientes ---------------------------------------------------------------
 class ElevenLabs:
     BASE = "https://api.elevenlabs.io/v1"
+    name = "elevenlabs"
 
     def __init__(self, key, voice_id, tts_model, stt_model):
         self.voice_id, self.tts_model, self.stt_model = voice_id, tts_model, stt_model
@@ -65,6 +66,35 @@ class ElevenLabs:
                                   params={"output_format": "pcm_16000"},
                                   json={"text": text, "model_id": self.tts_model}, timeout=30)
         pcm = _check(response, "ElevenLabs TTS").content
+        return pcm[:len(pcm) - len(pcm) % 2]
+
+
+class Deepgram:
+    """STT Nova-3 y TTS Aura-2 (voces en español). Crédito inicial grande y sin vencimiento."""
+    BASE = "https://api.deepgram.com/v1"
+    name = "deepgram"
+
+    def __init__(self, key, stt_model, voice):
+        self.stt_model, self.voice = stt_model, voice
+        self.http = requests.Session()
+        self.http.headers["Authorization"] = f"Token {key}"
+
+    def transcribe(self, pcm):
+        wav = io.BytesIO()
+        with wave.open(wav, "wb") as file:
+            file.setparams((1, 2, SAMPLE_RATE, 0, "NONE", "not compressed"))
+            file.writeframes(pcm)
+        response = self.http.post(f"{self.BASE}/listen", params={"model": self.stt_model, "language": "es", "smart_format": "true"},
+                                  data=wav.getvalue(), headers={"Content-Type": "audio/wav"}, timeout=30)
+        channels = _check(response, "Deepgram STT").json()["results"]["channels"]
+        return channels[0]["alternatives"][0]["transcript"].strip()
+
+    def speak(self, text):
+        """PCM s16le mono 16 kHz crudo (container=none), el formato que espera PLAY."""
+        response = self.http.post(f"{self.BASE}/speak", params={"model": self.voice, "encoding": "linear16",
+                                                                "sample_rate": SAMPLE_RATE, "container": "none"},
+                                  json={"text": text}, timeout=30)
+        pcm = _check(response, "Deepgram TTS").content
         return pcm[:len(pcm) - len(pcm) % 2]
 
 
@@ -137,10 +167,19 @@ class CloudServices:
     """STT + LLM + TTS según cloud_config; compartido por las conexiones (la historia del LLM vive acá)."""
 
     def __init__(self, cfg):
-        eleven_key = _key(cfg, "ELEVENLABS_API_KEY")
-        if not eleven_key:
-            raise ValueError("falta ELEVENLABS_API_KEY en tools/cloud_config.py (hace falta para la voz)")
-        self.eleven = ElevenLabs(eleven_key, cfg.VOICE_ID, cfg.TTS_MODEL, cfg.STT_MODEL)
+        if cfg.SPEECH == "deepgram":
+            if not _key(cfg, "DEEPGRAM_API_KEY"):
+                raise ValueError("falta DEEPGRAM_API_KEY en tools/cloud_config.py (SPEECH = 'deepgram')")
+            self.speech = Deepgram(_key(cfg, "DEEPGRAM_API_KEY"), cfg.DEEPGRAM_STT_MODEL, cfg.DEEPGRAM_VOICE)
+            self.voice_name = cfg.DEEPGRAM_VOICE
+        elif cfg.SPEECH == "elevenlabs":
+            if not _key(cfg, "ELEVENLABS_API_KEY"):
+                raise ValueError("falta ELEVENLABS_API_KEY en tools/cloud_config.py (SPEECH = 'elevenlabs')")
+            self.speech = ElevenLabs(_key(cfg, "ELEVENLABS_API_KEY"), cfg.ELEVENLABS_VOICE_ID,
+                                     cfg.ELEVENLABS_TTS_MODEL, cfg.ELEVENLABS_STT_MODEL)
+            self.voice_name = cfg.ELEVENLABS_VOICE_ID
+        else:
+            raise ValueError('SPEECH debe ser "deepgram" o "elevenlabs"')
         provider = {"gemini": (Gemini, "GEMINI_API_KEY", cfg.GEMINI_MODEL),
                     "claude": (Claude, "ANTHROPIC_API_KEY", cfg.CLAUDE_MODEL)}.get(cfg.LLM)
         if provider is None:
@@ -150,16 +189,7 @@ class CloudServices:
             raise ValueError(f"falta {key_name} en tools/cloud_config.py (LLM = {cfg.LLM!r})")
         self.llm = cls(_key(cfg, key_name), model, cfg.SYSTEM_PROMPT)
         self.llm_name = f"{cfg.LLM}:{model}"
-        self.local_stt = None
-        if cfg.STT == "local":
-            from ws_audio_speech import FasterWhisperRecognizer
-            self.local_stt = FasterWhisperRecognizer(cfg.LOCAL_WHISPER_MODEL)
-        elif cfg.STT != "elevenlabs":
-            raise ValueError('STT debe ser "elevenlabs" o "local"')
         self.save_audio = bool(getattr(cfg, "SAVE_AUDIO", False))
-
-    def stt(self, pcm):
-        return (self.local_stt or self.eleven).transcribe(pcm)
 
     def start(self, output, session_id, send_pcm, play_done):
         return Conversation(self, output, session_id, send_pcm, play_done)
@@ -230,9 +260,9 @@ class Conversation:
     async def _turn(self, pcm, t_end):
         record = dict(time=datetime.now(timezone.utc).isoformat(), session=self.session_id,
                       utterance_seconds=round(len(pcm) / (2 * SAMPLE_RATE), 2),
-                      stt="local" if self.services.local_stt else "elevenlabs", llm=self.services.llm_name)
+                      speech=self.services.speech.name, llm=self.services.llm_name)
         try:
-            question = await asyncio.to_thread(self.services.stt, pcm)
+            question = await asyncio.to_thread(self.services.speech.transcribe, pcm)
             t_stt = time.monotonic()
             record["question"] = question
             if not question:
@@ -240,7 +270,7 @@ class Conversation:
                 return
             answer, tokens_in, tokens_out = await asyncio.to_thread(self.services.llm.reply, question)
             t_llm = time.monotonic()
-            speech = (await asyncio.to_thread(self.services.eleven.speak, answer))[:MAX_PLAY_SECONDS * SAMPLE_RATE * 2]
+            speech = (await asyncio.to_thread(self.services.speech.speak, answer))[:MAX_PLAY_SECONDS * SAMPLE_RATE * 2]
             t_tts = time.monotonic()
             await self.send_pcm(speech)
             t_sent = time.monotonic()

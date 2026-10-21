@@ -16,15 +16,15 @@ def tone(seconds, amplitude):
 
 
 class FakeServices:
-    local_stt = None
     llm_name = "fake"
     save_audio = False
-    stt = staticmethod(lambda pcm: "hola orbita")
 
     class llm:
         reply = staticmethod(lambda text: ("respuesta " + text, 10, 5))
 
-    class eleven:
+    class speech:
+        name = "fake"
+        transcribe = staticmethod(lambda pcm: "hola orbita")
         speak = staticmethod(lambda text: tone(0.5, 5000))
 
 
@@ -56,11 +56,11 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(conv.state, "idle")
 
     def test_services_validate_config(self):
-        cfg = SimpleNamespace(ELEVENLABS_API_KEY="", VOICE_ID="v", TTS_MODEL="t", STT_MODEL="s", LLM="gemini",
-                              GEMINI_API_KEY="g", GEMINI_MODEL="m", CLAUDE_MODEL="c", SYSTEM_PROMPT="p", STT="elevenlabs")
+        cfg = SimpleNamespace(SPEECH="deepgram", DEEPGRAM_API_KEY="", DEEPGRAM_STT_MODEL="n", DEEPGRAM_VOICE="v",
+                              LLM="gemini", GEMINI_API_KEY="g", GEMINI_MODEL="m", CLAUDE_MODEL="c", SYSTEM_PROMPT="p")
         with self.assertRaises(ValueError):
-            CloudServices(cfg)                           # falta la clave de ElevenLabs
-        cfg.ELEVENLABS_API_KEY = "e"
+            CloudServices(cfg)                           # falta la clave de Deepgram
+        cfg.DEEPGRAM_API_KEY = "d"
         self.assertEqual(CloudServices(cfg).llm_name, "gemini:m")
         cfg.LLM = "claude"
         with self.assertRaises(ValueError):

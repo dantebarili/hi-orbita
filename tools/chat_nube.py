@@ -1,8 +1,8 @@
 """Chat de voz continuo con la nube (sin wake word): hablás y te contesta por el parlante del ESP.
 
 Uso: python tools/chat_nube.py   (sin argumentos; todo se define en tools/cloud_config.py)
-Dependencias: pip install -r tools/requirements-websocket.txt requests numpy  (+ anthropic si LLM = "claude",
-+ faster-whisper si STT = "local"). Es half-duplex: mientras responde, no te escucha.
+Dependencias: pip install -r tools/requirements-websocket.txt requests numpy  (+ anthropic si LLM = "claude").
+Es half-duplex: mientras responde, no te escucha.
 """
 import asyncio
 import json
@@ -90,8 +90,8 @@ async def main():
         sys.exit(f"Config: {error}")
     async with serve(lambda ws: handle(ws, services), cfg.HOST, cfg.PORT, max_size=8192, max_queue=8,
                      compression=None, ping_interval=20, ping_timeout=20, close_timeout=5):
-        LOG.info("Chat en %s:%d | LLM %s | voz %s | STT %s | Ctrl+C para salir", cfg.HOST, cfg.PORT,
-                 services.llm_name, cfg.VOICE_ID, cfg.STT)
+        LOG.info("Chat en %s:%d | LLM %s | voz/STT %s (%s) | Ctrl+C para salir", cfg.HOST, cfg.PORT,
+                 services.llm_name, services.speech.name, services.voice_name)
         await asyncio.Event().wait()
 
 
