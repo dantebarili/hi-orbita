@@ -223,3 +223,27 @@ Movido a [[protocolo_comunicacion]].
 - Resiliencia offline: rol de la SD y política de pérdida de datos (liga con los rings).
 - Estados que faltan en la FSM: falla de `audio_init`, login NFC, apagado.
 
+## 6. Backend (servidor de laboratorio, `tools/ws_audio_cloud.py`)
+
+Hoy el servidor decide solo cuándo termina cada frase y la manda entera al STT (no streaming). Medido el 21/10 en tomas por WebSocket con el mic crudo (AFE apagado).
+
+### 6.1 Detectar inicio y fin de la frase
+- **Problema medido:** el 50 a 99 % de la energía del mic está bajo 100 Hz (rumble: mesa, tecleo, aire). Medido en banda ancha, la voz (RMS ~1000 a 1700) apenas supera el fondo (~500 a 800): SNR de 3 a 6 dB, y las sílabas suaves se tomaban por silencio ("Orbi" en vez de "Órbita").
+- **Solución:** el nivel se mide en la **banda de voz (150 a 3400 Hz)**, con un Butterworth pasa-banda de 4.º orden por flanco (`scipy`, `sosfilt` con estado entre paquetes). Ahí el fondo queda en ~30 a 120 y la voz en 500 a 1900 (SNR > 20 dB). **El filtro solo mide: al STT va el audio crudo.**
+- **Cómo decide** (bloques de 100 ms, RMS por bloque sobre la señal filtrada):
+  - *Inicio:* 3 bloques seguidos sobre `max(2 × piso, 25)`; el piso es el percentil 20 de los últimos 20 s.
+  - *Fin:* 1,2 s seguidos bajo un umbral de cierre (`max(2,5 × piso, 35)`), distinto del de inicio (histéresis) para que el ruido de fondo no mantenga la frase abierta y las sílabas suaves no la corten.
+  - *Margen:* se agregan 0,5 s antes del inicio y 0,5 s después del último bloque con voz (el detector tarda 0,3 s en confirmar y las últimas sílabas son suaves). Son muestras que ya estaban en el buffer.
+- **Después de la respuesta:** no escucha hasta que (a) el ESP manda `play_done` (el firmware lo manda cuando termina de sonar) y (b) el audio **recibido** tiene 0,5 s seguidos de silencio en banda, con tope de 8 s. Se mide el silencio recibido y no un tiempo fijo porque el audio del mic llega atrasado respecto del parlante (red y rings): la cola de su propia voz sigue llegando después de `play_done`.
+- **Al conectar:** la ESP acumula hasta 32 s mientras no hay servidor (S1) y los manda de golpe. El servidor descarta lo que llega más rápido que su duración, y como mínimo 5 s de reloj.
+
+### 6.2 Filtro para el firmware (pendiente, rama `dante`)
+Pasa-altos Butterworth de 4.º orden a 150 Hz (fs = 16 kHz), en la captura antes del ring: saca el rumble de raíz y el servidor ya no tendría que filtrar para medir. Son 2 biquads en cascada (forma directa II traspuesta, `float`; el S3 tiene FPU de precisión simple). Costo ≈ 10 MAC por muestra y canal: despreciable.
+
+| biquad | b0 | b1 | b2 | a1 | a2 |
+|---|---|---|---|---|---|
+| 1 | 0,92591212 | −1,85182424 | 0,92591212 | −1,89354234 | 0,89683219 |
+| 2 | 1 | −2 | 1 | −1,95254262 | 0,95593497 |
+
+Respuesta (calculada con `scipy.signal.sosfreqz`): −56 dB a 30 Hz, −32 dB a 60 Hz, −14 dB a 100 Hz, −3 dB a 150 Hz, 0 dB desde 300 Hz. Coeficientes generados con `butter(4, 150, 'highpass', fs=16000, output='sos')`. Avisos: (1) un filtro de 4.º orden con corte en 150 Hz deja pasar algo de 80 a 120 Hz, medir si alcanza; (2) cambia el espectro: el dataset de la wake word y la referencia del AEC (S9) tienen que verlo igual; (3) no verificado en la placa ni contra la documentación de `esp-dsp`; comprobar antes si el AFE ya filtra al encenderlo.
+

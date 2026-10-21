@@ -74,6 +74,7 @@ Carpetas: `firmware/components/orbita_audio`, `orbita_pipeline`, `orbita_playbac
   - **A5b:** `_Static_assert` de `ORBITA_MSG_SLOTS * 512 <= UINT16_MAX` y de `ORBITA_SLOT_SAMPLES == ORBITA_AFE_FETCH_FRAMES`.
   - **A10 mínimo:** guarda de `s_rx_chan == NULL`. Para la hora de prueba, `arranque_fallo()` queda como está.
 - [ ] **S8 VAD como compuerta (opcional, mínimo).** Anotar los números de la prueba del 13/10 (modo 4 anduvo bien; el 100 % de voz era del modo 0) y reservar en el header un flag de "silencio salteado" (≠ pérdida).
+- [ ] **Pasa-altos ~150 Hz en la captura (rumble del mic).** Medido el 21/10 en tomas por WebSocket (mic crudo, AFE apagado): el 50 a 99 % de la energía está bajo 100 Hz y la voz (300 a 3400 Hz) queda a SNR de 3 a 6 dB en banda ancha (más de 20 dB si se mide solo en banda). Hoy el servidor lo esquiva midiendo en banda para cortar la frase (`tools/ws_audio_cloud.py`); el firmware debería sacarlo de raíz (IIR de 4.º orden en la captura, antes del ring; coeficientes en `arquitectura.md` §6.2) y revisar el montaje mecánico del mic. Antes de decidir, comprobar si el AFE ya lo filtra al encenderlo (S9).
 - [ ] **En paralelo:** wake word y tomas de las tres fuentes (`orbita-dataset/plan_wakeword.md`); no bloquea nada.
 
 ## Paso 1b — Rama `juani` (comunicación y servidor)
