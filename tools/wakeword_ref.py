@@ -136,34 +136,42 @@ def run(ruta_modelo, ruta_wav, ruta_json, canal, ruta_dump):
 
 def comparar(ruta_log, ruta_dump):
     """Log del chip (lineas 'F i v0..v39' y 'P k p', con CONFIG_ORBITA_WW_PRUEBA_WAV) vs volcado de `run --dump`."""
-    chip_f, chip_p = [], []
+    # Por numero de columna/inferencia, no por orden: un log del arranque puede cortar una linea
+    # a la mitad (se descarta) y con orden todo quedaria corrido una posicion.
+    chip_f, chip_p = {}, {}
     for linea in open(ruta_log, errors="replace"):
         t = linea.split()
-        if len(t) == 42 and t[0] == "F":
-            chip_f.append([int(v) for v in t[2:]])
-        elif len(t) == 3 and t[0] == "P":
-            chip_p.append(int(t[2]))
+        try:
+            if len(t) == 42 and t[0] == "F":
+                chip_f[int(t[1])] = [int(v) for v in t[2:]]
+            elif len(t) == 3 and t[0] == "P":
+                chip_p[int(t[1])] = int(t[2])
+        except ValueError:
+            pass                                  # linea mezclada con otro log
     pc_f, pc_p = [], []
     for linea in open(ruta_dump):
         if linea.startswith("# probs_u8"):
             pc_p = [int(v) for v in linea.split()[2:]]
         elif linea.strip():
             pc_f.append([int(v) for v in linea.split()])
-    n = min(len(chip_f), len(pc_f))
-    if n == 0:
+    cols = [i for i in range(len(pc_f)) if i in chip_f]
+    if not cols:
         sys.exit("No hay features para comparar (¿el log tiene las lineas 'F ...'?)")
-    d = np.abs(np.array(chip_f[:n]) - np.array(pc_f[:n]))
-    m = min(len(chip_p), len(pc_p))
-    dp = np.abs(np.array(chip_p[:m]) - np.array(pc_p[:m])) if m else np.array([0])
-    print(f"features: chip={len(chip_f)} pc={len(pc_f)} comparadas={n}  "
+    d = np.abs(np.array([chip_f[i] for i in cols]) - np.array([pc_f[i] for i in cols]))
+    infs = [k for k in range(len(pc_p)) if k in chip_p]
+    dp = np.abs(np.array([chip_p[k] for k in infs]) - np.array([pc_p[k] for k in infs])) if infs else np.array([0])
+    faltan_f = [i for i in range(len(pc_f)) if i not in chip_f]
+    faltan_p = [k for k in range(len(pc_p)) if k not in chip_p]
+    print(f"features: chip={len(chip_f)} pc={len(pc_f)} comparadas={len(cols)}  "
           f"identicas={100 * np.mean(d == 0):.2f} %  dif max={d.max()} LSB")
+    if faltan_f or faltan_p:
+        print(f"  ilegibles en el log (cortadas por otro mensaje): columnas {faltan_f[:10]} inferencias {faltan_p[:10]}")
     if d.max() > 0:
-        i = int(np.argmax(d.max(axis=1) > 0))
-        print(f"  primera diferencia en la columna {i}")
-    print(f"probabilidades: chip={len(chip_p)} pc={len(pc_p)}  dif max={dp.max()}/255")
+        print(f"  primera diferencia en la columna {cols[int(np.argmax(d.max(axis=1) > 0))]}")
+    print(f"probabilidades: chip={len(chip_p)} pc={len(pc_p)} comparadas={len(infs)}  dif max={dp.max()}/255")
     # El bucle de audio_utils.py deja sin procesar el ultimo bloque de 160 (usa `<` estricto): el chip
-    # puede dar una columna mas al final. Se aceptan hasta 1 de diferencia en la cantidad.
-    ok = abs(len(chip_f) - len(pc_f)) <= 1 and d.max() <= 1 and dp.max() < 2
+    # da una columna mas al final, que no se compara. Unas pocas lineas ilegibles se toleran.
+    ok = d.max() <= 1 and dp.max() < 2 and len(faltan_f) <= 3 and len(faltan_p) <= 3
     print("PASA" if ok else "NO PASA")
 
 

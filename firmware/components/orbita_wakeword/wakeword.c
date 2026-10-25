@@ -243,6 +243,9 @@ static void procesar_wav_embebido(void)
     for (size_t i = 0; i < muestras; i += ORBITA_CHUNK_FRAMES) {
         size_t n = muestras - i < ORBITA_CHUNK_FRAMES ? muestras - i : ORBITA_CHUNK_FRAMES;
         procesar_audio(datos + i, n, true);
+        // El printf espera a la UART (~10 s en total a 115200) sin soltar el core: se cede 1 tick
+        // por chunk para que corra IDLE1 y no salte el watchdog de tareas (lo vigila cada 5 s).
+        vTaskDelay(1);
     }
     printf("FIN_PRUEBA features=%u inferencias=%u detecciones=%u\n",
            (unsigned)s_n_features, (unsigned)s_n_inferencias, (unsigned)s_detecciones);
