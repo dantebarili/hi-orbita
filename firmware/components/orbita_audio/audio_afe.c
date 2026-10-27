@@ -54,11 +54,11 @@ esp_err_t orbita_afe_init(void)
     cfg->wakenet_init = false;
     cfg->aec_init = false;
 
-    // Config objetivo (14/10): SOLO VAD (+ AEC cuando haya parlante), sin beamforming (SE) ni NS.
-    // MEDIDO el 12/10: con SE activo la salida era el mic 0 SIN procesar (identica bit a bit al crudo,
-    // 64 ms mas tarde): el beamforming no actuaba, asi que se saca. Sin probar: el log de afe_config_print
-    // (antes y despues de afe_config_check) dice si el AFE acepta esta combinacion.
-    cfg->se_init = false;
+    // PRUEBA (18/10): beamforming (SE) + VAD, sin NS. El 12/10 con SE activo la salida era el mic 0 SIN
+    // procesar (identica bit a bit al crudo, 64 ms mas tarde): el beamforming no actuaba. Se reintenta;
+    // el log "AFE config final: se=..." dice si afe_config_check lo dejo activo. Si vuelve a ser
+    // identico al crudo, volver a false (config del 14/10: solo VAD).
+    cfg->se_init = true;
     cfg->ns_init = false;
     cfg->vad_init = true;
     cfg->fixed_output_channel = false;   // probado: solo, no cambio nada (salida = mic 0)

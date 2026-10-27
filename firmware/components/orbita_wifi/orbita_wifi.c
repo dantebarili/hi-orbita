@@ -262,6 +262,18 @@ esp_err_t orbita_wifi_start(const char *ssid, const char *password)
     if (err != ESP_OK) goto fail;
     driver_started = true;
 
+#if CONFIG_ORBITA_WIFI_TX_POWER > 0
+    // Prueba de ruido audible: tope de potencia de transmision (unidad 0.25 dBm). Solo se puede
+    // fijar con el WiFi ya arrancado. Si falla, se avisa y se sigue con la potencia por defecto.
+    esp_err_t tx_err = esp_wifi_set_max_tx_power(CONFIG_ORBITA_WIFI_TX_POWER);
+    if (tx_err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_set_max_tx_power(%d) fallo: %s",
+                 CONFIG_ORBITA_WIFI_TX_POWER, esp_err_to_name(tx_err));
+    } else {
+        ESP_LOGI(TAG, "Potencia de transmision limitada a %d (x0.25 dBm)", CONFIG_ORBITA_WIFI_TX_POWER);
+    }
+#endif
+
     // Creamos la tarea que ejecuta connection_task, NO el callback. Nombre para
     // depurar, pila de 4096 bytes, sin argumento, prioridad 3, sin guardar handle.
     // FreeRTOS puede ejecutarla desde ahora; start no entra en su bucle.
