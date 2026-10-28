@@ -201,6 +201,7 @@ La tarea `captura` lee el I2S (slots de 32 bit, 24 útiles en el INMP441), convi
 
   - **Medición de `D` (pendiente):** reproducir un chirp con `orbita_playback`, capturar el mic crudo y anotar el índice de captura en que se escribió el primer trozo; la correlación cruzada da el retardo. **Repetir siempre que cambie** el DMA, el tamaño de trozo, el ruteo de la PCB o la versión de `esp-sr`/IDF. Valor medido: *sin medir*.
   - **A decidir:** AEC dentro del AFE (A) o suelto (B) midiendo RAM; `τ` fijo en Kconfig o calculado en ejecución; DMA mínimo con `underruns = 0`; quién expone la referencia (`orbita_playback` no lo hace aún); convergencia entre respuestas y doble habla (el NLP agresivo puede dañar la voz propia). Condiciona el ruteo del parlante en la PCB.
+  - **Plan B si el AEC por software falla** (porque `D` no se puede fijar; decidir antes de la PCB): pasar a códec, con referencia por loopback de hardware (mismo reloj que los mics, `D` fijo). Combo: mics analógicos + ADC multicanal (ES7210) + DAC/ampli (ES8311 + NS4150B). Cambia la regla de mics digitales de `CLAUDE.md`/`AGENTS.md`. Referencia a mirar: ESP-Mosaico (ES8311 + NS4150B + mic analógico LMA2718B331-OE1; [guía](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s31/esp-mosaico/user_guide.html)). Hoy se sigue con mics digitales + MAX98357A (decisión 21/10).
 - Pendientes (`vad_cache`, falsos negativos y positivos de la wake word): en el historial de git (`git show 3da73c6:plan_dante.md`).
 
 ### 3.4 Rings, header y tabla de segmentos
@@ -221,4 +222,52 @@ Movido a [[protocolo_comunicacion]].
 - Seguridad: TLS, autenticación del dispositivo, aprovisionamiento de WiFi, OTA (ya hay dos slots).
 - Resiliencia offline: rol de la SD y política de pérdida de datos (liga con los rings).
 - Estados que faltan en la FSM: falla de `audio_init`, login NFC, apagado.
+
+## 6. Backend (servidor de laboratorio, `tools/ws_audio_cloud.py`)
+
+Hoy el servidor decide solo cuándo termina cada frase y la manda entera al STT (no streaming). Medido el 21/10 en tomas por WebSocket con el mic crudo (AFE apagado).
+
+### 6.1 Detectar inicio y fin de la frase
+- **Problema medido:** el 50 a 99 % de la energía del mic está bajo 100 Hz (rumble: mesa, tecleo, aire). Medido en banda ancha, la voz (RMS ~1000 a 1700) apenas supera el fondo (~500 a 800): SNR de 3 a 6 dB, y las sílabas suaves se tomaban por silencio ("Orbi" en vez de "Órbita").
+- **Solución:** el nivel se mide en la **banda de voz (150 a 3400 Hz)**, con un Butterworth pasa-banda de 4.º orden por flanco (`scipy`, `sosfilt` con estado entre paquetes). Ahí el fondo queda en ~30 a 120 y la voz en 500 a 1900 (SNR > 20 dB). **El filtro solo mide: al STT va el audio crudo.**
+- **Cómo decide** (bloques de 100 ms, RMS por bloque sobre la señal filtrada):
+  - *Inicio:* 3 bloques seguidos sobre `max(2 × piso, 25)`; el piso es el percentil 20 de los últimos 20 s.
+  - *Fin:* 1,2 s seguidos bajo un umbral de cierre (`max(2,5 × piso, 35)`), distinto del de inicio (histéresis) para que el ruido de fondo no mantenga la frase abierta y las sílabas suaves no la corten.
+  - *Margen:* se agregan 0,5 s antes del inicio y 0,5 s después del último bloque con voz (el detector tarda 0,3 s en confirmar y las últimas sílabas son suaves). Son muestras que ya estaban en el buffer.
+- **Después de la respuesta:** no escucha hasta que (a) el ESP manda `play_done` (el firmware lo manda cuando termina de sonar) y (b) el audio **recibido** tiene 0,5 s seguidos de silencio en banda, con tope de 8 s. Se mide el silencio recibido y no un tiempo fijo porque el audio del mic llega atrasado respecto del parlante (red y rings): la cola de su propia voz sigue llegando después de `play_done`.
+- **Al conectar:** la ESP acumula hasta 32 s mientras no hay servidor (S1) y los manda de golpe. El servidor descarta lo que llega más rápido que su duración, y como mínimo 5 s de reloj.
+
+### 6.2 Filtro para el firmware (pendiente, rama `dante`)
+Pasa-altos Butterworth de 4.º orden a 150 Hz (fs = 16 kHz), en la captura antes del ring: saca el rumble de raíz y el servidor ya no tendría que filtrar para medir. Son 2 biquads en cascada (forma directa II traspuesta, `float`; el S3 tiene FPU de precisión simple). Costo ≈ 10 MAC por muestra y canal: despreciable.
+
+| biquad | b0 | b1 | b2 | a1 | a2 |
+|---|---|---|---|---|---|
+| 1 | 0,92591212 | −1,85182424 | 0,92591212 | −1,89354234 | 0,89683219 |
+| 2 | 1 | −2 | 1 | −1,95254262 | 0,95593497 |
+
+Respuesta (calculada con `scipy.signal.sosfreqz`): −56 dB a 30 Hz, −32 dB a 60 Hz, −14 dB a 100 Hz, −3 dB a 150 Hz, 0 dB desde 300 Hz. Coeficientes generados con `butter(4, 150, 'highpass', fs=16000, output='sos')`. Avisos: (1) un filtro de 4.º orden con corte en 150 Hz deja pasar algo de 80 a 120 Hz, medir si alcanza; (2) cambia el espectro: el dataset de la wake word y la referencia del AEC (S9) tienen que verlo igual; (3) no verificado en la placa ni contra la documentación de `esp-dsp`; comprobar antes si el AFE ya filtra al encenderlo.
+
+### 6.3 Latencia de un turno (de que dejas de hablar a que suena la respuesta)
+Medida el 21/10 con ElevenLabs (STT Scribe, TTS `eleven_flash_v2_5`) y Gemini en la copia de laboratorio: **mediana de 15 turnos con `gemini-3.5-flash-lite`**; el servidor la registra por etapa (`stt_s`, `llm_s`, `tts_s`, `send_s`, `total_s`) en `tools/prueba_websocket/cloud_*.jsonl`. `total_s` arranca cuando el detector cierra la frase, o sea que **no incluye** la espera de silencio ni lo que pasa en el ESP.
+
+| # | Etapa | Dónde | Tiempo | Notas |
+|---|---|---|---|---|
+| 1 | Silencio para cerrar la frase | servidor | **1,2 s** fijos (+ hasta 0,1 s del bloque) | `END_QUIET_BLOCKS`. Es la etapa más fácil de recortar. |
+| 2 | Audio del mic hasta el servidor | ESP + Wi-Fi | sin medir | Paquetes de hasta 128 ms + ring + red. Hace falta timestamp de envío (pendiente de Juani). |
+| 3 | STT (la frase entera, no streaming) | ElevenLabs | **0,95 s** (0,6 a 1,5) | Crece con la duración de la frase. Deepgram Nova-3 midió parecido (~0,9 s, prueba anterior). |
+| 4 | LLM | Gemini | **0,94 s** (0,8 a 2,4) | Con `gemini-3.5-flash` fue **9 s de mediana** (6 a 30 s, modelo saturado): no usarlo. `thinkingLevel: "minimal"`, sin razonamiento. |
+| 5 | TTS (genera todo el audio antes de mandarlo) | ElevenLabs | **0,79 s** (0,6 a 0,9) | Sin streaming de audio. |
+| 6 | Envío del PLAY | servidor a ESP | **0,16 s** (0 a 2,9) | Sube con la duración de la respuesta (16 kHz, 16 bit = 32 KB/s) y con el estado del Wi-Fi. |
+| 7 | Prebuffer del parlante | ESP | **0,4 s** | `prebuffer_ms` acordado (S7). Más el DMA de salida de 120 ms. |
+| | **Subtotal medido (3 a 6)** | | **≈ 2,9 s** (`total_s`) | |
+| | **Total estimado (1 a 7)** | | **≈ 4,5 s + etapa 2** | 1,2 + 2,9 + 0,4. Sin medir de punta a punta con el ESP. |
+
+Después de la respuesta, el servidor vuelve a escuchar a los ≈ 0,5 s de silencio recibido tras `play_done` (§6.1), más los 120 ms del DMA.
+
+**Dónde se puede recortar (nada de esto está hecho):**
+- *Silencio de cierre* de 1,2 s a ~0,8 s: ahorra ~0,4 s, a costa de más cortes entre palabras.
+- *STT en streaming* con fin de frase del proveedor: elimina la etapa 1 y gran parte de la 3 (~1,5 s o más), y es lo que más pesa. Cuesta conexión abierta, reconexión y manejar texto parcial.
+- *LLM y TTS en streaming por oración:* empezar a hablar con la primera frase mientras se genera el resto (~1 s).
+- *Prebuffer* de 0,4 s a 0,2 s: ahorra 0,2 s, con más riesgo de `underrun`.
+- *Modelo del LLM:* la elección pesa más que cualquier ajuste: de 0,9 s a 9 s según el modelo y su carga. Medir siempre antes de cambiar.
 

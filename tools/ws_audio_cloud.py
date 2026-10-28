@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import os
+import re
 import time
 import wave
 from datetime import datetime, timezone
@@ -15,18 +16,32 @@ from pathlib import Path
 
 import numpy as np
 import requests
+from scipy.signal import butter, sosfilt, sosfilt_zi
 
 from ws_audio_speech import MAX_PLAY_SECONDS, SAMPLE_RATE
 
 LOG = logging.getLogger("audio_cloud")
 
 BLOCK = SAMPLE_RATE // 10          # 100 ms: unidad del detector de voz
+BAND_HZ = (150, 3400)              # el detector mide el nivel SOLO en la banda de voz (el mic tiene mucho rumble <100 Hz);
+                                   # al STT va el audio crudo, sin filtrar
+PREROLL_BLOCKS = 5                 # 0.5 s antes del inicio detectado: no comerse el arranque de la frase
+TAIL_BLOCKS = 5                    # 0.5 s después del último bloque con voz: no comerse el final de la palabra
+BAND_SOS = butter(4, BAND_HZ, btype='bandpass', fs=SAMPLE_RATE, output='sos')
 ONSET_BLOCKS = 3                   # 0.3 s seguidos sobre el umbral = empezaste a hablar
-END_QUIET_BLOCKS = 8               # 0.8 s de silencio cierran la frase
+END_QUIET_BLOCKS = 12              # 1.2 s de silencio cierran la frase (con menos corta en las pausas entre palabras)
 MAX_UTTERANCE_SAMPLES = 15 * SAMPLE_RATE
 RING_SAMPLES = 20 * SAMPLE_RATE    # historial de audio recibido
-MIN_THRESHOLD = 50                 # RMS mínimo para considerar "voz" (el mic crudo es muy bajo)
-POST_PLAY_GUARD = SAMPLE_RATE      # tras el PLAY se ignora el mic 1 s (oye el propio parlante)
+MIN_THRESHOLD = 25                 # RMS mínimo para empezar a oír voz (el mic crudo es muy bajo)
+NOISE_FACTOR = 2                   # umbral de inicio = NOISE_FACTOR x piso de ruido (subir si se dispara solo)
+END_MIN_THRESHOLD = 35             # para cerrar la frase se exige silencio bajo un umbral más alto (histéresis);
+END_NOISE_FACTOR = 2.5               # si no, el ruido de fondo la mantiene abierta
+POST_PLAY_GUARD_S = 0.0            # espera mínima tras play_done; hoy 0: manda el silencio recibido (SETTLE_QUIET_S), no un tiempo fijo
+                                   # el audio llega atrasado respecto del mic, por eso se mide al llegar y no en muestras)
+WARMUP_SECONDS = 5                 # tras conectar la ESP se ignora el audio que llega durante 5 s de reloj
+SETTLE_QUIET_S = 0.5             # tras el PLAY no se vuelve a escuchar hasta recibir 0.5 s seguidos de silencio
+SETTLE_MAX_S = 8                   # tope por si el silencio no llega
+SYNC_MAX_SECONDS = 60              # tope de la sincronizacion al conectar
 HISTORY_MESSAGES = 12
 
 
@@ -150,7 +165,7 @@ class Gemini:
             contents=[{"role": "user" if role == "user" else "model", "parts": [{"text": content}]}
                       for role, content in turns],
             # Sin "thinking": para voz la latencia importa más, y el razonamiento se comería los tokens de salida.
-            generationConfig={"maxOutputTokens": 300, "thinkingConfig": {"thinkingBudget": 0}})
+            generationConfig={"maxOutputTokens": 300, "thinkingConfig": {"thinkingLevel": "minimal"}})
         response = self.http.post(f"{self.BASE}/{self.model}:generateContent", json=body, timeout=30)
         data = _check(response, "Gemini").json()
         try:
@@ -203,11 +218,21 @@ class Conversation:
         self.services, self.output, self.session_id = services, Path(output), session_id
         self.send_pcm, self.play_done = send_pcm, play_done
         self.buf = bytearray()
+        self.fbuf = np.empty(0, np.float32)   # misma ventana que buf, filtrada en banda: solo para medir nivel
+        self.fzi = sosfilt_zi(BAND_SOS) * 0
+        self.chunk_rms = 0.0
         self.buf_start = 0            # índice (en muestras) del primer byte de buf
         self.state = "idle"
         self.cap_from = 0
         self.threshold = MIN_THRESHOLD
+        self.end_threshold = END_MIN_THRESHOLD
         self.ignore_until = 0
+        self.clock = time.monotonic   # inyectable en los tests
+        self.t0 = self.last_arrival = None
+        self.rt_streak = 0
+        self.syncing = True           # al conectar: descartar el atraso que la ESP acumuló sin servidor (hasta 32 s)
+        self.settling, self.settle_deadline, self.quiet_s = False, 0.0, 0.0
+        self.hold_until = 0.0         # reloj: hasta cuándo se descarta lo que llega (guard post-PLAY)
         self.turns = 0
         self.task = None
 
@@ -215,47 +240,79 @@ class Conversation:
     def latest(self):
         return self.buf_start + len(self.buf) // 2
 
+    def _sync(self, now, samples):
+        """Sincronización al conectar. La ESP guarda hasta 32 s de audio mientras no hay servidor y lo manda de golpe
+        (más rápido que en tiempo real) al conectar: es audio viejo (ej. el tecleo del arranque). Se descarta todo lo
+        que llega mientras los paquetes llegan más rápido que su duración, y como mínimo WARMUP_SECONDS de reloj."""
+        if self.t0 is None:
+            self.t0 = now
+        duration = samples / SAMPLE_RATE
+        if self.last_arrival is not None:
+            self.rt_streak = self.rt_streak + 1 if now - self.last_arrival >= 0.6 * duration else 0
+        self.last_arrival = now
+        if self.syncing and ((self.rt_streak >= 3 and now - self.t0 >= WARMUP_SECONDS)
+                             or now - self.t0 >= SYNC_MAX_SECONDS):
+            self.syncing = False
+            LOG.info("Audio en tiempo real; atrasado descartado (%.1f s de espera)", now - self.t0)
+
     def feed(self, pcm):
+        now = self.clock()
+        self._sync(now, len(pcm) // 2)
         self.buf += pcm
+        filtered, self.fzi = sosfilt(BAND_SOS, np.frombuffer(pcm, dtype='<i2').astype(np.float32), zi=self.fzi)
+        self.fbuf = np.concatenate((self.fbuf, filtered.astype(np.float32)))
+        self.chunk_rms = float(np.sqrt((filtered ** 2).mean())) if len(filtered) else 0.0
         excess = len(self.buf) // 2 - RING_SAMPLES
         if excess > 0:
             del self.buf[:excess * 2]
+            self.fbuf = self.fbuf[excess:]
             self.buf_start += excess
+        if self.settling:                 # eco/cola del parlante: sordo hasta que lo RECIBIDO quede en silencio
+            loud = self.chunk_rms > self.end_threshold
+            self.quiet_s = 0.0 if loud else self.quiet_s + len(pcm) / (2 * SAMPLE_RATE)
+            if (now >= self.hold_until and self.quiet_s >= SETTLE_QUIET_S) or now >= self.settle_deadline:
+                self.settling = False
+                LOG.info("Silencio tras la respuesta; escuchando de nuevo")
+        if self.syncing or self.settling:
+            self.ignore_until = self.latest   # lo recibido hasta acá no cuenta
         if self.state == "idle":
             self._watch()
         if self.state == "capturing":
             self._scan()
 
     def _blocks_rms(self, first_sample):
-        audio = np.frombuffer(bytes(self.buf), dtype="<i2")[max(first_sample - self.buf_start, 0):]
+        offset = max(first_sample - self.buf_start, 0)
+        audio = np.frombuffer(bytes(self.buf), dtype="<i2")[offset:]      # crudo: es lo que va al STT
         count = len(audio) // BLOCK
         if count == 0:
             return audio, np.empty(0)
-        blocks = audio[:count * BLOCK].astype(np.float32).reshape(count, BLOCK)
+        blocks = self.fbuf[offset:offset + count * BLOCK].reshape(count, BLOCK)   # filtrado: solo para el nivel
         return audio, np.sqrt((blocks ** 2).mean(axis=1))
 
     def _watch(self):
-        """Busca el inicio de voz: ONSET_BLOCKS bloques seguidos sobre 3x el piso de ruido."""
+        """Busca el inicio de voz: ONSET_BLOCKS bloques seguidos sobre NOISE_FACTORx el piso de ruido."""
         first = max(self.ignore_until, self.buf_start)
         _, ring = self._blocks_rms(self.buf_start)
         _, rms = self._blocks_rms(first)
         if len(ring) < 10 or len(rms) < ONSET_BLOCKS:
             return
-        self.threshold = max(3 * float(np.percentile(ring, 20)), MIN_THRESHOLD)
+        floor = float(np.percentile(ring, 20))
+        self.threshold = max(NOISE_FACTOR * floor, MIN_THRESHOLD)
+        self.end_threshold = max(END_NOISE_FACTOR * floor, END_MIN_THRESHOLD)
         loud = rms > self.threshold
         for i in range(len(loud) - ONSET_BLOCKS + 1):
             if loud[i:i + ONSET_BLOCKS].all():
-                self.cap_from = first + max(i - 3, 0) * BLOCK   # 0.3 s antes: no comerse el arranque de la frase
+                self.cap_from = first + max(i - PREROLL_BLOCKS, 0) * BLOCK
                 self.state = "capturing"
                 LOG.info("Voz detectada (umbral RMS %.0f); escuchando hasta silencio", self.threshold)
                 return
 
     def _scan(self):
         audio, rms = self._blocks_rms(self.cap_from)
-        loud = np.nonzero(rms > self.threshold)[0]
+        loud = np.nonzero(rms > self.end_threshold)[0]
         if len(loud) and (len(rms) - 1 - loud[-1] >= END_QUIET_BLOCKS or len(audio) >= MAX_UTTERANCE_SAMPLES):
             self.state = "busy"
-            self.task = asyncio.create_task(self._turn(audio[:(loud[-1] + 2) * BLOCK].tobytes(), time.monotonic()))
+            self.task = asyncio.create_task(self._turn(audio[:(loud[-1] + 1 + TAIL_BLOCKS) * BLOCK].tobytes(), time.monotonic()))
 
     async def _turn(self, pcm, t_end):
         record = dict(time=datetime.now(timezone.utc).isoformat(), session=self.session_id,
@@ -263,10 +320,13 @@ class Conversation:
                       speech=self.services.speech.name, llm=self.services.llm_name)
         try:
             question = await asyncio.to_thread(self.services.speech.transcribe, pcm)
+            question = re.sub(r"\[[^\]]*\]", "", question).strip()   # ElevenLabs marca "[ruido]", "[interferencia]": no es una pregunta
             t_stt = time.monotonic()
             record["question"] = question
             if not question:
                 LOG.info("STT sin texto (ruido); se descarta")
+                if self.services.save_audio:
+                    await asyncio.to_thread(self._save_wavs, pcm, b"")
                 return
             answer, tokens_in, tokens_out = await asyncio.to_thread(self.services.llm.reply, question)
             t_llm = time.monotonic()
@@ -286,7 +346,7 @@ class Conversation:
                 await asyncio.to_thread(self._save_wavs, pcm, speech)
             # Esperar el fin de la reproducción para no tomar el propio parlante como pregunta nueva.
             try:
-                await asyncio.wait_for(self.play_done.wait(), len(speech) / (2 * SAMPLE_RATE) + 5)
+                await asyncio.wait_for(self.play_done.wait(), len(speech) / (2 * SAMPLE_RATE) + 10)
             except asyncio.TimeoutError:
                 LOG.warning("El ESP no confirmó el fin de la reproducción")
         except asyncio.CancelledError:
@@ -296,7 +356,11 @@ class Conversation:
             LOG.error("Falló el turno: %s. Se sigue escuchando", error)
         finally:
             self.turns += 1
-            self.ignore_until = self.latest + POST_PLAY_GUARD
+            self.ignore_until = self.latest
+            now = self.clock()
+            self.hold_until = now + POST_PLAY_GUARD_S
+            self.settle_deadline = now + SETTLE_MAX_S
+            self.quiet_s, self.settling = 0.0, True
             self.state = "idle"
             await asyncio.to_thread(self._log, record)
 

@@ -72,6 +72,6 @@ Las instrucciones completas de estas herramientas se mantienen en los siguientes
 - `.claude/settings.json`: configuración de los hooks de Claude.
 - `.claude/hooks/guard-sensitive-edits.sh`: solicita confirmación antes de editar `sdkconfig.defaults` o `audio_capture.h`, y recuerda revisar las restricciones de pines.
 - `.claude/hooks/remind-explain-c.sh`: recuerda explicar conceptos o patrones de C nuevos al editar archivos `.c` o `.h`.
-- `.claude/hooks/build-on-stop.sh`: al terminar una tarea con cambios en `firmware/`, corre `idf.py build` y devuelve el error si falla (se salta si `idf.py` no está en el PATH: abrir Claude desde una terminal de ESP-IDF). El guard de edición también bloquea `sdkconfig`, `build/` y `managed_components/` (archivos generados).
+- `.claude/hooks/build-on-stop.sh`: al terminar una tarea con cambios en `firmware/`, corre `idf.py build` y devuelve el error si falla (activa ESP-IDF solo vía `.claude/hooks/idf-build.ps1`, con el Python del IDF; se salta si no encuentra una instalación). El guard de edición también bloquea `sdkconfig`, `build/` y `managed_components/` (archivos generados).
 - `.mcp.json`: MCP `espressif-docs` (documentación oficial de Espressif; pide login con GitHub la primera vez, desde `/mcp`).
 Leer estas referencias no activa automáticamente agentes, skills ni hooks en otra herramienta. Al trabajar en Codex, consultar y respetar las instrucciones aplicables; no asumir que los hooks de Claude se ejecutaron.
