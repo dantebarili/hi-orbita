@@ -1,7 +1,7 @@
 """Servidor de chat de voz con wake word en el ESP: la ESP manda audio solo después de detectar "Órbita".
 
-Uso: python tools/servidor_wakeword.py   (sin argumentos; claves y voz en tools/cloud_config.py, como chat_nube.py)
-Dependencias: las mismas que chat_nube.py.
+Uso: python tools/servidor_wakeword.py   (sin argumentos; claves y voz en tools/cloud_config.py)
+Dependencias: pip install -r tools/requirements-websocket.txt requests numpy scipy  (+ anthropic si LLM = "claude").
 
 Protocolo (además de orbita-pcm-v2):
   ESP -> servidor  {"type":"wake","index":N,"seq":S,"preroll_samples":P}  justo antes del primer audio de una
@@ -21,13 +21,14 @@ from datetime import datetime
 from pathlib import Path
 import re
 import secrets
+import shutil
+import sys
 import unicodedata
 import wave
 
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
-from chat_nube import load_config
 from ws_audio_cloud import CloudServices, Conversation
 from ws_audio_protocol import HEADER
 from ws_audio_session import Session
@@ -46,6 +47,15 @@ CLIP_BEFORE_S = 3.0        # y 3 s antes (= el pre-roll de la ESP)
 WAKE_WORD = "orbita"
 
 
+def load_config():
+    try:
+        import cloud_config
+        return cloud_config
+    except ImportError:
+        shutil.copy(HERE / "cloud_config.example.py", HERE / "cloud_config.py")
+        sys.exit(f"Creé {HERE / 'cloud_config.py'}: abrilo, completá las claves y volvé a ejecutar.")
+
+
 def _sin_tildes(text):
     return "".join(c for c in unicodedata.normalize("NFD", text.lower()) if unicodedata.category(c) != "Mn")
 
@@ -54,7 +64,7 @@ class WakeConversation(Conversation):
     """Una conversación = desde un `wake` hasta el `conversation_end`. La muestra 0 es el inicio del pre-roll."""
 
     def __init__(self, services, session_id, send_pcm, play_done, preroll_samples, activaciones):
-        super().__init__(services, OUTPUT, session_id, send_pcm, play_done, sync_on_connect=False)
+        super().__init__(services, OUTPUT, session_id, send_pcm, play_done)
         self.id = secrets.randbits(64)
         self.preroll = preroll_samples
         self.ignore_until = max(preroll_samples - int(WORD_S * SAMPLE_RATE), 0)

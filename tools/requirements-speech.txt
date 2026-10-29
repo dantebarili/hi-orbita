@@ -1,2 +1,0 @@
-# Opcional: STT local para el prototipo de deteccion de Órbita.
-faster-whisper==1.2.1

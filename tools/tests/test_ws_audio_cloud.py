@@ -34,7 +34,7 @@ class FakeServices:
 
 
 class ConversationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_continuous_turn_without_wake_word(self):
+    async def test_turn_inside_conversation(self):
         with tempfile.TemporaryDirectory() as directory:
             sent = []
             play_done = asyncio.Event()
@@ -53,15 +53,7 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
                     clock[0] += 0.1
                     conv.feed(pcm[i:i + step])
 
-            def burst(pcm):                              # backlog de la ESP: llega de golpe
-                step = SAMPLE_RATE // 10 * 2
-                for i in range(0, len(pcm), step):
-                    conv.feed(pcm[i:i + step])
-
-            burst(tone(10, 3000))                        # audio viejo con voz: se descarta
-            self.assertEqual(conv.state, "idle")
-            live(tone(6, 20))                            # pasa el warm-up de 5 s con ruido de fondo
-            self.assertFalse(conv.syncing)
+            live(tone(2, 20))                            # ruido de fondo: arma el piso de ruido
             self.assertEqual(conv.state, "idle")
             live(rumble(2, 1000))                        # rumble de 60 Hz (en bruto 700 de RMS, 35x el ruido): no es voz
             self.assertEqual(conv.state, "idle")

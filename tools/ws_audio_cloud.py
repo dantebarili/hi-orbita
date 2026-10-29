@@ -1,7 +1,7 @@
 """Conversación de voz por nube para el prototipo de laboratorio (corre en la PC, no en el ESP).
 
-Escucha todo el tiempo (sin wake word): detecta cuando hablás, espera un silencio, y hace STT -> LLM -> TTS -> PLAY
-al ESP. Mide la latencia de cada etapa. Todo se configura en cloud_config.py; el servidor está en chat_nube.py.
+Dentro de una conversación: detecta cuando hablás, espera un silencio, y hace STT -> LLM -> TTS -> PLAY al ESP.
+Mide la latencia de cada etapa. Todo se configura en cloud_config.py; el servidor está en servidor_wakeword.py.
 """
 import asyncio
 import io
@@ -38,10 +38,8 @@ END_MIN_THRESHOLD = 35             # para cerrar la frase se exige silencio bajo
 END_NOISE_FACTOR = 2.5               # si no, el ruido de fondo la mantiene abierta
 POST_PLAY_GUARD_S = 0.0            # espera mínima tras play_done; hoy 0: manda el silencio recibido (SETTLE_QUIET_S), no un tiempo fijo
                                    # el audio llega atrasado respecto del mic, por eso se mide al llegar y no en muestras)
-WARMUP_SECONDS = 5                 # tras conectar la ESP se ignora el audio que llega durante 5 s de reloj
 SETTLE_QUIET_S = 0.5             # tras el PLAY no se vuelve a escuchar hasta recibir 0.5 s seguidos de silencio
 SETTLE_MAX_S = 8                   # tope por si el silencio no llega
-SYNC_MAX_SECONDS = 60              # tope de la sincronizacion al conectar
 HISTORY_MESSAGES = 12
 
 
@@ -206,15 +204,12 @@ class CloudServices:
         self.llm_name = f"{cfg.LLM}:{model}"
         self.save_audio = bool(getattr(cfg, "SAVE_AUDIO", False))
 
-    def start(self, output, session_id, send_pcm, play_done, sync_on_connect=True):
-        return Conversation(self, output, session_id, send_pcm, play_done, sync_on_connect)
-
 
 # -- una conexión -----------------------------------------------------------
 class Conversation:
     """Estados: idle (espera voz) -> capturing (hasta silencio) -> busy (nube + reproducción) -> idle."""
 
-    def __init__(self, services, output, session_id, send_pcm, play_done, sync_on_connect=True):
+    def __init__(self, services, output, session_id, send_pcm, play_done):
         self.services, self.output, self.session_id = services, Path(output), session_id
         self.send_pcm, self.play_done = send_pcm, play_done
         self.buf = bytearray()
@@ -228,10 +223,6 @@ class Conversation:
         self.end_threshold = END_MIN_THRESHOLD
         self.ignore_until = 0
         self.clock = time.monotonic   # inyectable en los tests
-        self.t0 = self.last_arrival = None
-        self.rt_streak = 0
-        self.syncing = sync_on_connect  # al conectar: descartar el atraso que la ESP acumuló sin servidor (hasta 32 s);
-                                        # con wake word no hace falta (el audio arranca con el pre-roll a propósito)
         self.settling, self.settle_deadline, self.quiet_s = False, 0.0, 0.0
         self.hold_until = 0.0         # reloj: hasta cuándo se descarta lo que llega (guard post-PLAY)
         self.turns = 0
@@ -241,25 +232,8 @@ class Conversation:
     def latest(self):
         return self.buf_start + len(self.buf) // 2
 
-    def _sync(self, now, samples):
-        """Sincronización al conectar. La ESP guarda hasta 32 s de audio mientras no hay servidor y lo manda de golpe
-        (más rápido que en tiempo real) al conectar: es audio viejo (ej. el tecleo del arranque). Se descarta todo lo
-        que llega mientras los paquetes llegan más rápido que su duración, y como mínimo WARMUP_SECONDS de reloj."""
-        if self.t0 is None:
-            self.t0 = now
-        duration = samples / SAMPLE_RATE
-        if self.last_arrival is not None:
-            self.rt_streak = self.rt_streak + 1 if now - self.last_arrival >= 0.6 * duration else 0
-        self.last_arrival = now
-        if self.syncing and ((self.rt_streak >= 3 and now - self.t0 >= WARMUP_SECONDS)
-                             or now - self.t0 >= SYNC_MAX_SECONDS):
-            self.syncing = False
-            LOG.info("Audio en tiempo real; atrasado descartado (%.1f s de espera)", now - self.t0)
-
     def feed(self, pcm):
         now = self.clock()
-        if self.syncing:
-            self._sync(now, len(pcm) // 2)
         self.buf += pcm
         filtered, self.fzi = sosfilt(BAND_SOS, np.frombuffer(pcm, dtype='<i2').astype(np.float32), zi=self.fzi)
         self.fbuf = np.concatenate((self.fbuf, filtered.astype(np.float32)))
@@ -275,7 +249,7 @@ class Conversation:
             if (now >= self.hold_until and self.quiet_s >= SETTLE_QUIET_S) or now >= self.settle_deadline:
                 self.settling = False
                 LOG.info("Silencio tras la respuesta; escuchando de nuevo")
-        if self.syncing or self.settling:
+        if self.settling:
             self.ignore_until = self.latest   # lo recibido hasta acá no cuenta
         if self.state == "idle":
             self._watch()

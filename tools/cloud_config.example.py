@@ -1,4 +1,4 @@
-"""Plantilla de configuracion del chat en la nube. chat_nube.py la copia a cloud_config.py (ignorado por Git) la
+"""Plantilla de configuracion del chat en la nube. servidor_wakeword.py la copia a cloud_config.py (ignorado por Git) la
 primera vez; editar ESA copia. Nada mas se pasa por linea de comandos."""
 
 # --- Claves (solo las del proveedor que uses; si queda "", se lee la variable de entorno homonima) ---

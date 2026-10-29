@@ -82,7 +82,8 @@ class WakeConversationTests(unittest.IsolatedAsyncioTestCase):
             live(tone(servidor_wakeword.IDLE_END_S + 1, 20))   # nadie habla: fin
             self.assertTrue(conv.finished)
             conv.write_row("prueba")
-            filas = list(csv.DictReader((Path(directory) / "activaciones.csv").open(encoding="utf-8")))
+            with (Path(directory) / "activaciones.csv").open(encoding="utf-8") as file:
+                filas = list(csv.DictReader(file))
             self.assertEqual(filas[0]["transcripcion"], "Órbita.")
             self.assertEqual(filas[0]["etiqueta"], "")
 
