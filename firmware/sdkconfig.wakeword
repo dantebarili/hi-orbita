@@ -3,7 +3,8 @@
 #   idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.wakeword" build
 # La wake word entra con audio crudo de un mic: el modelo se entreno sin AFE.
 CONFIG_ORBITA_LAB_WAKEWORD=y
-CONFIG_ORBITA_WW_OKAY_NABU=y
+# CONFIG_ORBITA_WW_OKAY_NABU is not set
+CONFIG_ORBITA_WW_ORBITA=y
 # CONFIG_ORBITA_PIPELINE_USA_AFE is not set
 # Prueba bit a bit (WAV embebido en vez del mic): cambiar a y
 # CONFIG_ORBITA_WW_PRUEBA_WAV is not set
