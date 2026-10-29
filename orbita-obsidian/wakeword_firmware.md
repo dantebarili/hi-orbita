@@ -14,7 +14,7 @@ cada ventana: Hann → FFT 512 → 40 bandas mel (125-7500 Hz) → energía → 
   ▼
 int8 con la escala del modelo ─► de a 3 columnas (30 ms nuevos) ─► modelo ─► probabilidad 0-255
   ▼
-promedio de las últimas 5 > cutoff (0,85) ─► DETECCIÓN
+promedio de las últimas 5 > cutoff (0,4) ─► DETECCIÓN
 ```
 
 **Dos ventanas distintas:**
