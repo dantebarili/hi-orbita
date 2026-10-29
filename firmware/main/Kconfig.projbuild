@@ -11,19 +11,10 @@ menu "Orbita integration"
             bool "Banco de prueba: wake word (microWakeWord) sobre la captura"
     endchoice
 
-    # En el banco va siempre (sin pregunta); en el prototipo WebSocket se puede apagar.
-    config ORBITA_WAKEWORD
-        bool "Wake word sobre el audio crudo (por ahora solo loguea)" if ORBITA_LAB_WEBSOCKET
-        default y
-        depends on ORBITA_LAB_WEBSOCKET || ORBITA_LAB_WAKEWORD
-        help
-            Corre el modelo microWakeWord sobre un mic crudo (ORBITA_RAW_MIC_INDEX),
-            enganchado en on_crudo: no pasa por el AFE (el modelo se entreno sin AFE).
-
     choice ORBITA_WW_MODELO
         prompt "Modelo de wake word"
         default ORBITA_WW_ORBITA
-        depends on ORBITA_WAKEWORD
+        depends on ORBITA_LAB_WEBSOCKET || ORBITA_LAB_WAKEWORD
         config ORBITA_WW_OKAY_NABU
             bool "okay_nabu (oficial, referencia que se sabe que anda)"
         config ORBITA_WW_ORBITA
@@ -52,12 +43,4 @@ menu "Orbita integration"
         string "WebSocket URI (ws://IP-PC:8765/)"
         default ""
         depends on ORBITA_LAB_WEBSOCKET
-    config ORBITA_WS_CAPTURE_SECONDS
-        int "Segundos nominales por toma"
-        range 1 600
-        default 60
-        depends on ORBITA_LAB_WEBSOCKET
-        help
-            Se termina con el primer mensaje completo que alcance esta cantidad
-            de muestras. Puede sumar hasta 127.94 ms. Sin VAD como compuerta.
 endmenu

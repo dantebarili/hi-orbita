@@ -16,9 +16,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
-#if CONFIG_ORBITA_WAKEWORD
 #include "wakeword.h"
-#endif
 #elif CONFIG_ORBITA_LAB_WAKEWORD
 #include "wakeword.h"
 #else
@@ -59,12 +57,10 @@ void app_main(void)
     if (!CONFIG_ORBITA_WIFI_SSID[0] || !CONFIG_ORBITA_WS_URI[0])
         arranque_fallo("Configurar Wi-Fi y URI en Orbita integration", ESP_ERR_INVALID_ARG);
     esp_err_t err;
-#if CONFIG_ORBITA_WAKEWORD
     // La wake word va primero: su arena (~50 KB) se reserva en RAM interna antes que el AFE.
     log_memoria("antes de wakeword");
     err = orbita_wakeword_start();
     if (err != ESP_OK) arranque_fallo("wakeword", err);
-#endif
     err = orbita_audio_i2s_init();
     if (err != ESP_OK) arranque_fallo("I2S", err);
     // El ring del parlante (PSRAM) se reserva antes de que el pipeline/AFE asignen sus buffers.
@@ -74,12 +70,8 @@ void app_main(void)
     log_memoria("despues de playback");
     // No enviar desde on_crudo ni on_afe. La wake word recibe el audio CRUDO (sin AFE): su
     // on_crudo solo copia un mic a su ring y vuelve; por ahora detectar solo loguea.
-#if CONFIG_ORBITA_WAKEWORD
     const orbita_pipeline_cfg_t pipe_cfg = { .on_crudo = orbita_wakeword_on_crudo };
     err = orbita_pipeline_start(&pipe_cfg);
-#else
-    err = orbita_pipeline_start(NULL);
-#endif
     if (err != ESP_OK) arranque_fallo("pipeline", err);
     log_memoria("despues de pipeline/AFE");
     // Unico consumidor del ring out: arma los mensajes y los manda por el WebSocket.
