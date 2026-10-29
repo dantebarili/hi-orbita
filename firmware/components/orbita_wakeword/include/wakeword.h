@@ -1,7 +1,7 @@
 /**
  * @file    wakeword.h
  * @author  Dante Barili - Juan Ignacio Forster / Proyecto Orbita
- * @brief   Banco de prueba de wake word (microWakeWord) sobre la captura del pipeline.
+ * @brief   Wake word (microWakeWord, modelo orbita) sobre el audio crudo del pipeline.
  * @version 0.1.0
  * @date    2026-10-25
  *
@@ -28,8 +28,7 @@ extern "C" {
  * @brief   Carga el modelo, prepara el frontend y crea el ring y la tarea `wakeword`.
  *
  * @details Llamar UNA vez, antes de orbita_pipeline_start() (la arena del modelo se reserva
- *          primero en RAM interna). Con CONFIG_ORBITA_WW_PRUEBA_WAV la tarea procesa el WAV
- *          embebido en vez del mic y vuelca features y probabilidades por consola.
+ *          primero en RAM interna).
  *
  * @return  ESP_OK; ESP_ERR_INVALID_STATE si ya se arranco; ESP_ERR_NO_MEM; ESP_FAIL si el
  *          modelo o el frontend no se pudieron preparar (se loguea el motivo).
@@ -39,7 +38,7 @@ esp_err_t orbita_wakeword_start(void);
 /**
  * @brief   Callback para orbita_pipeline_cfg_t.on_crudo (ver orbita_crudo_cb_t en pipeline.h).
  *
- * @details Corre en la tarea de captura: solo copia el canal ORBITA_RAW_MIC_INDEX al ring, con
+ * @details Corre en la tarea de captura: solo copia el promedio de los dos mics (orbita_mono_lr) al ring, con
  *          timeout 0. Si el ring esta lleno, descarta el chunk y lo marca como hueco.
  */
 void orbita_wakeword_on_crudo(const int16_t *chunk_ini, size_t frames, bool hueco);

@@ -17,8 +17,6 @@
 #include "esp_netif.h"
 #include "nvs_flash.h"
 #include "wakeword.h"
-#elif CONFIG_ORBITA_LAB_WAKEWORD
-#include "wakeword.h"
 #else
 #include "test.h"
 #endif
@@ -69,7 +67,7 @@ void app_main(void)
     if (err != ESP_OK) arranque_fallo("playback", err);
     log_memoria("despues de playback");
     // No enviar desde on_crudo ni on_afe. La wake word recibe el audio CRUDO (sin AFE): su
-    // on_crudo solo copia un mic a su ring y vuelve; por ahora detectar solo loguea.
+    // on_crudo solo copia el promedio L+R a su ring y vuelve; por ahora detectar solo loguea.
     const orbita_pipeline_cfg_t pipe_cfg = { .on_crudo = orbita_wakeword_on_crudo };
     err = orbita_pipeline_start(&pipe_cfg);
     if (err != ESP_OK) arranque_fallo("pipeline", err);
@@ -95,18 +93,6 @@ void app_main(void)
     if (err != ESP_OK) arranque_fallo("WebSocket", err);
     log_memoria("arranque completo");
     ESP_LOGI("main", "Audio WebSocket activo; el resumen sale cada 30 s en audio_ws");
-#elif CONFIG_ORBITA_LAB_WAKEWORD
-    // Banco de wake word: el modelo se carga ANTES de la captura (su arena va a RAM interna y
-    // no tiene que competir con el AFE/rings). Sin sink: el ring out pisa lo mas viejo y nadie
-    // lo lee; la wake word recibe el audio por on_crudo.
-    esp_err_t err = orbita_wakeword_start();
-    if (err != ESP_OK) arranque_fallo("wakeword", err);
-    err = orbita_audio_i2s_init();
-    if (err != ESP_OK) arranque_fallo("I2S", err);
-    const orbita_pipeline_cfg_t cfg = { .on_crudo = orbita_wakeword_on_crudo };
-    err = orbita_pipeline_start(&cfg);
-    if (err != ESP_OK) arranque_fallo("pipeline", err);
-    ESP_LOGI("main", "Wake word activa; el resumen sale cada 10 s en wakeword");
 #else
     // Drivers y rings del modulo de laboratorio (se borra cuando exista el sink de sockets).
     test_init();

@@ -193,13 +193,13 @@ static void tarea_feed(void *arg)
         }
 #else
         if (n == ORBITA_CHUNK_BYTES) {
-            // Estereo L,R,L,R...: se selecciona un canal sin cambiar la captura I2S.
+            // Estereo L,R,L,R...: se promedian los dos mics sin cambiar la captura I2S.
             const int16_t *estereo = (const int16_t *)p;
             // Lo perdido antes de este chunk va en el primer slot; el segundo es continuo con el primero.
             uint32_t perdidas = muestras_perdidas_nuevas();
             for (size_t b = 0; b < BLOQUES_POR_CHUNK; b++) {
                 for (size_t k = 0; k < ORBITA_SLOT_SAMPLES; k++) {
-                    s_mono_buf[b][k] = estereo[2 * (b * ORBITA_SLOT_SAMPLES + k) + ORBITA_RAW_MIC_INDEX];
+                    s_mono_buf[b][k] = orbita_mono_lr(estereo, b * ORBITA_SLOT_SAMPLES + k);
                 }
                 s_bloques_mono++;
                 // flags = 0: sin AFE no hay VAD, compuerta abierta (se manda igual).

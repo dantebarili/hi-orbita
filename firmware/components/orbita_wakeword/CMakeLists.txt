@@ -1,18 +1,11 @@
-# Se compila en el prototipo WebSocket (siempre activa) y en el banco. Las dependencias van SIEMPRE: en la primera pasada de CMake (cuando se calculan los
-# requisitos) todavia no hay CONFIG_*, y un if() aca las dejaria afuera.
+# Solo se compila en el prototipo WebSocket (ahi la wake word va siempre). Las dependencias van
+# SIEMPRE: en la primera pasada de CMake (cuando se calculan los requisitos) todavia no hay
+# CONFIG_*, y un if() aca las dejaria afuera.
 set(fuentes "")
 set(archivos "")
-if(CONFIG_ORBITA_LAB_WEBSOCKET OR CONFIG_ORBITA_LAB_WAKEWORD)
+if(CONFIG_ORBITA_LAB_WEBSOCKET)
     set(fuentes "wakeword.c" "wakeword_modelo.cc")
-    # Se embebe SOLO el modelo elegido (y el WAV de la prueba bit a bit si esta activada).
-    if(CONFIG_ORBITA_WW_ORBITA)
-        list(APPEND archivos "modelos/orbita.tflite")
-    else()
-        list(APPEND archivos "modelos/okay_nabu.tflite")
-    endif()
-    if(CONFIG_ORBITA_WW_PRUEBA_WAV)
-        list(APPEND archivos "modelos/prueba.wav")
-    endif()
+    set(archivos "modelos/orbita.tflite")
 endif()
 
 idf_component_register(

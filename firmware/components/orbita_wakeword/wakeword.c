@@ -1,5 +1,4 @@
 #include <math.h>
-#include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -19,26 +18,12 @@ static const char *TAG = "wakeword";
 // --- Modelo embebido y su manifiesto (.json) ---
 // EMBED_FILES (CMakeLists) mete el archivo en el binario y crea dos simbolos: inicio y fin.
 // `asm("nombre")` le dice al compilador con que nombre buscar cada uno al enlazar.
-#if CONFIG_ORBITA_WW_ORBITA
 extern const uint8_t s_tflite_ini[] asm("_binary_orbita_tflite_start");
 extern const uint8_t s_tflite_fin[] asm("_binary_orbita_tflite_end");
 #define WW_NOMBRE      "orbita"
 #define WW_CUTOFF      0.85f       // orbita.json (valor por defecto del notebook; se calibra en placa)
 #define WW_VENTANA     5
 #define WW_ARENA       50000
-#else
-extern const uint8_t s_tflite_ini[] asm("_binary_okay_nabu_tflite_start");
-extern const uint8_t s_tflite_fin[] asm("_binary_okay_nabu_tflite_end");
-#define WW_NOMBRE      "okay_nabu"
-#define WW_CUTOFF      0.97f       // okay_nabu.json (models/v2 de esphome/micro-wake-word-models)
-#define WW_VENTANA     5
-#define WW_ARENA       32768       // el .json dice 26080; margen hasta medir arena_usada
-#endif
-
-#if CONFIG_ORBITA_WW_PRUEBA_WAV
-extern const uint8_t s_wav_ini[] asm("_binary_prueba_wav_start");
-extern const uint8_t s_wav_fin[] asm("_binary_prueba_wav_end");
-#endif
 
 // --- Frontend: TIENE que coincidir con el entrenamiento (pymicro-features, micro_features.cpp) ---
 #define FE_FEATURES           40
@@ -77,7 +62,7 @@ static int s_paso;                              // columnas ya cargadas en s_ent
 static uint8_t s_probs[WW_VENTANA];             // ventana deslizante de probabilidades (0-255)
 static int s_probs_idx;
 static int s_ignorar;                           // < 0: no se detecta todavia (cuenta hacia 0)
-static uint32_t s_n_features, s_n_inferencias;  // contadores (tambien numeran el volcado de la prueba)
+static uint32_t s_n_features, s_n_inferencias;  // contadores
 
 // Resumen (los escribe solo la tarea)
 static uint32_t s_detecciones, s_huecos;
@@ -93,8 +78,6 @@ static void reiniciar_deteccion(void)
 
 // Hueco en el audio: el frontend (reduccion de ruido, PCAN) y la ventana arrancan de cero. La
 // memoria interna del modelo no se puede resetear sin recargarlo; se tapa con la espera inicial.
-// (En la prueba con WAV no hay huecos: no se compila.)
-#if !CONFIG_ORBITA_WW_PRUEBA_WAV
 static void reiniciar_por_hueco(void)
 {
     FrontendReset(&s_fe);
@@ -102,7 +85,6 @@ static void reiniciar_por_hueco(void)
     reiniciar_deteccion();
     s_huecos++;
 }
-#endif
 
 // uint16 del frontend -> int8 del modelo: int8 = round(v * 1/25.6 / escala_in) + cero_in.
 // No se usa la formula fija de ESPHome ((v*256 + 333)/666 - 128): asume escala 26/256 y los
@@ -142,9 +124,8 @@ static void decidir(uint8_t p)
 }
 
 // Pasa `n` muestras por el frontend; cada columna de features nueva va a la entrada del modelo
-// y, cuando hay `stride` columnas, se corre una inferencia. `volcar`: imprime cada columna y
-// probabilidad (prueba bit a bit).
-static void procesar_audio(const int16_t *m, size_t n, bool volcar)
+// y, cuando hay `stride` columnas, se corre una inferencia.
+static void procesar_audio(const int16_t *m, size_t n)
 {
     while (n > 0) {
         size_t leidas = 0;
@@ -164,13 +145,6 @@ static void procesar_audio(const int16_t *m, size_t n, bool volcar)
 
         int8_t *columna = &s_entrada[s_paso * FE_FEATURES];
         cuantizar(o.values, columna);
-        if (volcar) {
-            printf("F %u", (unsigned)s_n_features);
-            for (int i = 0; i < FE_FEATURES; i++) {
-                printf(" %d", columna[i]);
-            }
-            printf("\n");
-        }
         s_n_features++;
         s_paso++;
         if (s_paso < s_modelo.stride) {
@@ -185,9 +159,6 @@ static void procesar_audio(const int16_t *m, size_t n, bool volcar)
             continue;
         }
         orbita_max_us(&s_max_invoke_us, t_inv);
-        if (volcar) {
-            printf("P %u %u\n", (unsigned)s_n_inferencias, (unsigned)p);
-        }
         s_n_inferencias++;
         decidir(p);
     }
@@ -208,57 +179,8 @@ static void log_resumen(void)
     s_prob_max_periodo = 0;
 }
 
-#if CONFIG_ORBITA_WW_PRUEBA_WAV
-// Prueba bit a bit: procesa prueba.wav (16 kHz, mono, 16 bit) y vuelca features y probabilidades.
-// Comparar con: python tools/wakeword_ref.py comparar <log> <dump de wakeword_ref.py run --dump>.
-static void procesar_wav_embebido(void)
-{
-    const uint8_t *p = s_wav_ini + 12;                  // salta "RIFF" + tamano + "WAVE"
-    const int16_t *datos = NULL;
-    size_t muestras = 0;
-    bool formato_ok = false;
-    while (p + 8 <= s_wav_fin) {                        // recorre los chunks: id (4) + tamano (4) + contenido
-        uint32_t tam;
-        memcpy(&tam, p + 4, 4);
-        if (memcmp(p, "fmt ", 4) == 0) {
-            uint16_t formato, canales, bits;
-            uint32_t fs;
-            memcpy(&formato, p + 8, 2);
-            memcpy(&canales, p + 10, 2);
-            memcpy(&fs, p + 12, 4);
-            memcpy(&bits, p + 22, 2);
-            formato_ok = (formato == 1 && canales == 1 && fs == 16000 && bits == 16);
-        } else if (memcmp(p, "data", 4) == 0) {
-            datos = (const int16_t *)(p + 8);
-            muestras = tam / 2;
-        }
-        p += 8 + tam + (tam & 1);                       // los chunks se alinean a 2 bytes
-    }
-    if (!formato_ok || datos == NULL) {
-        ESP_LOGE(TAG, "prueba.wav tiene que ser PCM 16 kHz, mono, 16 bit");
-        return;
-    }
-    printf("INICIO_PRUEBA %u muestras\n", (unsigned)muestras);
-    // De a chunks del mismo tamano que la captura (el frontend no depende de eso, pero es igual al vivo).
-    for (size_t i = 0; i < muestras; i += ORBITA_CHUNK_FRAMES) {
-        size_t n = muestras - i < ORBITA_CHUNK_FRAMES ? muestras - i : ORBITA_CHUNK_FRAMES;
-        procesar_audio(datos + i, n, true);
-        // El printf espera a la UART (~10 s en total a 115200) sin soltar el core: se cede 1 tick
-        // por chunk para que corra IDLE1 y no salte el watchdog de tareas (lo vigila cada 5 s).
-        vTaskDelay(1);
-    }
-    printf("FIN_PRUEBA features=%u inferencias=%u detecciones=%u\n",
-           (unsigned)s_n_features, (unsigned)s_n_inferencias, (unsigned)s_detecciones);
-}
-#endif
-
 static void tarea_wakeword(void *arg)
 {
-#if CONFIG_ORBITA_WW_PRUEBA_WAV
-    procesar_wav_embebido();
-    log_resumen();
-    vTaskDelete(NULL);
-#else
     uint32_t t_resumen = orbita_t_us();
     while (1) {
         size_t n = 0;
@@ -268,7 +190,7 @@ static void tarea_wakeword(void *arg)
                 if (c->hueco) {
                     reiniciar_por_hueco();
                 }
-                procesar_audio(c->muestras, ORBITA_CHUNK_FRAMES, false);
+                procesar_audio(c->muestras, ORBITA_CHUNK_FRAMES);
             }
             vRingbufferReturnItem(s_ring, c);
         }
@@ -277,20 +199,16 @@ static void tarea_wakeword(void *arg)
             log_resumen();
         }
     }
-#endif
 }
 
 void orbita_wakeword_on_crudo(const int16_t *chunk_ini, size_t frames, bool hueco)
 {
-#if CONFIG_ORBITA_WW_PRUEBA_WAV
-    return;                                             // en la prueba el audio sale del WAV
-#endif
     if (s_ring == NULL || frames != ORBITA_CHUNK_FRAMES) {
         return;
     }
-    // Estereo L,R,L,R...: se queda con el mic ORBITA_RAW_MIC_INDEX (el mismo que el modo crudo).
+    // Estereo L,R,L,R...: promedio de los dos mics (el mismo mono que el modo crudo).
     for (size_t k = 0; k < frames; k++) {
-        s_chunk_cb.muestras[k] = chunk_ini[ORBITA_CHANNELS * k + ORBITA_RAW_MIC_INDEX];
+        s_chunk_cb.muestras[k] = orbita_mono_lr(chunk_ini, k);
     }
     s_chunk_cb.hueco = hueco || s_hueco_pendiente;
     if (xRingbufferSend(s_ring, &s_chunk_cb, sizeof(s_chunk_cb), 0) == pdTRUE) {
@@ -349,7 +267,7 @@ esp_err_t orbita_wakeword_start(void)
         return ESP_ERR_NO_MEM;
     }
     // Core 1, prioridad 4: por debajo de captura (6) y feed (5), para no frenarlas nunca.
-    // Stack de 6 KB: TFLite Micro + printf del volcado; medir con el resumen y ajustar.
+    // Stack de 6 KB: TFLite Micro; medir con el resumen y ajustar.
     if (xTaskCreatePinnedToCore(tarea_wakeword, "wakeword", 6144, NULL, 4, &s_tarea, 1) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }

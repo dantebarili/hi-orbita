@@ -5,13 +5,13 @@ Actualizado 2026-10-26. Reemplaza a `plan_prototipo_alfa.md` (borrado hoy; sigue
 ## Estado hoy
 
 - **Hecho:** captura continua + sockets `orbita-pcm-v2` con retención y reconexión; servidor con STT/TTS (Deepgram por defecto, ElevenLabs alternativa) y chat de voz con la nube; parlante (`orbita_playback`) con tono local y respuesta por red validados; AFE con beamforming (SE) + VAD en la rama `prototipo-alfa`.
-- **En curso:** wake word on-device (microWakeWord) en la rama `wakeword-banco`: componente `orbita_wakeword`, prueba bit a bit en placa PASA. Corre **fuera del AFE**, sobre la captura.
+- **En curso:** wake word on-device (microWakeWord, modelo `orbita`) integrada en la rama `prototipo-alfa-wakeword` (29/10): siempre activa en el modo WebSocket, sobre el crudo (promedio L+R, **fuera del AFE**); por ahora solo loguea. Sin probar en placa integrada.
 - **Sin empezar:** AEC, barge-in, LED, NFC, pruebas largas.
 
 ## Línea 1 — Wake word (Dante) → mergear
 
 - [ ] Terminar la wake word y dejar el criterio de "listo para mergear" escrito (falsos positivos/negativos en las tomas; CPU y RAM interna medidas con el resto del pipeline).
-- [ ] Mergear `wakeword-banco` a la rama de trabajo, **después** de comprobar que no pisa RAM ni core del AFE (ver Línea 2). Ojo: el merge puede esperar a que la Línea 2 tenga primeras mediciones; las dos se prueban en paralelo.
+- [x] Mergear `wakeword-banco` (29/10, en `prototipo-alfa-wakeword`). Falta en placa: que no pise RAM ni core del AFE (ver Línea 2) y aciertos con el promedio L+R.
 - [ ] Anotar en `orbita-obsidian` cómo se alimenta la wake word (mic crudo, sin AFE) y actualizar la FSM del vault, que hoy no contempla wake word en el chip.
 
 ## Línea 2 — AEC + pipeline de audio (Dante, en paralelo, antes del merge)

@@ -118,7 +118,7 @@ class Session:
             raise ValueError("id invalido")
         if (obj.get("protocol") != "orbita-pcm-v2" or obj.get("format") != "s16le" or
                 obj.get("rate") != 16000 or obj.get("channels") != 1 or
-                obj.get("source") not in ("mic_l", "mic_r", "afe")):
+                obj.get("source") not in ("mic_l", "mic_r", "mic_lr", "afe")):
             raise ValueError("formato no soportado")
         self.id = identity
         self.stamp = time.strftime("sesion_%Y%m%d_%H%M%S")

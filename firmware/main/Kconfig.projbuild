@@ -7,27 +7,7 @@ menu "Orbita integration"
         config ORBITA_LAB_WEBSOCKET
             bool "Prototipo: audio continuo por WebSocket y parlante"
             select ESP_WS_CLIENT_SEPARATE_TX_LOCK
-        config ORBITA_LAB_WAKEWORD
-            bool "Banco de prueba: wake word (microWakeWord) sobre la captura"
     endchoice
-
-    choice ORBITA_WW_MODELO
-        prompt "Modelo de wake word"
-        default ORBITA_WW_ORBITA
-        depends on ORBITA_LAB_WEBSOCKET || ORBITA_LAB_WAKEWORD
-        config ORBITA_WW_OKAY_NABU
-            bool "okay_nabu (oficial, referencia que se sabe que anda)"
-        config ORBITA_WW_ORBITA
-            bool "orbita (el nuestro)"
-    endchoice
-    config ORBITA_WW_PRUEBA_WAV
-        bool "Prueba bit a bit: procesar el WAV embebido en vez del mic"
-        default n
-        depends on ORBITA_LAB_WAKEWORD
-        help
-            Procesa prueba.wav (components/orbita_wakeword/modelos) y vuelca las
-            features int8 y las probabilidades por el log, para compararlas con
-            tools/wakeword_ref.py run ... --dump.
 
     config ORBITA_WIFI_SSID
         string "Wi-Fi SSID"

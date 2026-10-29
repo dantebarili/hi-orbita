@@ -39,14 +39,15 @@
 #define ORBITA_PIPELINE_USA_AFE  0
 #endif
 
-// El mismo criterio alimenta el ring mono y el campo source del protocolo.
-#if defined(CONFIG_ORBITA_RAW_MIC_RIGHT) && CONFIG_ORBITA_RAW_MIC_RIGHT
-#define ORBITA_RAW_MIC_INDEX 1
-#define ORBITA_RAW_MIC_SOURCE "mic_r"
-#else
-#define ORBITA_RAW_MIC_INDEX 0
-#define ORBITA_RAW_MIC_SOURCE "mic_l"
-#endif
+// Audio crudo mono = promedio de los dos mics (fijo). Lo usan el ring mono (sin AFE), la wake word
+// y el campo source del protocolo. Ojo: a 50 mm, una voz de costado pierde algo de agudos (~3,4 kHz).
+#define ORBITA_RAW_MIC_SOURCE "mic_lr"
+
+/** Muestra mono k de un buffer estereo L,R,L,R...: (L + R) / 2, sumado en 32 bit para no desbordar. */
+static inline int16_t orbita_mono_lr(const int16_t *estereo, size_t k)
+{
+    return (int16_t)(((int32_t)estereo[2 * k] + estereo[2 * k + 1]) / 2);
+}
 
 /**
  * @brief   Callback por cada chunk capturado.
