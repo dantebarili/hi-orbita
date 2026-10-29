@@ -11,10 +11,19 @@ menu "Orbita integration"
             bool "Banco de prueba: wake word (microWakeWord) sobre la captura"
     endchoice
 
+    # En el banco va siempre (sin pregunta); en el prototipo WebSocket se puede apagar.
+    config ORBITA_WAKEWORD
+        bool "Wake word sobre el audio crudo (por ahora solo loguea)" if ORBITA_LAB_WEBSOCKET
+        default y
+        depends on ORBITA_LAB_WEBSOCKET || ORBITA_LAB_WAKEWORD
+        help
+            Corre el modelo microWakeWord sobre un mic crudo (ORBITA_RAW_MIC_INDEX),
+            enganchado en on_crudo: no pasa por el AFE (el modelo se entreno sin AFE).
+
     choice ORBITA_WW_MODELO
         prompt "Modelo de wake word"
-        default ORBITA_WW_OKAY_NABU
-        depends on ORBITA_LAB_WAKEWORD
+        default ORBITA_WW_ORBITA
+        depends on ORBITA_WAKEWORD
         config ORBITA_WW_OKAY_NABU
             bool "okay_nabu (oficial, referencia que se sabe que anda)"
         config ORBITA_WW_ORBITA
