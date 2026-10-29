@@ -33,13 +33,3 @@ void wav_build_header(uint8_t *header_out, uint32_t sample_rate,
 size_t wav_pack_chunk_24bit(const int32_t *in_buf, size_t frame_count,
                              uint8_t *out_buf);
 
-/**
- * Igual que wav_pack_chunk_24bit pero a 16-bit (2 bytes por muestra,
- * little-endian): se queda con los 16 bits mas altos de cada muestra de 32.
- *
- * out_buf: tiene que tener espacio para frame_count * 2 * 2 bytes.
- *
- * Devuelve la cantidad de bytes escritos en out_buf.
- */
-size_t wav_pack_chunk_16bit(const int32_t *in_buf, size_t frame_count,
-                             uint8_t *out_buf);

@@ -57,4 +57,4 @@ Objetivo: pipeline usable y demostrable a inversores con la placa actual (2 mics
 - Anotar en `orbita-obsidian/arquitectura.md` §2 la pila de `playback`; verificar el MAX98357A contra su datasheet (`SD`, `GAIN`); A11 (ICS-43434 a 16 kHz).
 - A13: borrar `wav_pack_chunk_24bit`, contadores `volatile` → `stdatomic`. A16: `#define` nombrados para stack/prioridad/core y liberar `afe_config`.
 - Decisiones abiertas con Juani: ring in lleno (descartar el más viejo), capacidad del ring out (≈ 32,8 s vs. ~60 s), VAD como compuerta de envío (política de privacidad con el cliente), cómo abrir una conversación con un LLM.
-- Producción: aprovisionamiento por NVS, `wss://`, `nvs_flash_init` sin `NO_FREE_PAGES`, pasa-altos en la placa final, `arranque_fallo` en bucle (A10).
+- Producción: aprovisionamiento por NVS, `wss://`, `nvs_flash_init` sin `NO_FREE_PAGES`, `arranque_fallo` en bucle (A10).

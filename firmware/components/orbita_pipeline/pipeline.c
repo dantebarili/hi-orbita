@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -9,7 +10,6 @@
 #include "audio_capture.h"
 #include "audio_ring_out.h"
 #include "orbita_tiempo.h"
-#include "wav_writer.h"
 #include "pipeline.h"
 
 static const char *TAG = "pipeline";
@@ -22,6 +22,46 @@ static TaskHandle_t s_captura_handle;
 // Los usa solo tarea_captura.
 static int32_t s_crudo_buf[ORBITA_CHUNK_FRAMES * ORBITA_CHANNELS];
 static int16_t s_chunk_buf[ORBITA_CHUNK_FRAMES * ORBITA_CHANNELS];
+
+/* PASA-ALTOS de la captura: saca la continua de los mics (medida: -121 a +147 LSB segun la toma)
+ *  Filtro:   Butterworth 2.o orden, fc = 70 Hz, fs = 16 kHz, un biquad por canal (L y R)
+ *            -3 dB @ 70 Hz, -0,9 dB @ 100 Hz, 0 dB @ 1 kHz. Polos en r = 0,981.
+ *  Coefs:    scipy.signal.butter(2, 70, 'high', fs=16000) -> b = g*[1, -2, 1], a = [1, A1, A2]
+ *  Forma:    directa II traspuesta, float (FPU del S3); el estado sigue de un chunk al otro
+ *  Dato:     int32 del I2S (24 bit alineados a la izquierda) -> float en unidades de int16 ->
+ *            filtro -> redondeo y saturacion a int16. Costo: ~5 MAC por muestra. */
+#define HPF_HZ      70
+#define HPF_G       0.98075006f
+#define HPF_A1     -1.96112953f
+#define HPF_A2      0.96187072f
+
+typedef struct {
+    float z1, z2;               // memorias del biquad (forma directa II traspuesta)
+} hpf_estado_t;
+
+static hpf_estado_t s_hpf[ORBITA_CHANNELS];     // uno por canal; solo lo toca tarea_captura
+
+// Una muestra por el biquad. Directa II traspuesta: y = b0*x + z1; z1 = b1*x - a1*y + z2; z2 = b2*x - a2*y.
+static inline float hpf_muestra(hpf_estado_t *e, float x)
+{
+    float y = HPF_G * x + e->z1;
+    e->z1 = -2.0f * HPF_G * x - HPF_A1 * y + e->z2;
+    e->z2 = HPF_G * x - HPF_A2 * y;
+    return y;
+}
+
+// Chunk estereo int32 (L,R,L,R...) -> pasa-altos por canal -> int16 redondeado y saturado.
+// Reemplaza al corte >>16 de antes: se filtra con los 24 bit del mic y despues se baja a 16.
+static void hpf_a_16bit(const int32_t *in, int16_t *out, size_t frames)
+{
+    const float escala = 1.0f / 65536.0f;       // int32 alineado a la izquierda -> unidades de int16
+    for (size_t k = 0; k < frames * ORBITA_CHANNELS; k++) {
+        // k % 2: 0 = L, 1 = R (cada canal con su propio estado)
+        float y = hpf_muestra(&s_hpf[k % ORBITA_CHANNELS], (float)in[k] * escala);
+        long q = lrintf(y);                     // redondeo al entero mas cercano
+        out[k] = (int16_t)(q > 32767 ? 32767 : (q < -32768 ? -32768 : q));
+    }
+}
 
 // Bloques mono de 512 muestras que salen de un chunk (hoy 2). Cada uno sera un slot del ring out.
 #define BLOQUES_POR_CHUNK   (ORBITA_CHUNK_FRAMES / ORBITA_SLOT_SAMPLES)
@@ -141,7 +181,8 @@ static void tarea_captura(void *arg)
             dma_prev = dma_ahora;
         }
 
-        wav_pack_chunk_16bit(s_crudo_buf, frames_leidos, (uint8_t *)s_chunk_buf);   // 32 -> 16 bit
+        // Si hubo hueco el estado del filtro sigue igual: el salto da un transitorio de pocos ms.
+        hpf_a_16bit(s_crudo_buf, s_chunk_buf, frames_leidos);     // 32 -> pasa-altos -> 16 bit
 
         // Timeout 0: si no hay lugar, el chunk se pierde y queda contado.
         uint32_t t_send = orbita_t_us();
@@ -286,7 +327,7 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
     }
 
 #if !ORBITA_PIPELINE_USA_AFE
-    ESP_LOGI(TAG, "Audio crudo mono: %s", ORBITA_RAW_MIC_SOURCE);
+    ESP_LOGI(TAG, "Audio crudo mono: %s; pasa-altos %d Hz (2.o orden) en la captura", ORBITA_RAW_MIC_SOURCE, HPF_HZ);
 #endif
     // El ring out se reserva ANTES del AFE (bloque contiguo de PSRAM; esp-sr la fragmenta) y antes
     // de crear las tareas que lo usan. Si ya estaba iniciado (otro modulo), se sigue con ese.

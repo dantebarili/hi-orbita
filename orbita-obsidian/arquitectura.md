@@ -237,15 +237,11 @@ Hoy el servidor decide solo cuándo termina cada frase y la manda entera al STT 
 - **Después de la respuesta:** no escucha hasta que (a) el ESP manda `play_done` (el firmware lo manda cuando termina de sonar) y (b) el audio **recibido** tiene 0,5 s seguidos de silencio en banda, con tope de 8 s. Se mide el silencio recibido y no un tiempo fijo porque el audio del mic llega atrasado respecto del parlante (red y rings): la cola de su propia voz sigue llegando después de `play_done`.
 - **Al conectar:** la ESP acumula hasta 32 s mientras no hay servidor (S1) y los manda de golpe. El servidor descarta lo que llega más rápido que su duración, y como mínimo 5 s de reloj.
 
-### 6.2 Filtro para el firmware (pendiente, rama `dante`)
-Pasa-altos Butterworth de 4.º orden a 150 Hz (fs = 16 kHz), en la captura antes del ring: saca el rumble de raíz y el servidor ya no tendría que filtrar para medir. Son 2 biquads en cascada (forma directa II traspuesta, `float`; el S3 tiene FPU de precisión simple). Costo ≈ 10 MAC por muestra y canal: despreciable.
-
-| biquad | b0 | b1 | b2 | a1 | a2 |
-|---|---|---|---|---|---|
-| 1 | 0,92591212 | −1,85182424 | 0,92591212 | −1,89354234 | 0,89683219 |
-| 2 | 1 | −2 | 1 | −1,95254262 | 0,95593497 |
-
-Respuesta (calculada con `scipy.signal.sosfreqz`): −56 dB a 30 Hz, −32 dB a 60 Hz, −14 dB a 100 Hz, −3 dB a 150 Hz, 0 dB desde 300 Hz. Coeficientes generados con `butter(4, 150, 'highpass', fs=16000, output='sos')`. Avisos: (1) un filtro de 4.º orden con corte en 150 Hz deja pasar algo de 80 a 120 Hz, medir si alcanza; (2) cambia el espectro: el dataset de la wake word y la referencia del AEC (S9) tienen que verlo igual; (3) no verificado en la placa ni contra la documentación de `esp-dsp`; comprobar antes si el AFE ya filtra al encenderlo.
+### 6.2 Pasa-altos en la captura (hecho 29/10, rama `prototipo-alfa-wakeword`)
+Butterworth de **2.º orden a 70 Hz**, un biquad por canal, en `tarea_captura` sobre el int32 del I2S y antes de bajar a 16 bit, con redondeo y saturación (antes era un corte `>>16`). Motivo: los mics traen continua de −121 a +147 LSB según la toma. Forma directa II traspuesta en `float`; coeficientes y datos en el cartel de `pipeline.c`.
+- Respuesta: −22 dB a 20 Hz, −3 dB a 70 Hz, −0,9 dB a 100 Hz, 0 dB a 1 kHz. Se descartó la propuesta anterior (4.º orden a 150 Hz): le sacaba −14 dB a 100 Hz, la fundamental de una voz grave.
+- Simulado en PC con la misma aritmética: continua de 147 LSB → 0,01; diferencia con `scipy` ≤ 1 LSB. Sin medir en placa.
+- Lo ve todo lo que sale de la captura: AFE, wake word (su frontend arranca en 125 Hz: efecto mínimo, confirmar), socket y tomas UART del AGC/AEC.
 
 ### 6.3 Latencia de un turno (de que dejas de hablar a que suena la respuesta)
 Medida el 21/10 con ElevenLabs (STT Scribe, TTS `eleven_flash_v2_5`) y Gemini en la copia de laboratorio: **mediana de 15 turnos con `gemini-3.5-flash-lite`**; el servidor la registra por etapa (`stt_s`, `llm_s`, `tts_s`, `send_s`, `total_s`) en `tools/prueba_websocket/cloud_*.jsonl`. `total_s` arranca cuando el detector cierra la frase, o sea que **no incluye** la espera de silencio ni lo que pasa en el ESP.
