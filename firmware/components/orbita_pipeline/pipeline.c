@@ -41,6 +41,12 @@ typedef struct {
 
 static hpf_estado_t s_hpf[ORBITA_CHANNELS];     // uno por canal; solo lo toca tarea_captura
 
+// Pausa de la captura mientras suena el parlante (sin AEC, el eco dispara la wake word y ensucia el STT).
+// La escribe orbita_pipeline_pausar (otra tarea) y la lee la captura: `volatile` obliga a releerla cada vuelta.
+#define PAUSA_COLA_CHUNKS   5           // 5 x 64 ms = 320 ms mas despues de que el parlante termina
+static volatile bool s_pausa;
+static volatile uint32_t s_chunks_pausados;     // chunks no entregados por la pausa (estadistica)
+
 // Una muestra por el biquad. Directa II traspuesta: y = b0*x + z1; z1 = b1*x - a1*y + z2; z2 = b2*x - a2*y.
 static inline float hpf_muestra(hpf_estado_t *e, float x)
 {
@@ -162,6 +168,7 @@ static void tarea_captura(void *arg)
     // overflow del DMA). Se avisa al callback y se baja despues de entregar.
     uint32_t dma_prev = orbita_audio_get_dma_overflows();
     bool hueco = false;
+    uint32_t cola = 0;                  // chunks de pausa que faltan tras soltar s_pausa
 
     while (1) {
         size_t frames_leidos = 0;
@@ -183,6 +190,22 @@ static void tarea_captura(void *arg)
 
         // Si hubo hueco el estado del filtro sigue igual: el salto da un transitorio de pocos ms.
         hpf_a_16bit(s_crudo_buf, s_chunk_buf, frames_leidos);     // 32 -> pasa-altos -> 16 bit
+
+        // Pausa (parlante sonando, ver orbita_pipeline_pausar): se sigue leyendo el I2S y filtrando,
+        // pero el chunk no va a ningun ring ni a on_crudo. Al salir, PAUSA_COLA_CHUNKS mas (reverberacion
+        // y amplificador) y el primer chunk va marcado como hueco (la wake word reinicia su frontend).
+        if (s_pausa) {
+            cola = PAUSA_COLA_CHUNKS;
+        }
+        if (s_pausa || cola > 0) {
+            if (!s_pausa) {
+                cola--;
+            }
+            s_chunks_pausados++;
+            hueco = true;
+            orbita_max_us(&s_max_captura_us, t_vuelta);
+            continue;
+        }
 
         // Timeout 0: si no hay lugar, el chunk se pierde y queda contado.
         uint32_t t_send = orbita_t_us();
@@ -396,6 +419,11 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
     return ESP_OK;
 }
 
+void orbita_pipeline_pausar(bool pausa)
+{
+    s_pausa = pausa;
+}
+
 void orbita_pipeline_reset_tiempos(void)
 {
     s_max_captura_us = 0;
@@ -414,6 +442,7 @@ void orbita_pipeline_get_stats(orbita_pipeline_stats_t *out)
 {
     *out = (orbita_pipeline_stats_t){0};
     out->i2s_errores = s_i2s_errores;
+    out->chunks_pausados = s_chunks_pausados;
     out->dma_overflows = orbita_audio_get_dma_overflows();
     if (s_captura_handle != NULL) {
         out->stack_libre_captura = uxTaskGetStackHighWaterMark(s_captura_handle);

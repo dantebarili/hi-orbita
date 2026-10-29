@@ -99,5 +99,15 @@ esp_err_t orbita_ring_out_write(const int16_t *audio, uint16_t n_samples, uint8_
  */
 esp_err_t orbita_ring_out_read(orbita_slot_t *dst);
 
+/**
+ * @brief   Descarta los slots viejos y deja solo los ultimos `n` (el pre-roll de una conversacion).
+ *
+ * @details El descarte es a proposito, no una perdida: el primer slot que queda arranca con
+ *          `lost_samples` = 0. No cuenta en `descartados`.
+ *
+ * @return  slots descartados.
+ */
+uint16_t orbita_ring_out_quedarse_con(uint16_t n);
+
 /** Copia el estado actual del ring a `out`. */
 void orbita_ring_out_get_stats(orbita_ring_out_stats_t *out);

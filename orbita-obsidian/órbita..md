@@ -67,6 +67,9 @@ Regla general: si la decisión depende de **la señal de audio en el momento** (
 >
 > [!question] Abierto: el heartbeat de WS hoy solo se dibujó saliendo de `server_back`. Un socket caído mientras el dispositivo está en `server_send` o `audio_play` no tiene todavía un arco explícito — evaluar si conviene que el heartbeat sea un evento global (interrumpe cualquier estado "ocupado" con red) en vez de estar atado solo a la espera de respuesta.
 
+> [!info] Prototipo (29/10, rama `prototipo-alfa-wakeword`)
+> `audio_wake` = compuerta cerrada (no se manda audio). `dev_wake_word` la abre con 3 s de pre-roll y el envío pasa a **continuo** durante toda la conversación (no hay `dev_fin_segmento`: el servidor corta las frases por silencio). Sale con `srv_fin_conversacion` (`conversation_end`) o con un timeout local de 60 s. Sin AEC, mientras suena el parlante no entra audio: `dev_wake_word_durante_playback` no puede ocurrir todavía.
+
 > [!info] Arquitectura real: escucha continua en background, no "un pedido = un envío"
 > El uso real no es "wake word dispara un pedido puntual aislado". El médico se loguea por NFC al arrancar el turno, y le pide a Órbita que **resuma y anote continuamente durante toda la consulta**. Preguntas puntuales tipo "Órbita, ¿qué hora es?" ocurren *en medio* de esa escucha continua. El loop ya dibujado (`server_send → server_back → audio_play → server_send`, vía `srv_sigue_conversacion`) cubre el caso base: cada segmento de audio pasa por send → back → play (play no hace nada si la respuesta no trae audio, como en un segmento normal de resumen) → send de nuevo.
 

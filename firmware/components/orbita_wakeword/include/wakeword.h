@@ -25,15 +25,23 @@ extern "C" {
 #endif
 
 /**
+ * @brief   Aviso de deteccion. Corre en la tarea `wakeword` (core 1, prio 4): tiene que ser rapido y no
+ *          bloquear (dejar un pedido y volver). Si tarda, se atrasa la deteccion siguiente.
+ */
+typedef void (*orbita_wakeword_cb_t)(void);
+
+/**
  * @brief   Carga el modelo, prepara el frontend y crea el ring y la tarea `wakeword`.
  *
  * @details Llamar UNA vez, antes de orbita_pipeline_start() (la arena del modelo se reserva
  *          primero en RAM interna).
  *
+ * @param [in]  on_deteccion  se llama en cada deteccion (puede ser NULL: solo log)
+ *
  * @return  ESP_OK; ESP_ERR_INVALID_STATE si ya se arranco; ESP_ERR_NO_MEM; ESP_FAIL si el
  *          modelo o el frontend no se pudieron preparar (se loguea el motivo).
  */
-esp_err_t orbita_wakeword_start(void);
+esp_err_t orbita_wakeword_start(orbita_wakeword_cb_t on_deteccion);
 
 /**
  * @brief   Callback para orbita_pipeline_cfg_t.on_crudo (ver orbita_crudo_cb_t en pipeline.h).

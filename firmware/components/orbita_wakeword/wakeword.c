@@ -68,6 +68,7 @@ static uint32_t s_n_features, s_n_inferencias;  // contadores
 
 // Resumen (los escribe solo la tarea)
 static uint32_t s_detecciones, s_huecos;
+static orbita_wakeword_cb_t s_on_deteccion;     // aviso a quien use la deteccion (puede ser NULL)
 static uint8_t s_prob_max_periodo;
 static volatile uint32_t s_max_frontend_us, s_max_invoke_us;
 
@@ -122,6 +123,9 @@ static void decidir(uint8_t p)
         ESP_LOGW(TAG, ">>> DETECCION \"%s\" (inferencia %u, promedio %u/255)", WW_NOMBRE,
                  (unsigned)s_n_inferencias, (unsigned)(suma / WW_VENTANA));
         reiniciar_deteccion();
+        if (s_on_deteccion != NULL) {
+            s_on_deteccion();
+        }
     }
 }
 
@@ -221,11 +225,12 @@ void orbita_wakeword_on_crudo(const int16_t *chunk_ini, size_t frames, bool huec
     }
 }
 
-esp_err_t orbita_wakeword_start(void)
+esp_err_t orbita_wakeword_start(orbita_wakeword_cb_t on_deteccion)
 {
     if (s_tarea != NULL) {
         return ESP_ERR_INVALID_STATE;
     }
+    s_on_deteccion = on_deteccion;
     esp_err_t err = ww_modelo_init(s_tflite_ini, (size_t)(s_tflite_fin - s_tflite_ini), WW_ARENA, &s_modelo);
     if (err != ESP_OK) {
         return err;

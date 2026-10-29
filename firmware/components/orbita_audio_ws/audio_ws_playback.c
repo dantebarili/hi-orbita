@@ -5,6 +5,8 @@
 #include "audio_ws_wire.h"
 #include "orbita_playback.h"
 #include "orbita_ws.h"
+#include "pipeline.h"
+#include "audio_ws_conversacion.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -114,6 +116,13 @@ static void suppress_connection(uint32_t connection_id)
 static void on_playback_event(orbita_play_event_t event, uint32_t token, void *ctx)
 {
     (void)ctx;
+    // Sin AEC: mientras suena el parlante no entra audio a ningun ring (ni wake word ni socket).
+    if (event == ORBITA_PLAY_EV_STARTED) orbita_pipeline_pausar(true);
+    else if (event == ORBITA_PLAY_EV_DONE || event == ORBITA_PLAY_EV_STOPPED) {
+        orbita_pipeline_pausar(false);
+        audio_ws_conversacion_actividad();    // el timeout cuenta desde que termino de sonar
+    }
+
     if (event == ORBITA_PLAY_EV_STARTED) {
         int64_t now_us = esp_timer_get_time();
         portENTER_CRITICAL(&s_map_lock);
@@ -212,6 +221,7 @@ bool audio_ws_playback_on_downlink(void *ctx, const orbita_ws_downlink_event_t *
 
     switch (event->kind) {
     case ORBITA_WS_PLAY_BEGIN: {
+        audio_ws_conversacion_actividad();    // el servidor contesta: la conversacion sigue viva
         // begin() puede esperar hasta 100 ms si un stop sigue drenando. Si aun esta activo,
         // rechazamos este PLAY sin bloquear la tarea que recibe el WebSocket.
         if (orbita_playback_is_active()) return false;
@@ -259,8 +269,10 @@ bool audio_ws_playback_on_downlink(void *ctx, const orbita_ws_downlink_event_t *
         if (orbita_playback_is_active()) (void)orbita_playback_stop();
         return true;
     case ORBITA_WS_CONVERSATION_BEGIN:
+        audio_ws_conversacion_actividad();
+        return true;
     case ORBITA_WS_CONVERSATION_END:
-        // El indicador LED de conversación todavía no tiene consumidor conectado.
+        audio_ws_conversacion_fin();          // srv_fin_conversacion: se deja de mandar audio
         return true;
     }
     return false;

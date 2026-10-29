@@ -127,6 +127,23 @@ esp_err_t orbita_ring_out_read(orbita_slot_t *dst)
     return ESP_OK;
 }
 
+uint16_t orbita_ring_out_quedarse_con(uint16_t n)
+{
+    if (s_ring.slots == NULL) {
+        return 0;
+    }
+    portENTER_CRITICAL(&s_mux);
+    uint16_t sobran = s_ring.ocupados > n ? (uint16_t)(s_ring.ocupados - n) : 0;
+    // Avanzar el indice de lectura `sobran` lugares (con la vuelta del ring): no se copia nada.
+    s_ring.read_idx = (uint16_t)((s_ring.read_idx + sobran) % ORBITA_RING_SLOTS);
+    s_ring.ocupados -= sobran;
+    if (s_ring.ocupados > 0) {
+        s_ring.slots[s_ring.read_idx].hdr.lost_samples = 0;     // corte a proposito, no perdida
+    }
+    portEXIT_CRITICAL(&s_mux);
+    return sobran;
+}
+
 void orbita_ring_out_get_stats(orbita_ring_out_stats_t *out)
 {
     if (out == NULL) {

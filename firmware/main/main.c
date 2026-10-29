@@ -12,6 +12,7 @@
 #include "orbita_ws.h"
 #include "audio_ws_sink.h"
 #include "audio_ws_playback.h"
+#include "audio_ws_conversacion.h"
 #include "esp_heap_caps.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -57,7 +58,8 @@ void app_main(void)
     esp_err_t err;
     // La wake word va primero: su arena (~50 KB) se reserva en RAM interna antes que el AFE.
     log_memoria("antes de wakeword");
-    err = orbita_wakeword_start();
+    // Cada deteccion abre una conversacion: recien ahi se manda audio al servidor (pre-roll incluido).
+    err = orbita_wakeword_start(audio_ws_conversacion_on_wake);
     if (err != ESP_OK) arranque_fallo("wakeword", err);
     err = orbita_audio_i2s_init();
     if (err != ESP_OK) arranque_fallo("I2S", err);
@@ -67,12 +69,15 @@ void app_main(void)
     if (err != ESP_OK) arranque_fallo("playback", err);
     log_memoria("despues de playback");
     // No enviar desde on_crudo ni on_afe. La wake word recibe el audio CRUDO (sin AFE): su
-    // on_crudo solo copia el promedio L+R a su ring y vuelve; por ahora detectar solo loguea.
+    // on_crudo solo copia el promedio L+R a su ring y vuelve.
     const orbita_pipeline_cfg_t pipe_cfg = { .on_crudo = orbita_wakeword_on_crudo };
     err = orbita_pipeline_start(&pipe_cfg);
     if (err != ESP_OK) arranque_fallo("pipeline", err);
     log_memoria("despues de pipeline/AFE");
-    // Unico consumidor del ring out: arma los mensajes y los manda por el WebSocket.
+    // Unico consumidor del ring out: arma los mensajes y los manda por el WebSocket, pero solo durante
+    // una conversacion (compuerta cerrada hasta la wake word; el ring guarda los ultimos ~32 s).
+    err = audio_ws_conversacion_init();
+    if (err != ESP_OK) arranque_fallo("conversacion", err);
     err = orbita_sink_start(orbita_audio_ws_sink());
     if (err != ESP_OK) arranque_fallo("sink WebSocket", err);
     err = nvs_flash_init();
@@ -92,7 +97,7 @@ void app_main(void)
     err = orbita_ws_start(&ws);
     if (err != ESP_OK) arranque_fallo("WebSocket", err);
     log_memoria("arranque completo");
-    ESP_LOGI("main", "Audio WebSocket activo; el resumen sale cada 30 s en audio_ws");
+    ESP_LOGI("main", "Listo: decir \"Orbita\" para empezar a mandar audio al servidor");
 #else
     // Drivers y rings del modulo de laboratorio (se borra cuando exista el sink de sockets).
     test_init();

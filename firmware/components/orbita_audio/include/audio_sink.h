@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 #include "esp_err.h"
@@ -25,6 +26,7 @@
  *  n_voz:        de esos slots, cuantos traen VOZ     } resumen de VOZ para el header del cable:
  *  n_vad_ok:     de esos slots, cuantos traen VAD_OK  } pendiente de decidir (plan, decision 4)
  *  n_samples:    muestras de audio validas en `audio` (suma de los `n_samples` de los slots)
+ *  inicio:       true en el primer mensaje despues de abrir la compuerta (arranca con el pre-roll)
  *  audio:        muestras mono 16 bit. Vale SOLO durante la llamada a `send` (se reusa el buffer) */
 typedef struct {
     uint32_t       seq_primero;
@@ -33,6 +35,7 @@ typedef struct {
     uint16_t       n_voz;
     uint16_t       n_vad_ok;
     uint16_t       n_samples;
+    bool           inicio;
     const int16_t *audio;
 } orbita_msg_t;
 
@@ -63,6 +66,22 @@ typedef struct {
  * @return ESP_OK; ESP_ERR_INVALID_ARG (sink o send NULL); ESP_ERR_INVALID_STATE (ya arrancado); ESP_ERR_NO_MEM.
  */
 esp_err_t orbita_sink_start(const orbita_sink_t *sink);
+
+/**
+ * @brief  Compuerta: abre el envio. El sink descarta lo viejo del ring, se queda con los ultimos
+ *         `preroll_slots` (lo que se dijo justo antes) y sigue mandando en tiempo real. El primer
+ *         mensaje sale con `inicio` = true.
+ * @details Rapida y sin bloquear: solo deja el pedido; lo aplica la tarea del sink. Se puede llamar
+ *          desde otra tarea (p. ej. la de la wake word). Si ya estaba abierta, no hace nada.
+ */
+void orbita_sink_abrir(uint16_t preroll_slots);
+
+/**
+ * @brief  Compuerta: cierra el envio. Lo que el sink tenia juntado se manda; despues deja de leer el
+ *         ring, que sigue guardando los ultimos ~32 s (pisa lo mas viejo).
+ * @details Arranca ABIERTA (modo UART sin cambios); el modo WebSocket la cierra antes de orbita_sink_start().
+ */
+void orbita_sink_cerrar(void);
 
 /** Pone en 0 los tiempos maximos. */
 void orbita_sink_reset_tiempos(void);

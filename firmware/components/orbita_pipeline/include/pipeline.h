@@ -85,7 +85,8 @@ typedef struct {
 /** Contadores acumulados desde el arranque: para medir una toma, restar dos lecturas (uint32_t sin signo). */
 typedef struct {
     uint32_t i2s_errores;            // lecturas del I2S que fallaron o vinieron incompletas
-    uint32_t dma_overflows;          // veces que el DMA del I2S pisó audio sin leer (hueco real en la captura)
+    uint32_t chunks_pausados;        // chunks no entregados por la pausa (parlante sonando + cola)
+    uint32_t dma_overflows;         // veces que el DMA del I2S pisó audio sin leer (hueco real en la captura)
     uint32_t overruns_ring_in;         // chunks que no entraron al ring in (feed no sigue el ritmo)
     uint32_t chunks_alimentados;     // chunks entregados al AFE
     uint32_t chunks_invalidos;       // chunks del ring in con tamano inesperado
@@ -124,6 +125,16 @@ typedef struct {
  *          orbita_afe_init().
  */
 esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg);
+
+/**
+ * @brief   Pausa la entrega de audio: mientras `pausa` es true, la captura sigue leyendo el I2S pero
+ *          no pone nada en ningun ring ni llama a on_crudo. Al soltarla sigue pausada ~320 ms mas
+ *          (cola del parlante) y el primer chunk llega a on_crudo marcado como hueco.
+ *
+ * @details Para el parlante sin AEC: lo llama el playback al empezar y al terminar de sonar. Es
+ *          rapida y no bloquea (solo escribe una variable): se puede llamar desde un callback.
+ */
+void orbita_pipeline_pausar(bool pausa);
 
 /** Pone en 0 los tiempos maximos (el arranque ensucia el maximo): llamar al empezar una medicion. */
 void orbita_pipeline_reset_tiempos(void);

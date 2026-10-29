@@ -206,15 +206,15 @@ class CloudServices:
         self.llm_name = f"{cfg.LLM}:{model}"
         self.save_audio = bool(getattr(cfg, "SAVE_AUDIO", False))
 
-    def start(self, output, session_id, send_pcm, play_done):
-        return Conversation(self, output, session_id, send_pcm, play_done)
+    def start(self, output, session_id, send_pcm, play_done, sync_on_connect=True):
+        return Conversation(self, output, session_id, send_pcm, play_done, sync_on_connect)
 
 
 # -- una conexión -----------------------------------------------------------
 class Conversation:
     """Estados: idle (espera voz) -> capturing (hasta silencio) -> busy (nube + reproducción) -> idle."""
 
-    def __init__(self, services, output, session_id, send_pcm, play_done):
+    def __init__(self, services, output, session_id, send_pcm, play_done, sync_on_connect=True):
         self.services, self.output, self.session_id = services, Path(output), session_id
         self.send_pcm, self.play_done = send_pcm, play_done
         self.buf = bytearray()
@@ -230,7 +230,8 @@ class Conversation:
         self.clock = time.monotonic   # inyectable en los tests
         self.t0 = self.last_arrival = None
         self.rt_streak = 0
-        self.syncing = True           # al conectar: descartar el atraso que la ESP acumuló sin servidor (hasta 32 s)
+        self.syncing = sync_on_connect  # al conectar: descartar el atraso que la ESP acumuló sin servidor (hasta 32 s);
+                                        # con wake word no hace falta (el audio arranca con el pre-roll a propósito)
         self.settling, self.settle_deadline, self.quiet_s = False, 0.0, 0.0
         self.hold_until = 0.0         # reloj: hasta cuándo se descarta lo que llega (guard post-PLAY)
         self.turns = 0
@@ -257,7 +258,8 @@ class Conversation:
 
     def feed(self, pcm):
         now = self.clock()
-        self._sync(now, len(pcm) // 2)
+        if self.syncing:
+            self._sync(now, len(pcm) // 2)
         self.buf += pcm
         filtered, self.fzi = sosfilt(BAND_SOS, np.frombuffer(pcm, dtype='<i2').astype(np.float32), zi=self.fzi)
         self.fbuf = np.concatenate((self.fbuf, filtered.astype(np.float32)))
@@ -321,6 +323,7 @@ class Conversation:
         try:
             question = await asyncio.to_thread(self.services.speech.transcribe, pcm)
             question = re.sub(r"\[[^\]]*\]", "", question).strip()   # ElevenLabs marca "[ruido]", "[interferencia]": no es una pregunta
+            question = self.clean_question(question)
             t_stt = time.monotonic()
             record["question"] = question
             if not question:
@@ -363,6 +366,10 @@ class Conversation:
             self.quiet_s, self.settling = 0.0, True
             self.state = "idle"
             await asyncio.to_thread(self._log, record)
+
+    def clean_question(self, question):
+        """Gancho para subclases: ajustar la pregunta antes del LLM ("" = no hay pregunta)."""
+        return question
 
     def _log(self, record):
         self.output.mkdir(parents=True, exist_ok=True)

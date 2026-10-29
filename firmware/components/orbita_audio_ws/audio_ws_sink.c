@@ -8,6 +8,7 @@
  * El buffer msg->audio solo vale en send: serializamos y enviamos antes de volver.
  */
 #include "audio_ws_sink.h"
+#include "audio_ws_conversacion.h"
 #include "audio_ws_wire.h"
 #include "orbita_ws.h"
 #include "pipeline.h"
@@ -17,6 +18,7 @@
 #include "esp_random.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -32,9 +34,9 @@ static const char *TAG = "audio_ws";
 
 // WARM-UP: al arrancar el microfono hay un escalon de continua que decae en ~5 s
 // (medido el 13/10) y el DMA del I2S pisa audio mientras se crean las tareas del pipeline.
-// Ese audio se descarta antes de mandar nada, aunque todavia no haya conexion.
+// Se descarta lo que llegue en los primeros WARMUP_MS desde el arranque. Por TIEMPO y no por muestras:
+// con la compuerta cerrada, contar muestras se comeria los primeros 5 s de la primera conversacion.
 #define WARMUP_MS      5000
-#define WARMUP_SAMPLES (WARMUP_MS * 16)     // 16 muestras por ms (16 kHz mono)
 #define STATS_LOG_MS   30000                // cada cuanto se imprime el resumen en el monitor
 // Si mientras el sink retenia un mensaje el ring pisó al menos esta cantidad de slots (~1 s), el mensaje
 // retenido quedo aislado de lo que sigue por un salto grande: se descarta en vez de mandar un fragmento viejo.
@@ -52,7 +54,9 @@ static struct {
     bool active, waiting;
     TickType_t wait_since;                  // inicio de la espera sin red en curso
     TickType_t last_log;                    // ultimo resumen impreso
+    bool warmup_done;
     uint32_t warmup_skipped, dma_base;      // muestras descartadas / overflows del DMA hasta fin del warm-up
+    uint32_t wake_conn;                     // conexion en la que ya se mando el `wake` del mensaje en curso
     uint32_t reconnects, wait_max_ms;       // veces que volvio la red / espera mas larga
     uint32_t connection, index, samples;    // sesion actual: conexion local, mensajes y muestras enviados
     uint32_t hello_conn;                    // conexion en la que ya mandamos `hello` (0 = ninguna): el servidor acepta UNO por conexion
@@ -193,15 +197,17 @@ static esp_err_t send_audio(void *ctx, const orbita_msg_t *msg)
     (void)ctx;
     // El ESP_OK aqui significa consumido; el contador sink.msgs_enviados NO equivale
     // a paquetes de red. Los reales son s.index (por sesion) y el resumen del monitor.
-    if (s.warmup_skipped < WARMUP_SAMPLES) {            // descartar el arranque (ver WARMUP_MS)
-        s.warmup_skipped += msg->n_samples;
-        if (s.warmup_skipped >= WARMUP_SAMPLES) {
-            s.dma_base = orbita_audio_get_dma_overflows();
-            ESP_LOGI(TAG, "Warm-up terminado (%u ms descartados); dma_overflows durante el arranque=%" PRIu32,
-                     (unsigned)(s.warmup_skipped / 16), s.dma_base);
+    if (!s.warmup_done) {                               // descartar el arranque (ver WARMUP_MS)
+        if (esp_timer_get_time() < (int64_t)WARMUP_MS * 1000) {
+            s.warmup_skipped += msg->n_samples;
+            return ESP_OK;
         }
-        return ESP_OK;
+        s.warmup_done = true;
+        s.dma_base = orbita_audio_get_dma_overflows();
+        ESP_LOGI(TAG, "Warm-up terminado (%u ms descartados); dma_overflows durante el arranque=%" PRIu32,
+                 (unsigned)(s.warmup_skipped / 16), s.dma_base);
     }
+    if (msg->inicio) s.wake_conn = 0;                   // conversacion nueva: el `wake` todavia no salio
     // S1 (retencion): este mensaje NO se descarta si falla la red. Se queda en la mano
     // de la tarea sink hasta enviarse; mientras tanto la captura sigue llenando el ring
     // (32 s de colchon; si se llena, el ring descarta lo mas viejo y lo marca en `lost`).
@@ -267,6 +273,22 @@ static esp_err_t send_audio(void *ctx, const orbita_msg_t *msg)
             .stream_id=s.id, .index=s.index, .seq=msg->seq_primero, .lost=msg->lost_antes,
             .slots=msg->n_slots, .samples=msg->n_samples, .voice=msg->n_voz, .vad=msg->n_vad_ok,
         };
+        // Primer mensaje de una conversacion: antes del audio va `wake` (una vez por conexion), para que el
+        // servidor sepa que arranca una conversacion y donde termina el pre-roll (= donde se detecto).
+        if (msg->inicio && s.wake_conn != s.connection) {
+            int n = snprintf(s.control, sizeof(s.control),
+                "{\"type\":\"wake\",\"index\":%" PRIu32 ",\"seq\":%" PRIu32 ",\"preroll_samples\":%u}",
+                s.index, msg->seq_primero, (unsigned)(AUDIO_WS_PREROLL_SLOTS * ORBITA_SLOT_SAMPLES));
+            if (n <= 0 || (size_t)n >= sizeof(s.control) ||
+                orbita_ws_send(ORBITA_WS_TEXT, s.control, n, SEND_TIMEOUT_MS) != ESP_OK) {
+                ++s.failed_attempts;
+                retenido = true;
+                vTaskDelay(pdMS_TO_TICKS(100));
+                continue;                                   // se reintenta (y si cambio la conexion, sesion nueva)
+            }
+            s.wake_conn = s.connection;
+            ESP_LOGI(TAG, "wake enviado (mensaje %" PRIu32 ")", s.index);
+        }
         size_t size = orbita_wire_encode(s.packet, sizeof(s.packet), &meta, msg->audio);
         if (!size) {                                        // mensaje invalido: no tiene arreglo, se descarta
             s.dropped_samples += msg->n_samples;

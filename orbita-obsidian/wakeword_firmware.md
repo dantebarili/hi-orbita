@@ -1,6 +1,6 @@
 # Wake word en el chip
 
-Modelo microWakeWord `orbita.tflite`, siempre activo en el modo WebSocket (desde el 29/10, rama `prototipo-alfa-wakeword`). Por ahora detectar solo loguea. Se validó primero con `okay_nabu` en el banco `wakeword-banco` (ya borrado del firmware: recuperar de git, commit `ad1c8e3`). El entrenamiento está en `orbita-dataset/docs/entrenamiento.md`.
+Modelo microWakeWord `orbita.tflite`, siempre activo en el modo WebSocket (desde el 29/10, rama `prototipo-alfa-wakeword`). Cada detección abre una conversación (ver `protocolo_comunicacion.md`, "Política de captura"). Se validó primero con `okay_nabu` en el banco `wakeword-banco` (ya borrado del firmware: recuperar de git, commit `ad1c8e3`). El entrenamiento está en `orbita-dataset/docs/entrenamiento.md`.
 
 ## Concepto
 El modelo no escucha audio: mira un **espectrograma**. Si el chip lo arma distinto que el notebook, aunque sea un poco, el modelo falla **sin dar error**. Por eso el chip usa el **mismo código C** del entrenamiento (`esp-micro-speech-features`, fork del microfrontend de TFLM que usa `pymicro-features`) y se verifica número por número.

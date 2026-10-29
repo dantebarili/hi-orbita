@@ -35,6 +35,12 @@ static volatile uint32_t s_slots_invalidos;
 static volatile uint32_t s_max_read_us;     // tiempos maximos (A15)
 static volatile uint32_t s_max_send_us;
 
+// Compuerta (orbita_sink_abrir / cerrar): las escriben otras tareas, la aplica solo tarea_sink.
+static volatile bool     s_abierto = true;       // arranca abierta: el modo UART no la usa
+static volatile bool     s_pedido_abrir;
+static volatile uint16_t s_preroll_slots;
+static bool              s_inicio_pendiente;     // el proximo mensaje es el primero tras abrir
+
 // Entrega el mensaje en curso al sink y lo deja vacio.
 static void cerrar_mensaje(void)
 {
@@ -53,6 +59,21 @@ static void cerrar_mensaje(void)
 static void tarea_sink(void *arg)
 {
     while (1) {
+        if (s_pedido_abrir) {                        // abrir: quedarse con el pre-roll y arrancar
+            s_pedido_abrir = false;
+            uint16_t descartados = orbita_ring_out_quedarse_con(s_preroll_slots);
+            s_inicio_pendiente = true;
+            s_abierto = true;
+            ESP_LOGI(TAG, "Compuerta abierta: pre-roll de %u slots (%u descartados)",
+                     (unsigned)s_preroll_slots, (unsigned)descartados);
+        }
+        if (!s_abierto) {                            // cerrada: mandar lo juntado y no leer el ring
+            if (s_msg.n_slots > 0) {
+                cerrar_mensaje();
+            }
+            vTaskDelay(pdMS_TO_TICKS(SINK_POLL_MS));
+            continue;
+        }
         uint32_t t_read = orbita_t_us();
         esp_err_t err = orbita_ring_out_read(&s_slot);
         if (err == ESP_OK) {
@@ -76,6 +97,8 @@ static void tarea_sink(void *arg)
         if (s_msg.n_slots == 0) {                    // primer slot del mensaje
             s_msg.seq_primero = s_slot.hdr.seq;
             s_msg.lost_antes  = s_slot.hdr.lost_samples;
+            s_msg.inicio      = s_inicio_pendiente;
+            s_inicio_pendiente = false;
         }
 
         // Se copian solo las muestras validas (n_samples), nunca el slot entero.
@@ -105,6 +128,21 @@ esp_err_t orbita_sink_start(const orbita_sink_t *sink)
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
+}
+
+void orbita_sink_abrir(uint16_t preroll_slots)
+{
+    if (s_abierto || s_pedido_abrir) {
+        return;
+    }
+    s_preroll_slots = preroll_slots;
+    s_pedido_abrir = true;                           // despues del pre-roll: la tarea lee los dos juntos
+}
+
+void orbita_sink_cerrar(void)
+{
+    s_pedido_abrir = false;
+    s_abierto = false;
 }
 
 void orbita_sink_reset_tiempos(void)
