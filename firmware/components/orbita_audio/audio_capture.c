@@ -24,6 +24,7 @@
 #error "I2S standard-mode header not found; install/configure the ESP-IDF I2S driver component"
 #endif
 #include "esp_log.h"
+#include "driver/gpio.h"
 
 static const char *TAG = "orbita_audio";
 static i2s_chan_handle_t s_rx_chan = NULL; // Handle para identidicar el canal a utilizar
@@ -114,7 +115,17 @@ esp_err_t orbita_audio_i2s_init(void)
         ESP_LOGE(TAG, "i2s_channel_init_std_mode fallo: %s", esp_err_to_name(err));
         return err;
     }
-  
+
+    // Pull-down en DIN: cada mic suelta la linea (alta impedancia) al terminar su palabra; sin pull-down
+    // queda flotando y un slot sin mic lee cualquier cosa. El datasheet del INMP441 pide 100 kOhm a GND
+    // (Fig. 7, p. 11). Esta es la interna del S3 (valor sin verificar): sirve para el prototipo; en la PCB
+    // va la resistencia externa. Despues de init_std_mode: el driver I2S no toca las pulls (i2s_common.c).
+    err = gpio_pulldown_en(ORBITA_I2S_DIN_GPIO);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "gpio_pulldown_en fallo: %s", esp_err_to_name(err));
+        return err;
+    }
+
     // Registro el callback de overflow. Tiene que ser ANTES del enable: con el
     // canal ya prendido el driver devuelve ESP_ERR_INVALID_STATE.
     i2s_event_callbacks_t cbs = {

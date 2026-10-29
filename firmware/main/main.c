@@ -18,6 +18,8 @@
 #include "esp_netif.h"
 #include "nvs_flash.h"
 #include "wakeword.h"
+#elif CONFIG_ORBITA_LAB_BEAMFORMING
+#include "test_bf.h"
 #else
 #include "test.h"
 #endif
@@ -98,6 +100,14 @@ void app_main(void)
     if (err != ESP_OK) arranque_fallo("WebSocket", err);
     log_memoria("arranque completo");
     ESP_LOGI("main", "Listo: decir \"Orbita\" para empezar a mandar audio al servidor");
+#elif CONFIG_ORBITA_LAB_BEAMFORMING
+    // Prueba de beamforming: sin red, sin wake word, sin sink. Captura -> PSRAM -> beamformer -> UART0.
+    test_bf_init();
+    esp_err_t err = orbita_audio_i2s_init();
+    if (err != ESP_OK) arranque_fallo("orbita_audio_i2s_init", err);
+    err = orbita_pipeline_start(test_bf_pipeline_cfg());
+    if (err != ESP_OK) arranque_fallo("orbita_pipeline_start", err);
+    test_bf_loop();
 #else
     // Drivers y rings del modulo de laboratorio (se borra cuando exista el sink de sockets).
     test_init();
