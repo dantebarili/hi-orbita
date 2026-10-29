@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hipercardioide con dos cardioides</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: arriba los controles y la ecuación viva; abajo las piezas en polar lineal (c_F, β·c_B, y), y una segunda fila con el mismo y descompuesto en omni + figura-8. */
+:root {
+  --bg: #f4f7f8;
+  --panel: #ffffff;
+  --fg: #15202a;
+  --muted: #586774;
+  --rule: #d3dce2;
+  --cf: #0a6a8a;
+  --cb: #b4451f;
+  --y: #6a3fb0;
+  --neg: #c2569a;
+  --font-ui: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10161b; --panel: #172028; --fg: #e4eaef; --muted: #94a3af; --rule: #2a3741;
+    --cf: #5cc0e0; --cb: #f08a5d; --y: #b99cf0; --neg: #f08ac4; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10161b; --panel: #172028; --fg: #e4eaef; --muted: #94a3af; --rule: #2a3741;
+  --cf: #5cc0e0; --cb: #f08a5d; --y: #b99cf0; --neg: #f08ac4; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-ui); font-size: 16px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 56px;
+}
+main { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+h1 { font-size: 26px; line-height: 1.2; font-weight: 600; margin: 0; text-wrap: balance; }
+h2 { font-size: 18px; font-weight: 600; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.muted { color: var(--muted); }
+.m { font-family: var(--font-data); font-size: 14px; }
+section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.eqn { font-family: var(--font-data); font-size: 17px; text-align: center; overflow-x: auto; white-space: nowrap; padding: 4px 0; }
+.eqn b { font-weight: 500; }
+.ctrls { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 24px; font-size: 14px; align-items: end; }
+.ctrl { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ctrl label { display: flex; justify-content: space-between; gap: 8px; font-weight: 500; }
+.ctrl output { font-family: var(--font-data); color: var(--y); }
+input[type=range] { width: 100%; accent-color: var(--y); }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets button { font: 500 13px var(--font-ui); padding: 6px 10px; border-radius: 4px; cursor: pointer; border: 1px solid var(--rule); background: var(--bg); color: var(--fg); }
+.presets button:hover { border-color: var(--y); }
+.presets button[aria-pressed="true"] { border-color: var(--y); box-shadow: inset 0 0 0 1px var(--y); }
+select { font: 500 14px var(--font-ui); padding: 6px 8px; border: 1px solid var(--rule); border-radius: 4px; background: var(--bg); color: var(--fg); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--y); outline-offset: 2px; }
+.row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.cell { display: flex; flex-direction: column; gap: 6px; align-items: stretch; min-width: 0; }
+.cell .t { font-family: var(--font-data); font-size: 13px; text-align: center; }
+.cell .s { font-size: 12px; color: var(--muted); text-align: center; min-height: 2.6em; }
+.op { display: flex; align-items: center; justify-content: center; font-family: var(--font-data); font-size: 22px; color: var(--muted); }
+canvas { display: block; width: 100%; height: auto; }
+.readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 18px; font-size: 13px; margin: 0; }
+.readout div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--rule); padding: 3px 0; }
+.readout dt { color: var(--muted); }
+.readout dd { margin: 0; font-family: var(--font-data); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 18px; height: 0; border-top: 3px solid; display: inline-block; }
+.legend i.dash { border-top-style: dashed; }
+</style>
+
+</head>
+<body>
+<main>
+<header style="display:flex;flex-direction:column;gap:8px">
+  <h1>Un hipercardioide con dos cardioides</h1>
+  <p class="muted">Un cardioide mira hacia adelante (<span class="m">c_F</span>) y otro hacia atrás (<span class="m">c_B</span>). Se restan con un peso β: <span class="m">y = c_F − β·c_B</span>. Moviendo β se recorre cardioide, supercardioide, hipercardioide y dipolo, sin retardos fraccionarios. Radio lineal: el borde es el nivel de frente de <span class="m">c_F</span>.</p>
+</header>
+
+<section>
+  <div class="panel">
+    <div class="eqn" id="eq" aria-live="polite"></div>
+    <div class="presets" role="group" aria-label="Patrones">
+      <button type="button" data-b="0">Cardioide β = 0</button>
+      <button type="button" data-b="0.27">Supercardioide β = 0,27</button>
+      <button type="button" data-b="0.5">Hipercardioide β = 0,5</button>
+      <button type="button" data-b="1">Dipolo β = 1</button>
+    </div>
+    <div class="ctrls">
+      <div class="ctrl"><label for="beta">Peso β <output id="beta-o"></output></label><input id="beta" type="range" min="0" max="1" step="0.01" value="0.5"></div>
+      <div class="ctrl"><label for="mode">Patrones</label>
+        <select id="mode">
+          <option value="ideal" selected>Ideales (baja frecuencia)</option>
+          <option value="exacto">Exactos a una frecuencia</option>
+        </select></div>
+      <div class="ctrl" id="f-wrap" hidden><label for="f">Frecuencia <output id="f-o"></output></label><input id="f" type="range" min="0" max="1" step="0.001" value="0.55"></div>
+    </div>
+    <div class="legend">
+      <span><i style="border-color:var(--y)"></i>lóbulo en fase con el frente</span>
+      <span><i class="dash" style="border-color:var(--neg)"></i>lóbulo con polaridad invertida (solo patrones ideales)</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>1. Las dos piezas y su resta</h2>
+  <div class="panel">
+    <div class="row" id="row1" style="grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));">
+      <div class="cell"><canvas id="p-cf" width="320" height="320" aria-label="Cardioide hacia adelante"></canvas><div class="t" style="color:var(--cf)">c_F</div><div class="s">Cardioide hacia adelante. Nulo atrás.</div></div>
+      <div class="cell"><canvas id="p-cb" width="320" height="320" aria-label="Cardioide hacia atrás multiplicado por beta"></canvas><div class="t" style="color:var(--cb)" id="t-cb"></div><div class="s">Cardioide hacia atrás, escalado. Nulo de frente.</div></div>
+      <div class="cell"><canvas id="p-y" width="320" height="320" aria-label="Resultado de la resta"></canvas><div class="t" style="color:var(--y)" id="t-y"></div><div class="s" id="s-y"></div></div>
+    </div>
+    <dl class="readout">
+      <div><dt>Frente (0°)</dt><dd id="r-f"></dd></div>
+      <div><dt>Costado (90°)</dt><dd id="r-s"></dd></div>
+      <div><dt>Atrás (180°)</dt><dd id="r-b"></dd></div>
+      <div><dt>Nulo</dt><dd id="r-n"></dd></div>
+      <div><dt>Directividad DF</dt><dd id="r-df"></dd></div>
+    </dl>
+  </div>
+</section>
+
+<section id="sec-desc">
+  <h2>2. El mismo resultado, descompuesto en omni y figura-8</h2>
+  <p class="muted">Sumar los dos cardioides da un patrón omni; restarlos da una figura-8. β reparte cuánto de cada uno entra: <span class="m">y = (1−β)/2·(c_F+c_B) + (1+β)/2·(c_F−c_B)</span>.</p>
+  <div class="panel">
+    <div class="row" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+      <div class="cell"><canvas id="p-om" width="320" height="320" aria-label="Parte omni"></canvas><div class="t" id="t-om"></div><div class="s">(c_F + c_B), igual desde todos lados</div></div>
+      <div class="op">+</div>
+      <div class="cell"><canvas id="p-f8" width="320" height="320" aria-label="Parte figura-8"></canvas><div class="t" id="t-f8"></div><div class="s">(c_F − c_B), figura-8 con cos θ</div></div>
+      <div class="op">=</div>
+      <div class="cell"><canvas id="p-y2" width="320" height="320" aria-label="Resultado"></canvas><div class="t" style="color:var(--y)">y (el mismo de arriba)</div><div class="s" id="s-y2"></div></div>
+    </div>
+  </div>
+</section>
+</main>
+
+<script>
+(function () {
+  var C = 343, FS = 16000, D = 0.0214375;
+  var $ = function (id) { return document.getElementById(id); };
+  function tok(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function fmt(x, n) { return x.toFixed(n === undefined ? 2 : n).replace(".", ","); }
+  function freq() { return 100 * Math.pow(80, +$("f").value); }
+  function fmtF(f) { return f >= 1000 ? fmt(f / 1000) + " kHz" : fmt(f, 0) + " Hz"; }
+
+  // Patrones ideales (baja frecuencia): c_F = (1+cos)/2, c_B = (1-cos)/2. Con signo.
+  // Patrones exactos: c_F = 1 - x2 z, c_B = x2 - z, con x2 = e^{-j w tau0 cos th}, z = e^{-j w T}, T = 1 muestra. Se usa el módulo del complejo.
+  function parts(th, mode, f, b) {
+    if (mode === "ideal") {
+      var c = Math.cos(th), cf = (1 + c) / 2, cb = (1 - c) / 2;
+      return { cf: cf, cb: cb, y: cf - b * cb, om: (1 - b) / 2, f8: (1 + b) / 2 * c, cfc: null };
+    }
+    var w = 2 * Math.PI * f, u = w * D / C * Math.cos(th), v = w / FS;
+    var xr = Math.cos(-u), xi = Math.sin(-u), zr = Math.cos(v), zi = -Math.sin(v);
+    var fr = 1 - (xr * zr - xi * zi), fi = -(xr * zi + xi * zr), br = xr - zr, bi = xi - zi;
+    return { cf: Math.hypot(fr, fi), cb: Math.hypot(br, bi), y: Math.hypot(fr - b * br, fi - b * bi) };
+  }
+  function norm(mode, f) { // nivel de frente de c_F, para que el borde sea 1
+    return mode === "ideal" ? 1 : Math.max(parts(0, mode, f, 0).cf, 1e-9);
+  }
+
+  function setup(cv) {
+    var dpr = window.devicePixelRatio || 1, W = cv.clientWidth;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(W * dpr); cv.style.height = W + "px";
+    var ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, W);
+    return { ctx: ctx, W: W };
+  }
+  function polar(cv, fn, color, scale) {
+    var s = setup(cv), ctx = s.ctx, W = s.W, cx = W / 2, cy = W / 2, R = W / 2 - 14;
+    var rule = tok("--rule"), muted = tok("--muted"), neg = tok("--neg");
+    ctx.lineWidth = 1; ctx.strokeStyle = rule; ctx.fillStyle = muted; ctx.font = "10px " + tok("--font-data");
+    [0.5, 1].forEach(function (k) { ctx.beginPath(); ctx.arc(cx, cy, R * k, 0, 7); ctx.stroke(); });
+    for (var a = 0; a < 360; a += 45) { var r = a * Math.PI / 180; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + R * Math.sin(r), cy - R * Math.cos(r)); ctx.stroke(); }
+    ctx.textAlign = "center"; ctx.fillText("0°", cx, cy - R - 3 + 0); ctx.fillText("180°", cx, cy + R + 11);
+    var pts = [];
+    for (var j = 0; j <= 360; j++) { var t = j * Math.PI / 180, v = fn(t) / scale; pts.push([t, v]); }
+    function path(close) {
+      ctx.beginPath();
+      pts.forEach(function (p, i) { var rr = R * Math.abs(p[1]), x = cx + rr * Math.sin(p[0]), y = cy - rr * Math.cos(p[0]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      if (close) ctx.closePath();
+    }
+    path(true); ctx.globalAlpha = 0.14; ctx.fillStyle = color; ctx.fill(); ctx.globalAlpha = 1;
+    // trazo: positivo sólido, negativo punteado
+    ctx.lineWidth = 2.2;
+    for (var i = 1; i < pts.length; i++) {
+      var p0 = pts[i - 1], p1 = pts[i], negv = (p0[1] + p1[1]) / 2 < -1e-6;
+      ctx.beginPath(); ctx.setLineDash(negv ? [4, 3] : []); ctx.strokeStyle = negv ? neg : color;
+      [p0, p1].forEach(function (p, k) { var rr = R * Math.abs(p[1]), x = cx + rr * Math.sin(p[0]), y = cy - rr * Math.cos(p[0]); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+
+  function draw() {
+    var b = +$("beta").value, mode = $("mode").value, f = freq();
+    $("f-wrap").hidden = mode !== "exacto";
+    $("sec-desc").hidden = mode !== "ideal";
+    $("beta-o").textContent = fmt(b);
+    $("f-o").textContent = fmtF(f);
+    document.querySelectorAll(".presets button").forEach(function (bt) { bt.setAttribute("aria-pressed", Math.abs(+bt.dataset.b - b) < 0.005 ? "true" : "false"); });
+    $("eq").innerHTML = "<b style='color:var(--y)'>y</b> = <b style='color:var(--cf)'>c_F</b> − <b>" + fmt(b) + "</b>·<b style='color:var(--cb)'>c_B</b>";
+    $("t-cb").textContent = "β·c_B = " + fmt(b) + "·c_B";
+    $("t-y").textContent = "y = c_F − β·c_B";
+
+    var sc = norm(mode, f);
+    var g = function (key) { return function (t) { return parts(t, mode, f, b)[key]; }; };
+    polar($("p-cf"), g("cf"), tok("--cf"), sc);
+    polar($("p-cb"), function (t) { return b * parts(t, mode, f, b).cb; }, tok("--cb"), sc);
+    polar($("p-y"), g("y"), tok("--y"), sc);
+
+    var N = 720, mn = Infinity, mnT = 0, den = 0, ymax = 0, i;
+    for (i = 0; i <= N; i++) {
+      var th = Math.PI * i / N, v = Math.abs(parts(th, mode, f, b).y);
+      ymax = Math.max(ymax, v);
+      if (v < mn) { mn = v; mnT = th; }
+      den += ((i === 0 || i === N) ? 0.5 : 1) * v * v * Math.sin(th) * (Math.PI / N);
+    }
+    den *= 0.5;
+    var front = Math.abs(parts(0, mode, f, b).y), side = Math.abs(parts(Math.PI / 2, mode, f, b).y), back = Math.abs(parts(Math.PI, mode, f, b).y);
+    var db = function (x) { return x < 1e-6 ? "−∞" : fmt(20 * Math.log10(x / Math.max(front, 1e-9)), 1) + " dB"; };
+    var alpha = (1 - b) / 2;
+    $("r-f").textContent = "0 dB";
+    $("r-s").textContent = front < 1e-6 ? "—" : db(side);
+    $("r-b").textContent = front < 1e-6 ? "—" : db(back);
+    $("r-n").textContent = mn / Math.max(ymax, 1e-9) < 0.05 ? fmt(mnT * 180 / Math.PI, 0) + "°" : "sin nulo";
+    $("r-df").textContent = front < 1e-6 ? "—" : fmt(10 * Math.log10(front * front / den), 1) + " dB";
+    var nombre = b < 0.02 ? "Cardioide" : Math.abs(b - 0.27) < 0.03 ? "Supercardioide" : Math.abs(b - 0.5) < 0.03 ? "Hipercardioide" : b > 0.98 ? "Dipolo" : "Patrón intermedio";
+    $("s-y").textContent = nombre + (mode === "ideal" ? " (α = " + fmt(alpha) + " de omni)" : " a " + fmtF(f));
+    $("s-y2").textContent = nombre;
+
+    if (mode === "ideal") {
+      $("t-om").textContent = "(1−β)/2 = " + fmt(alpha) + " × omni";
+      $("t-f8").textContent = "(1+β)/2 = " + fmt((1 + b) / 2) + " × figura-8";
+      polar($("p-om"), function () { return alpha; }, tok("--cf"), 1);
+      polar($("p-f8"), function (t) { return (1 + b) / 2 * Math.cos(t); }, tok("--cb"), 1);
+      polar($("p-y2"), g("y"), tok("--y"), 1);
+    }
+  }
+
+  document.querySelectorAll(".presets button").forEach(function (bt) {
+    bt.addEventListener("click", function () { $("beta").value = bt.dataset.b; draw(); });
+  });
+  ["beta", "mode", "f"].forEach(function (id) { $(id).addEventListener("input", draw); });
+  window.addEventListener("resize", draw);
+  if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+  draw();
+})();
+</script>
+</body>
+</html>
