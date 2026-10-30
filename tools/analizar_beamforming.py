@@ -39,17 +39,24 @@ def nivel_db(x, sos):
 
 
 def retardo_por_banda(l, r):
-    """Retardo de R respecto de L (en muestras, + = R llega despues), desde la fase del espectro cruzado.
-    Con d = 21,4 mm: fuente sobre el eje del lado de L = +1, de costado = 0, del lado de R = -1."""
-    f, pxy = csd(l, r, fs=FS, nperseg=1024)        # conj(L)*R: fase = -w*retardo
-    _, pxx = welch(l, fs=FS, nperseg=1024)
-    _, pyy = welch(r, fs=FS, nperseg=1024)
-    print("Retardo R vs L por banda (coherencia < 0,8: el dato no es confiable):")
-    for f0 in (250, 500, 1000, 2000):
-        k = np.argmin(np.abs(f - f0))
-        coh = np.abs(pxy[k]) ** 2 / (pxx[k] * pyy[k])
-        ret = -np.angle(pxy[k]) / (2 * np.pi * f[k]) * FS
-        print(f"  {f0:5d} Hz: {ret:+.2f} muestras (coherencia {coh:.2f})")
+    """Retardo de R respecto de L (en muestras, + = R llega despues). En cada banda ajusta la pendiente
+    de la fase del espectro cruzado (fase = -w*retardo), ponderada por coherencia, solo con bins de
+    coherencia > 0,5. Con d = 21,4 mm: fuente sobre el eje del lado de L = +1, de costado = 0, del lado
+    de R = -1 (mas el corrimiento electrico). Un retardo plano y entero en todas las bandas es digital."""
+    f, pxy = csd(l, r, fs=FS, nperseg=2048)        # conj(L)*R
+    _, pxx = welch(l, fs=FS, nperseg=2048)
+    _, pyy = welch(r, fs=FS, nperseg=2048)
+    coh = np.abs(pxy) ** 2 / (pxx * pyy + 1e-30)
+    print("Retardo R vs L por banda (pendiente de fase):")
+    for lo, hi in ((200, 500), (500, 1000), (1000, 2000), (2000, 4000), (4000, 7000)):
+        m = (f >= lo) & (f < hi) & (coh > 0.5)
+        if m.sum() < 4:
+            print(f"  {lo:4d}-{hi:4d} Hz: sin datos (coherencia baja)")
+            continue
+        fase = np.unwrap(np.angle(pxy[m]))
+        w, om = coh[m], 2 * np.pi * f[m]
+        ret = -np.sum(w * fase * om) / np.sum(w * om ** 2) * FS
+        print(f"  {lo:4d}-{hi:4d} Hz: {ret:+.2f} muestras ({m.sum()} bins)")
 
 
 def main():

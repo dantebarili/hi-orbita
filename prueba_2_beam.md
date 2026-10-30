@@ -12,9 +12,9 @@ Rama `prueba-beamforming` (sin commitear). Diseño: hipercardioide diferencial e
 ## Resultados
 - El firmware coincide con la referencia (≤ 1 LSB) y el bus anda: sin el SD del mic R, el canal R da 0.
 - Son dos mics independientes (coherencia en 5–7,5 kHz de 0,05–0,12) y su ganancia es pareja (L − R ≈ 0 dB).
-- **No hay directividad:** el retardo R vs L no cambia con la posición de la fuente.
-- Desde arriba, con pines originales contra intercambiados (tomas 3 y 8): **corrimiento eléctrico ≈ −0,5 a −0,8 muestras** y acústico ≈ −0,4 (fuente descentrada). Es tentativo: el montaje colgante se mueve al tocar los cables.
-- Hipótesis: cada INMP441 muestrea en su mitad del período de WS, lo que da ~0,5 muestras entre slots. Sin confirmar: el datasheet no lo dice.
+- **Corrimiento eléctrico de 1 muestra entera (R adelantado).** Re-medido con pendiente de fase y GCC-PHAT: 4 tomas dan −1,00 ± 0,05, plano de 200 Hz a 7 kHz (retardo digital, no acústico). Las tomas 6–8 (−0,4 a −1,3) suman una parte acústica de ±0,5. El script viejo medía en 4 frecuencias sueltas y no lo separaba.
+- **No hay directividad** en frente contra costado (`toma_bf_1` −0,96, `toma_bf_2` −1,01): la parte acústica esperada (~1 muestra) no aparece en esas dos tomas. Causa sin confirmar (montaje o posición de la fuente).
+- Descartado como causa principal: que cada mic muestree en su mitad de WS (daría 0,5). Detalle en `reports/Corrimiento L R en INMP441.md`.
 
 ## Errores de la prueba
 - El script avisaba "Grabando" recién al terminar la toma, y varias tomas con voz quedaron vacías. Ya está corregido en `orbita_serial.py`.
@@ -23,7 +23,8 @@ Rama `prueba-beamforming` (sin commitear). Diseño: hipercardioide diferencial e
 ## Próximo
 1. Montaje rígido: plano, a 21,4 mm, lejos de superficies.
 2. Desde arriba, con sonido continuo: un par de tomas con pines originales e intercambiados, sin mover los mics.
-3. Si se confirma el corrimiento, compensarlo (retardo fraccionario fijo o separación física) y repetir frente/costado.
+3. Toma a 32 kHz: 1 muestra = corrimiento de frame, 2 muestras = de tiempo.
+4. Compensar retrasando R una muestra entera y repetir frente/costado.
 
 ## Para la PCB
 - SD necesita 100 kΩ a GND (INMP441 Fig. 7, p. 11). Hoy no figura en `orbita_pinout.md`.
