@@ -24,7 +24,7 @@ Rama `prueba-beamforming` (sin commitear). Diseño: hipercardioide diferencial e
 1. Montaje rígido: plano, a 21,4 mm, lejos de superficies.
 2. Desde arriba, con sonido continuo: un par de tomas con pines originales e intercambiados, sin mover los mics.
 3. Toma a 32 kHz: 1 muestra = corrimiento de frame, 2 muestras = de tiempo. Cambiar `ORBITA_SAMPLE_RATE_HZ` en `audio_capture.h` (la toma pasa a 2,56 s; el pasaaltos queda en 140 Hz, igual en los dos canales: no afecta el retardo). El script toma la fs del WAV. Volver a 16000 después.
-   Opcional: `ws_pol = true` (pares R[n], L[n+1], canales invertidos en el WAV). Si da ~0, el mic R entrega la muestra un frame más nueva.
+   Opcional: `ws_pol = true` (pares R[n], L[n+1]: corre la medición +1, de −1 a ~0, sea cual sea la causa; canales invertidos en el WAV). Chequea que el driver haga lo documentado; no diagnostica la causa (eso lo hace la toma a 32 kHz).
 4. Compensar retrasando R una muestra entera y repetir frente/costado.
 
 ## Para la PCB
