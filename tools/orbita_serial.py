@@ -132,12 +132,15 @@ def read_firmware_summary(ser_data: serial.Serial, ser_cmd: serial.Serial) -> No
 def record(ser_cmd: serial.Serial, ser_data: serial.Serial, out_dir: Path, prefix: str) -> None:
     ser_cmd.reset_input_buffer()
     ser_cmd.write(b"g")
+    # La toma arranca con la 'g'. En la prueba de beamforming el aviso WAV_ON_UART0 llega recien
+    # al terminar de grabar (5,12 s): hay que hablar desde ahora, no cuando aparezca "Grabando".
+    print(">>> GRABANDO: habla ahora (~5 s) <<<")
 
     if not wait_for_marker(ser_cmd):
         print("El firmware no respondio con WAV_ON_UART0. Se cancela.")
         return
 
-    print("Grabando, buscando el header...")
+    print("Recibiendo el audio (en la prueba de beamforming la grabacion ya termino)...")
     if not find_marker(ser_data, b"RIFF"):
         print("No aparecio 'RIFF' en el puerto de datos (timeout). Se descarta.")
         return

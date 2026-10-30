@@ -21,6 +21,8 @@ tools/ruido_labo/
 
 # Tomas y analisis de prueba del frente Audio (WAV/PNG locales)
 tools/prueba_*/
+# (tambien si el script se corre desde tools/ y crea tools/tools/prueba_*/)
+**/prueba_*/
 
 # Estado de la interfaz de Obsidian (cambia en cada maquina)
 orbita-obsidian/.obsidian/workspace.json
