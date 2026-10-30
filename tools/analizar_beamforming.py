@@ -17,7 +17,7 @@ import numpy as np
 import soundfile as sf
 from scipy.signal import butter, csd, lfilter, sosfilt, welch
 
-FS = 16000
+FS = 16000   # se pisa con la del WAV en main()
 
 
 def hipercardioide(x1, x2, beta, fc):
@@ -68,9 +68,10 @@ def main():
     p.add_argument("--ganancia-atras", type=float, default=1.0)
     a = p.parse_args()
 
-    datos, fs = sf.read(a.wav, dtype="int16")
-    if fs != FS or datos.ndim != 2 or datos.shape[1] != 3:
-        raise SystemExit(f"Se esperaba WAV de 3 canales a {FS} Hz; vino {datos.shape} a {fs} Hz")
+    global FS
+    datos, FS = sf.read(a.wav, dtype="int16")      # FS sale del WAV: 16 kHz normal, 32 kHz en la prueba del corrimiento
+    if datos.ndim != 2 or datos.shape[1] != 3:
+        raise SystemExit(f"Se esperaba WAV de 3 canales; vino {datos.shape}")
     l, r, bf = (datos[:, k].astype(np.float64) for k in range(3))
     x1, x2 = (l, r) if a.adelante == "L" else (r, l)
     x2 = x2 * a.ganancia_atras
