@@ -53,7 +53,7 @@ Objetivo: pipeline usable y demostrable a inversores con la placa actual (2 mics
 
 ## Deuda y producción (no bloquea el alfa)
 
-- **Limpiar ramas y stashes (desde la PC):** borrar `integración`, `dante` y `juani` (local y remota) y `claude/plan-agc-aec-alfa`: no tienen nada que no esté en `prototipo-alfa`. `wakeword-banco` queda hasta el merge. `main` no se borra: adelantarla a `prototipo-alfa` o cambiar la rama por defecto en GitHub. Stashes: `pipeline-a14-revision` y `juani` son viejos; el de ElevenLabs (`local-pre-pull-eleven-viejo`, 21/10) se deja hasta revisar la otra compu (¿el pasa banda quedó sin pushear?).
+- **Ramas (31/10, hecho):** quedan `main` (= `prototipo-alfa-wakeword`, la base) y `prueba-beamforming`; se borraron `integración`, `dante`, `juani`, `prototipo-alfa` y `claude/plan-agc-aec-alfa`. **Falta limpiar stashes (desde la PC):** `pipeline-a14-revision` y `juani` son viejos; el de ElevenLabs (`local-pre-pull-eleven-viejo`, 21/10) se deja hasta revisar la otra compu (¿el pasa banda quedó sin pushear?).
 - Anotar en `orbita-obsidian/arquitectura.md` §2 la pila de `playback`; verificar el MAX98357A contra su datasheet (`SD`, `GAIN`); A11 (ICS-43434 a 16 kHz).
 - A13: borrar `wav_pack_chunk_24bit`, contadores `volatile` → `stdatomic`. A16: `#define` nombrados para stack/prioridad/core y liberar `afe_config`.
 - Decisiones abiertas con Juani: ring in lleno (descartar el más viejo), capacidad del ring out (≈ 32,8 s vs. ~60 s), VAD como compuerta de envío (política de privacidad con el cliente), cómo abrir una conversación con un LLM.
