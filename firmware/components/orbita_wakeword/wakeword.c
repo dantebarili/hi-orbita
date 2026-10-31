@@ -21,9 +21,10 @@ static const char *TAG = "wakeword";
 extern const uint8_t s_tflite_ini[] asm("_binary_orbita_tflite_start");
 extern const uint8_t s_tflite_fin[] asm("_binary_orbita_tflite_end");
 #define WW_NOMBRE      "orbita"
-#define WW_CUTOFF      0.40f       // orbita-dataset/docs/resultados_v0.md: streaming + promedio de 5, 90,3 % detecta y
-                                   // 0 activaciones en 5,3 h (aparecen bajo 0,29). Voces TTS: ajustar en placa
-                                   // (si se activa solo, subir de a 0,1)
+#define WW_CUTOFF      0.95f       // Modelo: paso 45.000 int8 (last_weights del v0). orbita-dataset/docs/resultados_v0.md,
+                                   // "Decision": 15 de 30 grabaciones reales y 0,6-1,1 falsas/h (habla, musica, ruido).
+                                   // Prototipo en ambiente controlado. Si se pierden Orbitas: 0,9. No bajar de ~0,8: casi
+                                   // no suma deteccion y duplica las falsas. Volver al 11.000: 0,5
 #define WW_VENTANA     5
 #define WW_ARENA       50000
 

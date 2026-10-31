@@ -1,6 +1,6 @@
 # Wake word en el chip
 
-Modelo microWakeWord `orbita.tflite`, siempre activo en el modo WebSocket (desde el 29/10, rama `prototipo-alfa-wakeword`). Cada detección abre una conversación (ver `protocolo_comunicacion.md`, "Política de captura"). Se validó primero con `okay_nabu` en el banco `wakeword-banco` (ya borrado del firmware: recuperar de git, commit `ad1c8e3`). El entrenamiento está en `orbita-dataset/docs/entrenamiento.md`.
+Modelo microWakeWord `orbita.tflite` = paso 45.000 del v0 en int8, con cutoff 0,95 (desde el 31/10; antes, el 11.000 con 0,4). Por qué y alternativas: `orbita-dataset/docs/resultados_v0.md`, "Qué iteración conviene"; se genera con `scripts/evaluacion/robustez/cuantizar_int8.py`. Siempre activo en el modo WebSocket (desde el 29/10, rama `prototipo-alfa-wakeword`). Cada detección abre una conversación (ver `protocolo_comunicacion.md`, "Política de captura"). Se validó primero con `okay_nabu` en el banco `wakeword-banco` (ya borrado del firmware: recuperar de git, commit `ad1c8e3`). El entrenamiento está en `orbita-dataset/docs/entrenamiento.md`.
 
 ## Concepto
 El modelo no escucha audio: mira un **espectrograma**. Si el chip lo arma distinto que el notebook, aunque sea un poco, el modelo falla **sin dar error**. Por eso el chip usa el **mismo código C** del entrenamiento (`esp-micro-speech-features`, fork del microfrontend de TFLM que usa `pymicro-features`) y se verifica número por número.
@@ -14,7 +14,7 @@ cada ventana: Hann → FFT 512 → 40 bandas mel (125-7500 Hz) → energía → 
   ▼
 int8 con la escala del modelo ─► de a 3 columnas (30 ms nuevos) ─► modelo ─► probabilidad 0-255
   ▼
-promedio de las últimas 5 > cutoff (0,4) ─► DETECCIÓN
+promedio de las últimas 5 > cutoff (0,95) ─► DETECCIÓN
 ```
 
 **Dos ventanas distintas:**
