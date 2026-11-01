@@ -12,7 +12,7 @@ Un solo lugar con todos los pines y dónde están en el código. Es la fuente de
 | 15 | 8 | I2S parlante: BCLK | En uso (PCB, 16/10) | `ORBITA_PLAY_BCLK_GPIO`, `orbita_playback.h` | BCLK del MAX98357A |
 | 7 | 7 | I2S parlante: WS | En uso (PCB, 16/10) | `ORBITA_PLAY_WS_GPIO`, `orbita_playback.h` | LRC del MAX98357A |
 | 16 | 9 | I2S parlante: DOUT | En uso (PCB, 16/10) | `ORBITA_PLAY_DOUT_GPIO`, `orbita_playback.h` | DIN del MAX98357A |
-| 17 | 10 | LED aro WS2812: DIN | Propuesto | — | DIN del primer LED (330 Ω en serie; DO del último al aire) |
+| 17 | 10 | LED aro WS2812: DIN | En uso (31/10, RMT) | `ORBITA_LED_GPIO`, `orbita_led.h` | DIN del primer LED (330 Ω en serie; DO del último al aire). Por defecto es U1TXD: si la UART1 se usa (¿NFC?), mandarla a otros pines por la matriz |
 | 19 / 20 | 13 / 14 | USB-Serial-JTAG (DM / DP) | Reservado | — | Comandos y datos (`tools/orbita_serial.py`) |
 | 43 / 44 | 37 / 36 | UART0 (TX / RX) | Reservado | — | Logs (`idf.py monitor`) |
 

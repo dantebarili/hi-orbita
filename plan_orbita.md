@@ -38,7 +38,7 @@ Objetivo: pipeline usable y demostrable a inversores con la placa actual (2 mics
 - [ ] Pruebas en placa: corte corto de Wi-Fi (~10 s) y corte largo (> 40 s) sin watchdog.
 
 **Juani**
-- [ ] **LEDs**: LED de conversación (se enciende con `orbita`, se apaga con `conversation_end`); fijar el GPIO con `pin-map-check`.
+- [ ] **LEDs**: firmware hecho por Dante el 31/10 (`orbita_led` + tabla de estados en `audio_ws_led.c`, GPIO17, tope 350 mA). Falta probarlo en placa con el aro a 5 V externos y medir la corriente.
 - [ ] **NFC**: integración y pin(es) en el pinout.
 - [ ] **Servidor**: `ready` con `last_index` y reenvío (mitad servidor de A6); medir velocidad real del downlink y prebuffer; cliente simulado de la placa; simulación de la conversación (LLM todavía no disponible).
 

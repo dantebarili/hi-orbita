@@ -4,6 +4,7 @@
 // la del WebSocket (fin, actividad) y la de esp_timer (timeout). El estado va protegido con un spinlock.
 
 #include "audio_ws_conversacion.h"
+#include "audio_ws_led.h"
 #include "audio_sink.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -32,6 +33,7 @@ static void cerrar(const char *motivo)
     if (!estaba) return;
     orbita_sink_cerrar();
     (void)esp_timer_stop(s_timer);
+    audio_ws_led_conversacion(false);
     ESP_LOGI(TAG, "Fin de la conversacion %u (%s): se deja de mandar audio", (unsigned)s_conversaciones, motivo);
 }
 
@@ -61,6 +63,7 @@ void audio_ws_conversacion_on_wake(void)
     s_conversaciones++;
     orbita_sink_abrir(AUDIO_WS_PREROLL_SLOTS);
     reiniciar_timeout();
+    audio_ws_led_conversacion(true);
     ESP_LOGI(TAG, "Conversacion %u: se manda el pre-roll y despues en tiempo real", (unsigned)s_conversaciones);
 }
 
