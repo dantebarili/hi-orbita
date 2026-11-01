@@ -12,7 +12,8 @@ Un solo lugar con todos los pines y dónde están en el código. Es la fuente de
 | 15 | 8 | I2S parlante: BCLK | En uso (PCB, 16/10) | `ORBITA_PLAY_BCLK_GPIO`, `orbita_playback.h` | BCLK del MAX98357A |
 | 7 | 7 | I2S parlante: WS | En uso (PCB, 16/10) | `ORBITA_PLAY_WS_GPIO`, `orbita_playback.h` | LRC del MAX98357A |
 | 16 | 9 | I2S parlante: DOUT | En uso (PCB, 16/10) | `ORBITA_PLAY_DOUT_GPIO`, `orbita_playback.h` | DIN del MAX98357A |
-| 17 | 10 | LED aro WS2812: DIN | En uso (31/10, RMT) | `ORBITA_LED_GPIO`, `orbita_led.h` | DIN del primer LED (330 Ω en serie; DO del último al aire). Por defecto es U1TXD: si la UART1 se usa (¿NFC?), mandarla a otros pines por la matriz |
+| 1 | 39 | LED aro WS2812: DIN | Propuesto (01/11, RMT; antes GPIO17) | `ORBITA_LED_GPIO`, `orbita_led.h` | DIN del primer LED (330 Ω en serie; DO del último al aire). Es ADC1_CH0: se pierde ese canal analógico |
+| 17 / 18 / 21 | 10 / 11 / 23 | NFC | Propuesto (01/11) | — | Lector NFC. Interfaz sin definir: alcanzan para I2C o UART, no para SPI (4 líneas + IRQ/RST) |
 | 19 / 20 | 13 / 14 | USB-Serial-JTAG (DM / DP) | Reservado | — | Comandos y datos (`tools/orbita_serial.py`) |
 | 43 / 44 | 37 / 36 | UART0 (TX / RX) | Reservado | — | Logs (`idf.py monitor`) |
 
@@ -29,7 +30,7 @@ Controladores I2S: mics en `I2S_NUM_0`, parlante en `I2S_NUM_1` (el S3 tiene 2).
 
 ## Sin pin todavía
 
-NFC (interfaz sin definir: SPI / I2C / UART), botón de mute, microSD (SPI), botones reset/boot, `SD_MODE` del MAX98357A (GPIO directo, sin pull-up al reset; ver `orbita-pcb/orbita_pcb_ruteo.md` §1.8).
+Botón de mute, microSD (SPI), botones reset/boot, `SD_MODE` del MAX98357A (GPIO directo, sin pull-up al reset; ver `orbita-pcb/orbita_pcb_ruteo.md` §1.8).
 
 ## Notas
 

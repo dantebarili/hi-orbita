@@ -12,7 +12,7 @@
 #include "esp_err.h"
 
 /* ARO LED (datos clave del modulo)
- *  - Pin:        GPIO17 (pad 10 del WROOM-1), con pin-map-check el 31/10. 330 ohm en serie; en la PCB, buffer
+ *  - Pin:        GPIO1 (pad 39 del WROOM-1), movido el 01/11 (17/18/21 quedan para el NFC). 330 ohm en serie; en la PCB, buffer
  *                a 5 V (74AHCT1G125): el WS2812 a 5 V espera un "1" de ~3,5 V y el S3 da 3,3 V (sin verificar
  *                contra el datasheet del LED).
  *  - Senal:      RMT a 10 MHz con DMA, buffer de 1024 simbolos (~4 KB de RAM interna): la trama entera sale de
@@ -20,7 +20,7 @@
  *  - Tarea:      "led", core 0, prioridad 2. Un cuadro cada 20 ms mientras anima; quieta si el estado es fijo.
  *  - Corriente:  estimada en cada cuadro como 24 x (suma de canales x 20 mA + 1 mA). Si pasa el tope, baja todo
  *                el aro en proporcion. Blanco pleno sin tope = ~1,4 A. */
-#define ORBITA_LED_GPIO        17
+#define ORBITA_LED_GPIO        1
 #define ORBITA_LED_CANTIDAD    24
 #define ORBITA_LED_MAX_MA      350   // tope de corriente del aro (orbita-pcb: presupuesto del 5 V)
 #define ORBITA_LED_MA_CANAL    20    // por canal a pleno; dato de la publicacion del aro, sin datasheet

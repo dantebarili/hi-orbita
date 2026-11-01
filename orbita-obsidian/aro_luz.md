@@ -1,6 +1,6 @@
 # Aro de luz (24 x WS2812) — cómo funciona el firmware
 
-Código: `firmware/components/orbita_led/` (dibuja) y `firmware/components/orbita_audio_ws/audio_ws_led.c` (decide el estado). Pin: GPIO17 (`orbita_pinout.md`). Tarea `led`: `arquitectura.md`. Colores elegidos con el artifact "Aro LED de Órbita" (31/10). Estado: **sin probar en placa**.
+Código: `firmware/components/orbita_led/` (dibuja) y `firmware/components/orbita_audio_ws/audio_ws_led.c` (decide el estado). Pin: GPIO1 (`orbita_pinout.md`). Tarea `led`: `arquitectura.md`. Colores elegidos con el artifact "Aro LED de Órbita" (31/10). Estado: **sin probar en placa**.
 
 ## Capas
 
@@ -14,7 +14,7 @@ wake word / WebSocket / parlante / timer de red      ← "pasó algo"
    orbita_led.c     → CÓMO SE VE (animación, gamma, corriente)
               │  led_strip_refresh()
               ▼
-   RMT + DMA → GPIO17 → 24 x WS2812
+   RMT + DMA → GPIO1 → 24 x WS2812
 ```
 
 `orbita_led` no sabe de conversaciones; `audio_ws_led.c` no sabe del RMT. Si cambia el LED (otro modelo, un RGB en la PCB) se toca solo la capa de abajo.
@@ -22,7 +22,7 @@ wake word / WebSocket / parlante / timer de red      ← "pasó algo"
 ## A. `orbita_led.h` — interfaz
 
 ```c
-#define ORBITA_LED_GPIO        17
+#define ORBITA_LED_GPIO        1
 #define ORBITA_LED_CANTIDAD    24
 #define ORBITA_LED_MAX_MA      350   // tope de corriente del aro
 #define ORBITA_LED_MA_CANAL    20    // por canal a pleno; sin datasheet
