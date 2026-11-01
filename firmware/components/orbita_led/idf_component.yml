@@ -1,0 +1,4 @@
+# Driver oficial de Espressif para tiras WS2812: arma la trama con el periferico RMT (los dos I2S ya
+# estan ocupados con los mics y el parlante).
+dependencies:
+  espressif/led_strip: "~3.0.0"

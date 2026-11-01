@@ -116,6 +116,7 @@ Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). 
 | `app_main` | Arranque | 0 | 1 | 8 KB | sin medir |
 | `envio` (`test.c`, laboratorio) | WAV por UART0 | 0 | 5 | 4 KB | sin medir |
 | `orbita_playback` (S7) | Ring de salida → I2S del parlante (validado con red el 15/10) | 0 | 6 | 4 KB | sin medir |
+| `led` (31/10) | Aro WS2812 por RMT con DMA (buffer ~4 KB interna); cuadros de 20 ms solo mientras anima. Detalle: `aro_luz.md` | 0 | 2 | 3 KB | sin medir |
 
 **REPARTO DE CORES:**
 - core 0: main, wifi, envio (sink) y recepcion (parlante, sink)

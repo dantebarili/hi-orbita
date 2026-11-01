@@ -7,6 +7,7 @@
 #include "orbita_ws.h"
 #include "pipeline.h"
 #include "audio_ws_conversacion.h"
+#include "audio_ws_led.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -117,10 +118,13 @@ static void on_playback_event(orbita_play_event_t event, uint32_t token, void *c
 {
     (void)ctx;
     // Sin AEC: mientras suena el parlante no entra audio a ningun ring (ni wake word ni socket).
-    if (event == ORBITA_PLAY_EV_STARTED) orbita_pipeline_pausar(true);
-    else if (event == ORBITA_PLAY_EV_DONE || event == ORBITA_PLAY_EV_STOPPED) {
+    if (event == ORBITA_PLAY_EV_STARTED) {
+        orbita_pipeline_pausar(true);
+        audio_ws_led_hablando(true);
+    } else if (event == ORBITA_PLAY_EV_DONE || event == ORBITA_PLAY_EV_STOPPED) {
         orbita_pipeline_pausar(false);
         audio_ws_conversacion_actividad();    // el timeout cuenta desde que termino de sonar
+        audio_ws_led_hablando(false);
     }
 
     if (event == ORBITA_PLAY_EV_STARTED) {

@@ -13,6 +13,7 @@
 #include "audio_ws_sink.h"
 #include "audio_ws_playback.h"
 #include "audio_ws_conversacion.h"
+#include "audio_ws_led.h"
 #include "esp_heap_caps.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -63,6 +64,8 @@ void app_main(void)
     // Cada deteccion abre una conversacion: recien ahi se manda audio al servidor (pre-roll incluido).
     err = orbita_wakeword_start(audio_ws_conversacion_on_wake);
     if (err != ESP_OK) arranque_fallo("wakeword", err);
+    // Aro LED despues de la wake word (su arena va primero en RAM interna). Si falla, sigue sin indicador.
+    (void)audio_ws_led_init();
     err = orbita_audio_i2s_init();
     if (err != ESP_OK) arranque_fallo("I2S", err);
     // El ring del parlante (PSRAM) se reserva antes de que el pipeline/AFE asignen sus buffers.
