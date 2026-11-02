@@ -22,9 +22,12 @@
  *                el aro en proporcion. Blanco pleno sin tope = ~1,4 A. */
 #define ORBITA_LED_GPIO        1
 #define ORBITA_LED_CANTIDAD    24
-#define ORBITA_LED_MAX_MA      350   // tope de corriente del aro (orbita-pcb: presupuesto del 5 V)
+#define ORBITA_LED_MAX_MA      200   // tope de corriente del aro (orbita-pcb: presupuesto del 5 V). 01/11: 350 -> 100 -> 200.
+                                     // Los cortes eran el cable USB, no el aro; se sube de a poco probando
 #define ORBITA_LED_MA_CANAL    20    // por canal a pleno; dato de la publicacion del aro, sin datasheet
-#define ORBITA_LED_TOPE        153   // brillo maximo percibido, 0-255 (153 = 60 %); escala a todos los estados
+#define ORBITA_LED_TOPE        153   // brillo maximo percibido, 0-255 (153 = 60 %, el original). 01/11: se bajo a 20-30 %
+                                     // por los cortes (eran el cable USB) y con la gamma el reposo quedaba en 0. El tope
+                                     // de corriente (ORBITA_LED_MAX_MA) es el que protege la alimentacion
 #define ORBITA_LED_PERIODO_MS  1300  // respiracion y latido
 #define ORBITA_LED_PISO        35    // % del brillo del estado en el punto mas bajo de la respiracion/latido
 #define ORBITA_LED_FUNDIDO_MS  300   // transicion entre estados

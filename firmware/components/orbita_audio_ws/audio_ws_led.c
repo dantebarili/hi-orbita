@@ -24,12 +24,15 @@ typedef struct {
     orbita_led_patron_t patron;
 } estilo_t;
 
-// TABLA DE COLORES (31/10, elegida con la simulacion "Aro LED de Orbita").
+// TABLA DE COLORES (31/10, elegida con la simulacion "Aro LED de Orbita"; brillos subidos el 01/11).
+// Con la gamma 2,2 de orbita_led, el reposo al 12 % salia RGB (0,0,1) = apagado, y el ambar al 45 % casi no se veia a
+// traves de la pieza impresa. Valores al aro con TOPE 60 % y 200 mA: reposo (1,5,10); ambar pulso (66,26,1);
+// escuchando hasta (8,29,57); hablando (19,21,53).
 static const estilo_t ESTILOS[N_ESTADOS] = {
-    [REPOSO]     = { {0x64, 0xB5, 0xF6},  31, ORBITA_LED_FIJO    },   // celeste, 12 %
+    [REPOSO]     = { {0x64, 0xB5, 0xF6}, 100, ORBITA_LED_FIJO    },   // celeste, 39 % (era 12 %): tenue pero visible
     [ESCUCHANDO] = { {0x64, 0xB5, 0xF6}, 255, ORBITA_LED_RESPIRA },   // el mismo celeste, pleno
     [HABLANDO]   = { {0x9F, 0xA8, 0xFF}, 255, ORBITA_LED_FIJO    },   // lavanda
-    [SIN_RED]    = { {0xFF, 0xA7, 0x26}, 115, ORBITA_LED_LATIDO  },   // ambar, 45 %
+    [SIN_RED]    = { {0xFF, 0xA7, 0x26}, 255, ORBITA_LED_LATIDO  },   // ambar, pleno (era 45 %)
 };
 static const char *NOMBRES[N_ESTADOS] = { "reposo", "escuchando", "hablando", "sin red" };
 
