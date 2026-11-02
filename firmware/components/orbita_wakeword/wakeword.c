@@ -21,9 +21,9 @@ static const char *TAG = "wakeword";
 extern const uint8_t s_tflite_ini[] asm("_binary_orbita_tflite_start");
 extern const uint8_t s_tflite_fin[] asm("_binary_orbita_tflite_end");
 #define WW_NOMBRE      "orbita"
-#define WW_CUTOFF      0.80f       // Modelo: paso 45.000 int8 (last_weights del v0). orbita-dataset/docs/resultados_v0.md:
-                                   // 0,8 = codo en la simulacion de distancia, 1,7-2,7 falsas/h (habla, musica, ruido).
-                                   // Si molestan las falsas: 0,9 o 0,95 (0,6-1,4/h). Volver al 11.000: 0,5
+#define WW_CUTOFF      0.40f       // Modelo: paso 11.000 (vuelto el 01/11: el 45.000 con 0,8 no detectaba voces reales en
+                                   // placa). 0,4 a pedido: prioriza detectar aunque haya mas falsas. Si molestan: 0,5.
+                                   // El 45.000 sigue en orbita-dataset/dataset_FULL/modelos/orbita_45k_int8.tflite
 #define WW_VENTANA     5
 #define WW_ARENA       50000
 
