@@ -233,9 +233,9 @@ Hoy el servidor decide solo cuándo termina cada frase y la manda entera al STT 
 - **Solución:** el nivel se mide en la **banda de voz (150 a 3400 Hz)**, con un Butterworth pasa-banda de 4.º orden por flanco (`scipy`, `sosfilt` con estado entre paquetes). Ahí el fondo queda en ~30 a 120 y la voz en 500 a 1900 (SNR > 20 dB). **El filtro solo mide: al STT va el audio crudo.**
 - **Cómo decide** (bloques de 100 ms, RMS por bloque sobre la señal filtrada):
   - *Inicio:* 3 bloques seguidos sobre `max(2 × piso, 25)`; el piso es el percentil 20 de los últimos 20 s.
-  - *Fin:* 1,2 s seguidos bajo un umbral de cierre (`max(2,5 × piso, 35)`), distinto del de inicio (histéresis) para que el ruido de fondo no mantenga la frase abierta y las sílabas suaves no la corten.
+  - *Fin:* 0,8 s seguidos (era 1,2 s; bajado el 01/11) bajo un umbral de cierre (`max(2,5 × piso, 35)`), distinto del de inicio (histéresis) para que el ruido de fondo no mantenga la frase abierta y las sílabas suaves no la corten.
   - *Margen:* se agregan 0,5 s antes del inicio y 0,5 s después del último bloque con voz (el detector tarda 0,3 s en confirmar y las últimas sílabas son suaves). Son muestras que ya estaban en el buffer.
-- **Después de la respuesta:** no escucha hasta que (a) el ESP manda `play_done` (el firmware lo manda cuando termina de sonar) y (b) el audio **recibido** tiene 0,5 s seguidos de silencio en banda, con tope de 8 s. Se mide el silencio recibido y no un tiempo fijo porque el audio del mic llega atrasado respecto del parlante (red y rings): la cola de su propia voz sigue llegando después de `play_done`.
+- **Después de la respuesta:** vuelve a escuchar apenas llega `play_done` (`SETTLE_QUIET_S = 0` desde el 01/11). Antes exigía 0,5 s de silencio recibido: si contestabas enseguida, se reiniciaba y tu frase se descartaba (hasta 8 s). No hace falta porque el firmware no manda audio mientras suena el parlante ni 320 ms después (`PAUSA_COLA_CHUNKS`): el eco no llega al servidor.
 - **Al conectar:** la ESP acumula hasta 32 s mientras no hay servidor (S1) y los manda de golpe. El servidor descarta lo que llega más rápido que su duración, y como mínimo 5 s de reloj.
 
 ### 6.2 Pasa-altos en la captura (hecho 29/10, rama `prototipo-alfa-wakeword`)
@@ -249,7 +249,7 @@ Medida el 21/10 con ElevenLabs (STT Scribe, TTS `eleven_flash_v2_5`) y Gemini en
 
 | # | Etapa | Dónde | Tiempo | Notas |
 |---|---|---|---|---|
-| 1 | Silencio para cerrar la frase | servidor | **1,2 s** fijos (+ hasta 0,1 s del bloque) | `END_QUIET_BLOCKS`. Es la etapa más fácil de recortar. |
+| 1 | Silencio para cerrar la frase | servidor | **0,8 s** fijos (+ hasta 0,1 s del bloque; era 1,2 s) | `END_QUIET_BLOCKS`. Es la etapa más fácil de recortar. |
 | 2 | Audio del mic hasta el servidor | ESP + Wi-Fi | sin medir | Paquetes de hasta 128 ms + ring + red. Hace falta timestamp de envío (pendiente de Juani). |
 | 3 | STT (la frase entera, no streaming) | ElevenLabs | **0,95 s** (0,6 a 1,5) | Crece con la duración de la frase. Deepgram Nova-3 midió parecido (~0,9 s, prueba anterior). |
 | 4 | LLM | Gemini | **0,94 s** (0,8 a 2,4) | Con `gemini-3.5-flash` fue **9 s de mediana** (6 a 30 s, modelo saturado): no usarlo. `thinkingLevel: "minimal"`, sin razonamiento. |
@@ -257,12 +257,12 @@ Medida el 21/10 con ElevenLabs (STT Scribe, TTS `eleven_flash_v2_5`) y Gemini en
 | 6 | Envío del PLAY | servidor a ESP | **0,16 s** (0 a 2,9) | Sube con la duración de la respuesta (16 kHz, 16 bit = 32 KB/s) y con el estado del Wi-Fi. |
 | 7 | Prebuffer del parlante | ESP | **0,4 s** | `prebuffer_ms` acordado (S7). Más el DMA de salida de 120 ms. |
 | | **Subtotal medido (3 a 6)** | | **≈ 2,9 s** (`total_s`) | |
-| | **Total estimado (1 a 7)** | | **≈ 4,5 s + etapa 2** | 1,2 + 2,9 + 0,4. Sin medir de punta a punta con el ESP. |
+| | **Total estimado (1 a 7)** | | **≈ 4,1 s + etapa 2** | 0,8 + 2,9 + 0,4. Sin medir de punta a punta con el ESP. |
 
-Después de la respuesta, el servidor vuelve a escuchar a los ≈ 0,5 s de silencio recibido tras `play_done` (§6.1), más los 120 ms del DMA.
+Después de la respuesta, el servidor vuelve a escuchar apenas llega `play_done` (§6.1); el mic queda tapado 320 ms más en el firmware.
 
-**Dónde se puede recortar (nada de esto está hecho):**
-- *Silencio de cierre* de 1,2 s a ~0,8 s: ahorra ~0,4 s, a costa de más cortes entre palabras.
+**Dónde se puede recortar:**
+- *Silencio de cierre* de 1,2 s a 0,8 s: **hecho el 01/11**.
 - *STT en streaming* con fin de frase del proveedor: elimina la etapa 1 y gran parte de la 3 (~1,5 s o más), y es lo que más pesa. Cuesta conexión abierta, reconexión y manejar texto parcial.
 - *LLM y TTS en streaming por oración:* empezar a hablar con la primera frase mientras se genera el resto (~1 s).
 - *Prebuffer* de 0,4 s a 0,2 s: ahorra 0,2 s, con más riesgo de `underrun`.
