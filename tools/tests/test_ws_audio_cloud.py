@@ -68,11 +68,9 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
             record = json.loads(next(__import__("pathlib").Path(directory).glob("cloud_*.jsonl")).read_text())
             self.assertEqual(record["answer"], "respuesta hola orbita")
             self.assertAlmostEqual(record["utterance_seconds"], 2.1, delta=0.3)   # 1 s de voz + 0.5 s antes + 0.5 s después
-            # La cola del parlante que llega justo después (1 s de reloj) no dispara otro turno.
-            live(tone(0.5, 3000))
-            self.assertEqual(conv.state, "idle")
-            live(tone(1.5, 20))                          # silencio recibido: vuelve a escuchar
-            live(tone(1, 3000))                          # pasado el guard, una voz nueva sí se toma
+            # Sin espera de silencio tras la respuesta (SETTLE_QUIET_S = 0): el eco no llega porque el firmware tapa
+            # el mic mientras suena el parlante + 320 ms. Una voz apenas termina la respuesta se toma enseguida.
+            live(tone(1, 3000))
             self.assertEqual(conv.state, "capturing")
 
     def test_services_validate_config(self):

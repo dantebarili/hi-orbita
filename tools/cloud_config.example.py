@@ -17,7 +17,8 @@ ELEVENLABS_STT_MODEL = "scribe_v1"
 
 # --- Que modelo conversa ---
 LLM = "gemini"                      # "gemini" (gratis) o "claude" (pago)
-GEMINI_MODEL = "gemini-2.5-flash"   # si da 429/404, probar otro de https://ai.google.dev/gemini-api/docs/models
+GEMINI_MODEL = "gemini-3.5-flash-lite"   # 01/11: 0,8 s de mediana (el 3.1-flash-lite se saturaba: 4-13 s)
+GEMINI_RESPALDO = ["gemini-flash-lite-latest", "gemini-3.5-flash"]   # si el principal tarda > 6 s o da 429/503
 CLAUDE_MODEL = "claude-haiku-5-5"
 
 # --- Servidor y conversacion ---

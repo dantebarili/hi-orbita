@@ -16,7 +16,8 @@ from pathlib import Path
 
 import numpy as np
 import requests
-from scipy.signal import butter, sosfilt, sosfilt_zi
+from scipy.ndimage import minimum_filter1d
+from scipy.signal import butter, filtfilt, sosfilt, sosfilt_zi
 
 from ws_audio_speech import MAX_PLAY_SECONDS, SAMPLE_RATE
 
@@ -29,7 +30,8 @@ PREROLL_BLOCKS = 5                 # 0.5 s antes del inicio detectado: no comers
 TAIL_BLOCKS = 5                    # 0.5 s después del último bloque con voz: no comerse el final de la palabra
 BAND_SOS = butter(4, BAND_HZ, btype='bandpass', fs=SAMPLE_RATE, output='sos')
 ONSET_BLOCKS = 3                   # 0.3 s seguidos sobre el umbral = empezaste a hablar
-END_QUIET_BLOCKS = 12              # 1.2 s de silencio cierran la frase (con menos corta en las pausas entre palabras)
+END_QUIET_BLOCKS = 8               # 0.8 s de silencio cierran la frase (era 1.2 s, 01/11). Pausas normales entre palabras:
+                                   # 0.2-0.5 s; dudas ("eeh") hasta ~1 s. Si corta a mitad de frase, subir a 10
 MAX_UTTERANCE_SAMPLES = 15 * SAMPLE_RATE
 RING_SAMPLES = 20 * SAMPLE_RATE    # historial de audio recibido
 MIN_THRESHOLD = 25                 # RMS mínimo para empezar a oír voz (el mic crudo es muy bajo)
@@ -38,9 +40,48 @@ END_MIN_THRESHOLD = 35             # para cerrar la frase se exige silencio bajo
 END_NOISE_FACTOR = 2.5               # si no, el ruido de fondo la mantiene abierta
 POST_PLAY_GUARD_S = 0.0            # espera mínima tras play_done; hoy 0: manda el silencio recibido (SETTLE_QUIET_S), no un tiempo fijo
                                    # el audio llega atrasado respecto del mic, por eso se mide al llegar y no en muestras)
-SETTLE_QUIET_S = 0.5             # tras el PLAY no se vuelve a escuchar hasta recibir 0.5 s seguidos de silencio
+SETTLE_QUIET_S = 0.0               # silencio exigido tras el PLAY antes de volver a escuchar. Era 0.5: si hablabas enseguida
+                                   # se reiniciaba y se descartaba tu frase (hasta SETTLE_MAX_S). El firmware ya tapa el mic
+                                   # mientras suena + 320 ms de cola (PAUSA_COLA_CHUNKS), asi que el eco no llega (01/11).
 SETTLE_MAX_S = 8                   # tope por si el silencio no llega
 HISTORY_MESSAGES = 12
+# --- Audio de la respuesta antes de mandarlo al parlante (01/11: el parlante saturaba con la voz cruda) ---
+# Pasaaltos (el parlante chico no da graves pero gasta excursion en ellos) + limitador de picos, compensando
+# para que el nivel promedio (RMS, lo que se oye como volumen) quede igual que el original x PLAY_GAIN_DB.
+PLAY_GAIN_DB = 0.0                 # volumen promedio extra. +3 dB sin limitador saturaba
+PLAY_HPF_HZ = 200                  # corte del pasaaltos (2.o orden)
+PLAY_PEAK_CUT_DB = 6.0             # cuanto mas bajos quedan los picos que en el original (a igual volumen promedio)
+PLAY_PEAK_DBFS = -1.0              # techo absoluto: nunca se pasa (no recorta digital)
+PLAY_HPF_SOS = butter(2, PLAY_HPF_HZ, btype='highpass', fs=SAMPLE_RATE, output='sos')
+LIMIT_BLOCK = SAMPLE_RATE // 200   # 5 ms: resolucion del limitador
+
+
+def _limit(x, ceiling):
+    """Baja la ganancia donde la envolvente pasa `ceiling`: bloques de 5 ms, con 1 bloque de anticipacion y
+    transiciones suaves (sin saltos que suenen a click)."""
+    n = len(x) // LIMIT_BLOCK * LIMIT_BLOCK
+    if n == 0:
+        return x
+    env = np.abs(x[:n]).reshape(-1, LIMIT_BLOCK).max(axis=1)
+    gain = np.minimum(1.0, ceiling / np.maximum(env, 1e-9))
+    gain = minimum_filter1d(gain, size=3)                         # cubre el bloque vecino (anticipacion)
+    gain = np.minimum(gain, filtfilt([0.3], [1, -0.7], gain))     # suavizado sin pasar el minimo
+    centers = np.arange(len(gain)) * LIMIT_BLOCK + LIMIT_BLOCK / 2
+    return x * np.interp(np.arange(len(x)), centers, gain)
+
+
+def normalize(pcm):
+    """Pasaaltos + limitador + compensacion al RMS original (x PLAY_GAIN_DB). PCM s16le mono."""
+    x = np.frombuffer(pcm, dtype="<i2").astype(np.float64)
+    if len(x) == 0 or not np.any(x):
+        return pcm
+    target_rms = np.sqrt(np.mean(x ** 2)) * 10 ** (PLAY_GAIN_DB / 20)
+    ceiling = min(np.abs(x).max() * 10 ** (-PLAY_PEAK_CUT_DB / 20), 32767 * 10 ** (PLAY_PEAK_DBFS / 20))
+    y = sosfilt(PLAY_HPF_SOS, x)
+    for _ in range(8):                 # limitar y volver a subir al RMS objetivo (converge en ~6 vueltas, ~30 ms)
+        y *= target_rms / max(np.sqrt(np.mean(y ** 2)), 1e-9)
+        y = _limit(y, ceiling)
+    return np.clip(np.round(y), -ceiling, ceiling).astype("<i2").tobytes()
 
 
 def _key(cfg, name):
@@ -150,11 +191,32 @@ class Claude:
 
 class Gemini:
     BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+    TIMEOUT_S = 6          # si el modelo tarda más (saturado), se pasa al de respaldo
+    RETRY_CODES = (429, 500, 503)   # cuota agotada o modelo saturado: probar el siguiente
 
-    def __init__(self, key, model, system):
+    def __init__(self, key, model, system, fallbacks=()):
         self.model, self.system, self.history = model, system, History()
+        self.models = [model, *fallbacks]
         self.http = requests.Session()
         self.http.headers["x-goog-api-key"] = key
+
+    def _post(self, body):
+        """Prueba los modelos en orden; salta al siguiente si tarda o está saturado/sin cuota."""
+        error = None
+        for model in self.models:
+            try:
+                response = self.http.post(f"{self.BASE}/{model}:generateContent", json=body,
+                                          timeout=(5, self.TIMEOUT_S))
+            except requests.Timeout:
+                error = RuntimeError(f"Gemini {model}: más de {self.TIMEOUT_S} s")
+                LOG.warning("%s; pruebo el siguiente modelo", error)
+                continue
+            if response.status_code in self.RETRY_CODES:
+                error = RuntimeError(f"Gemini {model} HTTP {response.status_code}")
+                LOG.warning("%s; pruebo el siguiente modelo", error)
+                continue
+            return _check(response, f"Gemini {model}")
+        raise error
 
     def reply(self, text):
         turns = self.history.with_user(text)
@@ -164,8 +226,7 @@ class Gemini:
                       for role, content in turns],
             # Sin "thinking": para voz la latencia importa más, y el razonamiento se comería los tokens de salida.
             generationConfig={"maxOutputTokens": 300, "thinkingConfig": {"thinkingLevel": "minimal"}})
-        response = self.http.post(f"{self.BASE}/{self.model}:generateContent", json=body, timeout=30)
-        data = _check(response, "Gemini").json()
+        data = self._post(body).json()
         try:
             answer = "".join(part.get("text", "") for part in data["candidates"][0]["content"]["parts"]).strip()
         except (KeyError, IndexError):
@@ -200,7 +261,10 @@ class CloudServices:
         cls, key_name, model = provider
         if not _key(cfg, key_name):
             raise ValueError(f"falta {key_name} en tools/cloud_config.py (LLM = {cfg.LLM!r})")
-        self.llm = cls(_key(cfg, key_name), model, cfg.SYSTEM_PROMPT)
+        if cls is Gemini:
+            self.llm = Gemini(_key(cfg, key_name), model, cfg.SYSTEM_PROMPT, getattr(cfg, "GEMINI_RESPALDO", ()))
+        else:
+            self.llm = cls(_key(cfg, key_name), model, cfg.SYSTEM_PROMPT)
         self.llm_name = f"{cfg.LLM}:{model}"
         self.save_audio = bool(getattr(cfg, "SAVE_AUDIO", False))
 
@@ -308,6 +372,7 @@ class Conversation:
             answer, tokens_in, tokens_out = await asyncio.to_thread(self.services.llm.reply, question)
             t_llm = time.monotonic()
             speech = (await asyncio.to_thread(self.services.speech.speak, answer))[:MAX_PLAY_SECONDS * SAMPLE_RATE * 2]
+            speech = normalize(speech)
             t_tts = time.monotonic()
             await self.send_pcm(speech)
             t_sent = time.monotonic()
