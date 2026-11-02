@@ -6,6 +6,22 @@ Analiza una toma de la prueba de beamforming (WAV de 3 canales: L, R, beamformad
    es de 1-2 LSB, el firmware hace lo que dice el diseno y cualquier problema es acustico.
 2. Niveles en la banda de voz (300 Hz - 3 kHz) de L, R y BF, y BF relativo al mic de adelante.
    Para el rechazo: grabar la misma voz de frente y de costado y restar los "BF - adelante".
+3. Retardo de R respecto de L (retardo_por_banda). De aca sale ORBITA_BF_CORRIMIENTO_R.
+
+COMO SE CALCULA EL RETARDO (3.)
+   Un retardo de t muestras es una fase que crece en linea recta con la frecuencia: fase(w) = -w*t.
+   - Espectro cruzado conj(L)*R (csd, Welch con bloques de 2048): su fase es la fase de R menos la de L.
+   - Coherencia (0 a 1) por bin: solo se usan bins con coherencia > 0,5 (donde L y R ven la misma senal).
+   - En cada banda (200-500, 500-1k, 1k-2k, 2k-4k, 4k-7k Hz) se ajusta la recta fase = -w*t por minimos
+     cuadrados ponderados por la coherencia: t = -sum(coh*fase*w) / sum(coh*w^2), pasado a muestras (* FS).
+   - Resultado: + = R llega despues que L. Mezcla dos cosas: lo acustico (posicion de la fuente; con
+     d = 21,4 mm va de -1 a +1 muestra) y lo electrico (el bus I2S, constante).
+   - Para separarlas: misma posicion, una toma normal (D1) y otra con los pines L/R de los mics
+     intercambiados (D2). Electrico = (D1 + D2)/2; acustico = (D1 - D2)/2. Medido 01/11: electrico = -0,86,
+     o sea R llega 0,86 muestras antes -> ORBITA_BF_CORRIMIENTO_R = 0,86 (signo cambiado).
+   - Retardo plano en todas las bandas = digital/electrico; si cambia con la banda, hay acustica o ruido.
+   Recalibrar (y cambiar ORBITA_BF_CORRIMIENTO_R en beamforming.h de main) si cambia la placa, el ruteo
+   del bus I2S, el modelo de mic o el driver I2S. Medido en una sola placa: confirmar en 2-3 mas.
 
 Uso: python analizar_beamforming.py toma.wav [--beta 0.5] [--fc 150] [--adelante R] [--ganancia-atras 1.0]
      (los parametros tienen que coincidir con los #define de firmware/main/test_bf.c)
