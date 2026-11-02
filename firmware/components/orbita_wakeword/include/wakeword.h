@@ -10,7 +10,7 @@
  * @details on_crudo copia el mic elegido a un ring; la tarea `wakeword` arma las features
  *          (mismo frontend que el entrenamiento), corre el modelo .tflite en streaming y decide
  *          como ESPHome (promedio de las ultimas N probabilidades contra el cutoff).
- *          Explicacion completa: orbita-obsidian/wakeword_firmware.md.
+ *          Explicacion completa: orbita-obsidian/wakeword.md.
  */
 
 #pragma once

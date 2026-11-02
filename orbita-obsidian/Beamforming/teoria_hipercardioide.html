@@ -1,0 +1,635 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+
+<title>Array diferencial de 2 mics</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+/* Layout: una columna de lectura (~68ch) estilo cuaderno de ingeniería, pasos numerados = orden real de la cadena de procesamiento. */
+:root {
+  --bg: #f5f7f8;
+  --panel: #ffffff;
+  --fg: #17212b;
+  --muted: #5a6875;
+  --rule: #d5dde3;
+  --accent: #0a6a8a;
+  --null: #b4451f;
+  --ok: #2f7d4a;
+  --font-display: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-data: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11171c; --panel: #182128; --fg: #e3e9ee; --muted: #93a2ae; --rule: #2b3842;
+    --accent: #5cc0e0; --null: #f08a5d; --ok: #6cc28a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11171c; --panel: #182128; --fg: #e3e9ee; --muted: #93a2ae; --rule: #2b3842;
+  --accent: #5cc0e0; --null: #f08a5d; --ok: #6cc28a; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 17px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px;
+}
+main { max-width: 68ch; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+header { display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--rule); padding-bottom: 20px; }
+.eyebrow { font-family: var(--font-data); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: 30px; line-height: 1.2; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--font-display); font-weight: 600; font-size: 21px; margin: 0; text-wrap: balance; display: flex; gap: 10px; align-items: baseline; }
+h2 .n { font-family: var(--font-data); font-size: 14px; color: var(--muted); font-weight: 500; }
+h3 { font-family: var(--font-display); font-weight: 600; font-size: 16px; margin: 6px 0 0; }
+section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+p { margin: 0; }
+.lead { color: var(--muted); }
+.eq { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+.box {
+  background: var(--panel); border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+  padding: 14px 16px; border-radius: 0; display: flex; flex-direction: column; gap: 8px;
+}
+.box.warn { border-left-color: var(--null); }
+.box b { font-family: var(--font-display); font-weight: 600; }
+.impl { font-family: var(--font-data); font-size: 14px; background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 12px 14px; overflow-x: auto; white-space: pre; line-height: 1.55; }
+figure { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+figure img { display: block; width: 100%; height: auto; margin: 0 auto; background: #fff; border: 1px solid var(--rule); border-radius: 4px; }
+figure.cuadrada img { max-width: 560px; }
+figcaption { font-size: 15px; color: var(--muted); }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th { font-family: var(--font-display); font-weight: 600; font-size: 13px; color: var(--muted); letter-spacing: .02em; }
+td.num { font-family: var(--font-data); font-size: 14px; }
+.bad { color: var(--null); } .good { color: var(--ok); }
+ul, ol { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.toc { font-family: var(--font-display); font-size: 15px; }
+.toc a { color: var(--accent); text-decoration: none; }
+.toc a:hover { text-decoration: underline; }
+.chain { overflow-x: auto; }
+.chain svg { min-width: 620px; width: 100%; height: auto; display: block; }
+.chain text { font-family: var(--font-display); font-size: 13px; fill: var(--fg); }
+.chain .sub { font-size: 11px; fill: var(--muted); }
+.chain .blk { fill: var(--panel); stroke: var(--accent); stroke-width: 1; }
+.chain .blk2 { fill: var(--panel); stroke: var(--rule); stroke-width: 1; }
+.chain .wire { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+
+.lab { display: grid; grid-template-columns: 1fr; gap: 20px; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 18px; }
+@media (min-width: 760px) { .lab { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); } }
+canvas { width: 100%; max-width: 100%; aspect-ratio: 1 / 1; display: block; }
+.ctrls { display: flex; flex-direction: column; gap: 14px; min-width: 0; font-family: var(--font-display); font-size: 14px; }
+.ctrl { display: flex; flex-direction: column; gap: 4px; }
+.ctrl label { display: flex; justify-content: space-between; gap: 8px; font-weight: 500; }
+.ctrl output { font-family: var(--font-data); color: var(--accent); }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets button { font: 500 13px var(--font-display); padding: 6px 10px; border-radius: 4px; cursor: pointer; border: 1px solid var(--rule); background: var(--bg); color: var(--fg); }
+.presets button:hover { border-color: var(--accent); }
+button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.readout { display: grid; grid-template-columns: auto auto; gap: 4px 14px; font-size: 13px; margin: 0; }
+.readout dt { color: var(--muted); }
+.readout dd { margin: 0; font-family: var(--font-data); text-align: right; }
+.msg { font-size: 13px; color: var(--null); min-height: 1.2em; }
+.rf { grid-template-columns: 1fr; gap: 12px; }
+.rf canvas { aspect-ratio: 900 / 480; }
+.rfleg { display: flex; flex-wrap: wrap; gap: 6px 16px; font-family: var(--font-display); font-size: 13px; }
+.rfleg span { display: inline-flex; align-items: center; gap: 6px; }
+.rfleg i { width: 18px; height: 3px; display: inline-block; }
+.rfctl { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 20px; font-family: var(--font-display); font-size: 14px; }
+footer { font-size: 14px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 16px; }
+</style>
+
+<main>
+<header>
+  <span class="eyebrow">Órbita · frente Audio · 2 mics MEMS · 16 kHz</span>
+  <h1>Array diferencial endfire de 2 mics</h1>
+  <p class="lead">Resumen de consulta, en el orden en que se implementa la cadena: geometría, captura, calibración, pasaaltos, resta (hipercardioide), ecualizador y división en bandas. Al final: qué medir, los gráficos de la simulación en Python, el laboratorio polar y el apéndice.</p>
+</header>
+
+<section id="idea">
+  <h2>La idea en resumen</h2>
+  <p>Órbita tiene dos micrófonos. Promediarlos o hacer delay-and-sum no rinde nada: con mics a pocos centímetros, la voz llega casi igual a los dos desde cualquier dirección, y sumar no puede distinguir de dónde viene (lo medimos: ~0 dB).</p>
+  <p>Lo que proponemos es <b>restarlos</b>. Los dos mics se ponen en línea, uno adelante y otro atrás, separados <b>21,4 mm</b>, que es la distancia que recorre el sonido en una muestra a 16 kHz. Se retrasa una muestra uno de los mics y se resta del otro: lo que llega justo sincronizado se cancela. Haciéndolo en los dos sentidos salen dos micrófonos virtuales <b>cardioides</b>, uno mirando adelante y otro atrás, y se combinan con un peso fijo (β = 0,5). El resultado es un micrófono virtual <b>hipercardioide</b>: el patrón más direccional que se puede lograr con 2 mics. Capta de frente, atenúa 12 dB los costados, tiene nulos a ~110° y deja un lóbulo chico atrás (−6 dB).</p>
+  <p>No hace falta saber dónde está quien habla: el filtro es fijo y la dirección la fija la geometría de la placa. Cuesta unas pocas operaciones por muestra.</p>
+  <p>La resta deja la voz con graves débiles y agudos fuertes, así que después va un <b>ecualizador</b> (un integrador con pérdida) que la vuelve plana y, de paso, corta los graves donde la resta más amplifica el ruido de los mics. Arriba de ~3 kHz se usa un mic solo, para no perder las consonantes.</p>
+  <div class="box"><b>Para qué le sirve a Órbita</b><p>Favorecer la voz del <b>médico de frente</b> contra todo el resto de la sala: ~6 dB contra el ruido difuso y la reverberación, que se mantienen hasta ~4 kHz. Cancelar el parlante no es el objetivo (atrás queda −6 dB). A cambio, los dos mics tienen que ser parejos (se calibran), la separación de 21,4 mm queda fija en la PCB, el ruido propio de los mics sube en graves y hay que definir cómo se apoya el equipo en el escritorio.</p></div>
+</section>
+
+<nav class="toc" aria-label="Contenido">
+  <ol>
+    <li><a href="#por-que">Por qué diferencial y no delay-and-sum</a></li>
+    <li><a href="#cadena">La cadena completa</a></li>
+    <li><a href="#geometria">Geometría: elegir d</a></li>
+    <li><a href="#captura">Captura y calibración de los mics</a></li>
+    <li><a href="#pasaaltos">Pasaaltos de entrada</a></li>
+    <li><a href="#resta">Resta: el hipercardioide</a></li>
+    <li><a href="#ecualizador">Ecualizador</a></li>
+    <li><a href="#bandas">División en bandas</a></li>
+    <li><a href="#costos">Costos y límites</a></li>
+    <li><a href="#medir">Qué medir y criterio</a></li>
+    <li><a href="#simulacion">Simulación en Python: gráficos</a></li>
+    <li><a href="#lab">Laboratorio polar</a></li>
+    <li><a href="#apendice">Apéndice: suma contra resta y versión adaptativa</a></li>
+  </ol>
+</nav>
+
+<section id="por-que">
+  <h2><span class="n">1</span>Por qué diferencial y no delay-and-sum</h2>
+  <p>Para separar direcciones, el delay-and-sum (DSB) necesita mics separados del orden de la longitud de onda (\(\lambda_{500\,\text{Hz}} = 69\ \text{cm}\)). Con mics a 2–5 cm, la onda llega casi en fase desde cualquier lado y <b>sumar no separa nada</b>: lo medimos, ~0 dB. <b>Restar</b> descarta lo común y se queda con la pequeña diferencia entre mics, que es lo que depende de la dirección (el gradiente de presión).</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Ruido difuso, 2 mics</th><th>500 Hz</th><th>1 kHz</th><th>4 kHz</th></tr></thead>
+    <tbody>
+      <tr><td>DSB, d = 21 mm</td><td class="num">0,0 dB</td><td class="num">0,1 dB</td><td class="num">0,9 dB</td></tr>
+      <tr><td>Cardioide, d = 21 mm</td><td class="num">4,7 dB</td><td class="num">4,7 dB</td><td class="num">3,0 dB</td></tr>
+      <tr><td>Hipercardioide, d = 21 mm (elegido)</td><td class="num good">6,0 dB</td><td class="num good">6,0 dB</td><td class="num good">5,1 dB</td></tr>
+    </tbody>
+  </table></div>
+  <p>A cambio, el diferencial amplifica el ruido propio de los mics en graves, pide mics parejos y necesita ecualizar (pasos 4 a 9).</p>
+</section>
+
+<section id="cadena">
+  <h2><span class="n">2</span>La cadena completa</h2>
+  <div class="chain" role="img" aria-label="Diagrama de bloques: dos mics, calibración, pasaaltos, resta hipercardioide, ecualizador, división en bandas y suma.">
+    <svg viewBox="0 0 680 210" xmlns="http://www.w3.org/2000/svg">
+      <text x="10" y="54">mic 1</text><text class="sub" x="10" y="68">adelante</text>
+      <text x="10" y="154">mic 2</text><text class="sub" x="10" y="168">atrás</text>
+      <rect class="blk2" x="70" y="132" width="70" height="40" rx="4"/><text x="105" y="150" text-anchor="middle">× 1/g</text><text class="sub" x="105" y="164" text-anchor="middle">calibración</text>
+      <rect class="blk2" x="160" y="32" width="70" height="40" rx="4"/><text x="195" y="50" text-anchor="middle">HPF</text><text class="sub" x="195" y="64" text-anchor="middle">70 Hz</text>
+      <rect class="blk2" x="160" y="132" width="70" height="40" rx="4"/><text x="195" y="150" text-anchor="middle">HPF</text><text class="sub" x="195" y="164" text-anchor="middle">70 Hz</text>
+      <rect class="blk" x="260" y="82" width="90" height="40" rx="4"/><text x="305" y="100" text-anchor="middle">hipercardioide</text><text class="sub" x="305" y="114" text-anchor="middle">c_F − 0,5·c_B</text>
+      <rect class="blk" x="370" y="82" width="90" height="40" rx="4"/><text x="415" y="100" text-anchor="middle">ecualizador</text><text class="sub" x="415" y="114" text-anchor="middle">integrador ÷2</text>
+      <rect class="blk2" x="480" y="82" width="70" height="40" rx="4"/><text x="515" y="100" text-anchor="middle">LPF</text><text class="sub" x="515" y="114" text-anchor="middle">&lt; 3 kHz</text>
+      <rect class="blk2" x="480" y="12" width="70" height="40" rx="4"/><text x="515" y="30" text-anchor="middle">HPF</text><text class="sub" x="515" y="44" text-anchor="middle">&gt; 3 kHz</text>
+      <circle class="blk" cx="600" cy="70" r="14"/><text x="600" y="75" text-anchor="middle">+</text>
+      <text x="625" y="66">voz</text><text class="sub" x="625" y="80">mono</text>
+      <path class="wire" d="M55 50 H160"/><path class="wire" d="M55 150 H70"/><path class="wire" d="M140 152 H160"/>
+      <path class="wire" d="M230 52 H245 V95 H260"/><path class="wire" d="M230 152 H245 V109 H260"/>
+      <path class="wire" d="M245 52 V32 H480"/>
+      <path class="wire" d="M350 102 H370"/><path class="wire" d="M460 102 H480"/>
+      <path class="wire" d="M550 102 H570 V78 H586"/><path class="wire" d="M550 32 H570 V62 H586"/>
+      <text class="sub" x="270" y="196">Banda 200 Hz – 3 kHz: diferencial. Arriba de 3 kHz: mic 1 solo. Debajo de ~150 Hz: lo corta el ecualizador.</text>
+    </svg>
+  </div>
+</section>
+
+<section id="geometria">
+  <h2><span class="n">3</span>Geometría: elegir d</h2>
+  <p>Con una onda plana que llega con ángulo \(\theta\) desde el eje de los mics, el camino extra hasta el mic de atrás es la proyección de la separación sobre la dirección de la onda (cateto adyacente del triángulo de hipotenusa \(d\)):</p>
+  <div class="eq">\[ \Delta x = d\cos\theta \;\Rightarrow\; \Delta t = \tau_0\cos\theta, \qquad \tau_0 = \frac{d}{c}. \]</div>
+  <p>Se elige \(d\) para que \(\tau_0\) valga exactamente <b>1 muestra</b>: así el retardo del DSP es un \(z^{-1}\), sin interpolar.</p>
+  <div class="eq">\[ d = \frac{c}{f_s} = \frac{343}{16\,000} = 21{,}4\ \text{mm}. \]</div>
+  <ul>
+    <li>Se mide <b>entre los agujeros acústicos</b> (el INMP441 es bottom-port) y, con carcasa, entre sus aberturas. Los canales acústicos tienen que ser iguales.</li>
+    <li>Tolerancia en décimas de mm: si \(d\) no da 1 muestra exacta, los nulos se corren y pierden profundidad.</li>
+    <li>Mic 1 adelante, apuntando al médico; mic 2 atrás, sobre el mismo eje.</li>
+    <li>Supone campo lejano (\(r \gg d\)): vale para voz a 0,5–2 m.</li>
+  </ul>
+</section>
+
+<section id="captura">
+  <h2><span class="n">4</span>Captura y calibración de los mics</h2>
+  <p>Los dos mics en el mismo bus I2S (slots L y R), muestreados en el mismo frame: la sincronía entre canales está garantizada. Hay que fijar qué slot es el de adelante.</p>
+  <p>El nulo depende de que los mics sean iguales. Si el mic 2 tiene ganancia \(g = 1+\epsilon\), en el nulo queda un residuo \(|\epsilon|\) y la profundidad respecto del frente es</p>
+  <div class="eq">\[ \frac{|H_{\text{nulo}}|}{|H_{\text{frente}}|} \approx \frac{|\epsilon|}{2\,\omega\,\tau_0}. \]</div>
+  <p>Ejemplo: 1 dB de diferencia (\(\epsilon \approx 0{,}12\)) a 500 Hz da un nulo de solo −10 dB. Por eso se calibra y se multiplica el mic 2 por \(1/g\) antes de restar.</p>
+  <h3>Calibración con Goertzel</h3>
+  <ol>
+    <li>Tono \(f_0\) desde 90° (de costado, donde la acústica no mete diferencia). Puede ser el propio parlante.</li>
+    <li>Goertzel en \(f_0\) sobre los dos mics, sobre <b>el mismo bloque</b> de muestras.</li>
+    <li>\(X_2[k]/X_1[k] = g\,e^{j\phi}\): diferencia de ganancia y de fase.</li>
+    <li>Repetir en 300, 500 y 1000 Hz; guardar la corrección en NVS.</li>
+  </ol>
+</section>
+
+<section id="pasaaltos">
+  <h2><span class="n">5</span>Pasaaltos de entrada</h2>
+  <p>Biquad Butterworth de 2º orden en ~70 Hz, <b>idéntico en los dos mics</b> (si no, mete diferencia de fase entre canales). Saca la DC y la energía de muy baja frecuencia: en las tomas mejoró la relación voz/total entre 0,4 y 13 dB sin tocar la voz.</p>
+  <p>Va sobre el dato de 32 bits antes de pasar a 16, con acumulador de mayor precisión que la muestra.</p>
+</section>
+
+<section id="resta">
+  <h2><span class="n">6</span>Resta: el hipercardioide</h2>
+
+  <h3>La respuesta, de una</h3>
+  <p>Se retrasa el mic de atrás \(T\) y se resta. La voz llega al mic de atrás con el retardo acústico \(\tau_0\cos\theta\) además del \(T\), así que el retardo total entre las dos señales es \(\Delta = T+\tau_0\cos\theta\):</p>
+  <div class="eq">\[ y(t) = x_1(t) - x_2(t-T) \;\Rightarrow\; H(\omega,\theta) = 1 - e^{-j\omega\Delta}, \qquad \Delta = T+\tau_0\cos\theta. \]</div>
+  <p>Para ver el módulo se saca de factor la mitad del ángulo y se aplica Euler (\(e^{jx}-e^{-jx}=2j\sin x\)):</p>
+  <div class="eq">\[ H = e^{-j\omega\Delta/2}\big(e^{j\omega\Delta/2}-e^{-j\omega\Delta/2}\big) = e^{-j\omega\Delta/2}\cdot 2j\,\sin\!\Big(\tfrac{\omega\Delta}{2}\Big) \;\Rightarrow\; \boxed{|H| = 2\left|\sin\!\Big(\tfrac{\omega\Delta}{2}\Big)\right|} \]</div>
+  <p>Es exacta: el primer factor es solo una fase. No hace falta aproximar nada para entender la respuesta.</p>
+
+  <h3>Qué dice el seno</h3>
+  <ul>
+    <li><b>Ceros en frecuencia.</b> Valen cero cuando \(\omega\Delta/2 = k\pi\), es decir en \(f = k/\Delta\). El de \(k=0\) (continua) existe siempre. El primero de arriba es \(f = 1/\Delta\): el retardo total completa una vuelta entera de la señal y la resta se cancela.</li>
+    <li><b>Cada ángulo tiene su respuesta.</b> \(\Delta\) depende de \(\cos\theta\), de \(T\) y de \(d\) (por \(\tau_0 = d/c\)), así que el cero de arriba se mueve con el ángulo.</li>
+    <li><b>Nulo en ángulo, exacto.</b> Si \(\Delta=0\), \(H=0\) a todas las frecuencias a la vez. Eso pasa en \(\cos\theta_{\text{nulo}} = -T/\tau_0\).</li>
+    <li><b>Máximo.</b> \(|H|=2\) cuando \(\omega\Delta = \pi\).</li>
+  </ul>
+  <p>Ejemplo con un solo retardo \(T=\tau_0\) = 1 muestra (\(d=21{,}4\ \text{mm}\)), que es el <b>cardioide</b>:</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Dirección</th><th>\(\Delta\) (muestras)</th><th>Primer cero (sin contar continua)</th></tr></thead>
+    <tbody>
+      <tr><td>0° (frente)</td><td class="num">2</td><td class="num">8 kHz</td></tr>
+      <tr><td>90° (costado)</td><td class="num">1</td><td class="num">16 kHz, fuera de la banda</td></tr>
+      <tr><td>180° (atrás)</td><td class="num">0</td><td class="num">nulo a todas las frecuencias</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Intuición: por qué la señal queda modulada por θ</h3>
+  <p>Esto es una lectura de baja frecuencia, cuando el retardo \(\Delta\) es chico frente al período de la voz. Ahí una señal retrasada es casi la original menos su pendiente por el retardo (Taylor de 1er orden):</p>
+  <div class="eq">\[ s(t-\Delta) \;\approx\; s(t) - \Delta\cdot s'(t). \]</div>
+  <p>El mic de atrás, retrasado \(T\), recibe la voz con un retardo total \(\Delta = T + \tau_0\cos\theta\). Al restar:</p>
+  <div class="eq">\[ y(t) = s(t) - s(t-\Delta) \;\approx\; \underbrace{s(t) - s(t)}_{\text{lo común: se cancela}} \;+\; \underbrace{(T+\tau_0\cos\theta)}_{\text{depende de la dirección}}\cdot\underbrace{s'(t)}_{\text{la voz derivada}}. \]</div>
+  <ul>
+    <li><b>Lo común</b>, \(s(t)\), es igual en los dos mics y no dice nada de la dirección: <b>la resta lo elimina</b>. La suma, en cambio, se queda con eso, y por eso no distingue direcciones.</li>
+    <li><b>Lo distinto</b> es el término chico que sobrevive, proporcional a \(T+\tau_0\cos\theta\): <b>cuánto vale depende del ángulo</b>. Ese factor es el que modula la señal con \(\theta\).</li>
+    <li>Sale <b>multiplicado por \(s'(t)\)</b>: la resta deriva la voz. Derivar es multiplicar por \(j\omega\) en frecuencia, y de ahí viene la pendiente de +6 dB/oct. El ecualizador (un integrador) deshace esa derivada.</li>
+  </ul>
+  <div class="box"><b>En una línea</b><p>Suma: \(s + s \approx 2s\), igual desde todas las direcciones. Resta: \(s - s(t-\Delta) \approx \Delta(\theta)\,s'\), un nivel que depende de la dirección.</p></div>
+  <p>Cuando \(\Delta\) deja de ser chico, \(s'\) ya no alcanza y vale la fórmula exacta de arriba: el seno se dobla y aparecen los ceros.</p>
+
+  <h3>El hipercardioide: dos cardioides y un peso</h3>
+  <p>Con un solo retardo, el hipercardioide pediría \(T=\tau_0/3\), un tercio de muestra. Habría que interpolar con un filtro de retardo fraccionario, que cuesta CPU y deforma los agudos. Por eso no se hace así. Todo patrón de primer orden es una mezcla de <b>omni</b> y <b>figura-8</b>, y dos cardioides opuestos dan justo esas dos piezas: su suma es omni y su resta es figura-8. Con ellos el patrón se elige con un peso \(\beta\) (una multiplicación) y los únicos retardos son de una muestra entera.</p>
+  <div class="eq">\[ c_F[n] = x_1[n]-x_2[n-1], \qquad c_B[n] = x_2[n]-x_1[n-1], \qquad y[n] = c_F[n]-\beta\,c_B[n]. \]</div>
+  <div class="impl">c_F[n] = x1[n] − x2[n−1]        (cardioide hacia adelante; x2 ya calibrado y filtrado)
+c_B[n] = x2[n] − x1[n−1]        (cardioide hacia atrás)
+y_h[n] = c_F[n] − 0,5·c_B[n]    (hipercardioide)</div>
+  <p>Con \(u=\omega\tau_0\cos\theta\) y \(v=\omega T\) (\(T\) = 1 muestra), la respuesta exacta es</p>
+  <div class="eq">\[ H(\omega,\theta) = \big(1-e^{-j(u+v)}\big) - \beta\big(e^{-ju}-e^{-jv}\big). \]</div>
+  <p>Con \(\tau_0 = T\) (1 muestra) se simplifica en tres direcciones:</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Dirección</th><th>\(|H|\)</th><th>Ceros</th></tr></thead>
+    <tbody>
+      <tr><td>0° (frente)</td><td class="num">\(2\,|\sin v|\)</td><td class="num">continua y 8 kHz</td></tr>
+      <tr><td>90° (costado)</td><td class="num">\(2(1-\beta)\,|\sin(v/2)|\)</td><td class="num">continua y 16 kHz (fuera de banda)</td></tr>
+      <tr><td>180° (atrás)</td><td class="num">\(2\beta\,|\sin v|\)</td><td class="num">continua y 8 kHz</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>Lo clave:</b> de frente, \(c_B\) da cero (la voz llega sincronizada a sus dos términos). La voz del médico sale igual que con un cardioide, y \(\beta\) solo cambia lo que llega de otras direcciones. Por eso el ecualizador y la división en bandas son los mismos.</p>
+
+  <figure>
+    <div class="lab rf">
+      <canvas id="rf" width="900" height="480" role="img" aria-label="Módulo de la respuesta en frecuencia del hipercardioide para distintos ángulos"></canvas>
+      <div class="rfleg">
+        <span><i style="background:var(--accent)"></i>0° (frente)</span>
+        <span><i style="background:var(--ok)"></i>90° (costado)</span>
+        <span><i style="background:var(--null)"></i>180° (atrás)</span>
+        <span><i style="background:var(--fg)"></i>ángulo elegido</span>
+      </div>
+      <div class="rfctl">
+        <div class="ctrl"><label for="rf-th">Ángulo elegido <output id="rf-th-o"></output></label><input id="rf-th" type="range" min="0" max="180" step="1" value="109"></div>
+        <div class="ctrl"><label for="rf-b">β <output id="rf-b-o"></output></label><input id="rf-b" type="range" min="0" max="1" step="0.01" value="0.5"></div>
+        <div class="ctrl"><label for="rf-d">Separación d <output id="rf-d-o"></output></label><input id="rf-d" type="range" min="10" max="40" step="0.1" value="21.4"></div>
+      </div>
+    </div>
+    <figcaption><b>Módulo de \(H\) contra la frecuencia, para cada ángulo</b> (fórmula exacta, sin aproximar). 1 es lo que entrega un mic solo. Los círculos marcan los ceros que caen en la banda. Con \(\beta=0{,}5\) y el ángulo en 109° (el nulo), la curva queda casi pegada al piso a baja frecuencia. Subí \(d\) o \(\beta\) y mirá cómo se mueven los ceros y los niveles.</figcaption>
+  </figure>
+
+  <p>Precio: de frente la salida es \(2|\sin(\omega\tau_0)|\), una pendiente de <b>+6 dB/oct</b> a baja frecuencia (−22 dB en 100 Hz, ~0 dB en 1,3 kHz, +6 dB en 4 kHz) y un cero en \(c/(2d) = 8\ \text{kHz}\). Lo corrige el paso siguiente.</p>
+
+  <h3>Cómo se eligió β = 0,5</h3>
+  <p>Esta es la única parte que usa una aproximación, y solo sirve para elegir \(\beta\). Para comparar patrones hace falta una forma que no dependa de la frecuencia, y eso solo existe a baja frecuencia, donde \(\sin x \approx x\) (\(\omega\Delta \ll 1\)). Ahí \(c_F \propto 1+\cos\theta\), \(c_B \propto 1-\cos\theta\), y</p>
+  <div class="eq">\[ |H| \approx \omega\,(T+\tau_0)\cdot B(\theta), \qquad B(\theta) = \alpha + (1-\alpha)\cos\theta, \qquad \alpha = \frac{1-\beta}{2}. \]</div>
+  <p>Queremos favorecer al médico de frente contra el ruido y la reverberación, que llegan de todas las direcciones. Eso lo mide la directividad (frente contra el promedio sobre todo el espacio):</p>
+  <div class="eq">\[ \mathrm{DF}(\alpha) = \frac{B(0)^2}{\tfrac12\int_0^{\pi}B(\theta)^2\sin\theta\,d\theta} = \frac{1}{\alpha^2 + \tfrac{(1-\alpha)^2}{3}}. \]</div>
+  <p>Derivando e igualando a cero, \(2\alpha - \tfrac23(1-\alpha) = 0\), el máximo está en \(\alpha = \tfrac14\), o sea \(\boxed{\beta = 0{,}5}\). Es el <b>hipercardioide</b>, con DF = 4 (6,0 dB), el máximo posible con 2 mics.</p>
+  <div class="eq">\[ B(\theta) = \tfrac14 + \tfrac34\cos\theta, \qquad \cos\theta_{\text{nulo}} = -\tfrac13 \;\Rightarrow\; \theta_{\text{nulo}} = 109{,}5^\circ. \]</div>
+  <div class="tbl"><table>
+    <thead><tr><th>Dirección</th><th>\(\cos\theta\)</th><th>\(B(\theta)\)</th><th>En dB</th></tr></thead>
+    <tbody>
+      <tr><td>0° (frente)</td><td class="num">1</td><td class="num">1</td><td class="num">0 dB</td></tr>
+      <tr><td>90° (costado)</td><td class="num">0</td><td class="num">¼</td><td class="num good">−12 dB</td></tr>
+      <tr><td>109,5°</td><td class="num">−⅓</td><td class="num">0</td><td class="num bad">−∞ (nulo)</td></tr>
+      <tr><td>180° (atrás)</td><td class="num">−1</td><td class="num">−½</td><td class="num">−6 dB (lóbulo trasero, polaridad invertida)</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Patrón</th><th>β</th><th>Nulo</th><th>DF</th><th>Uso</th></tr></thead>
+    <tbody>
+      <tr><td>Cardioide</td><td class="num">0</td><td class="num">180°</td><td class="num">4,8 dB</td><td>Anular una fuente fija atrás (parlante)</td></tr>
+      <tr><td>Supercardioide</td><td class="num">0,27</td><td class="num">125°</td><td class="num">5,7 dB</td><td>Máxima relación frente/atrás</td></tr>
+      <tr><td><b>Hipercardioide (elegido)</b></td><td class="num">0,5</td><td class="num">109,5°</td><td class="num good">6,0 dB</td><td>Máximo rechazo de la sala</td></tr>
+      <tr><td>Dipolo</td><td class="num">1</td><td class="num">90°</td><td class="num">4,8 dB</td><td>Rechazar los costados</td></tr>
+    </tbody>
+  </table></div>
+  <p>"Hiper" porque es más direccional que el cardioide: haz de ~105° a −3 dB contra ~131°, y −12 dB a los costados contra −6 dB. Arriba de ~2 kHz el patrón se deforma respecto de esta tabla, como muestran el gráfico de arriba y el laboratorio polar.</p>
+</section>
+
+<section id="ecualizador">
+  <h2><span class="n">7</span>Ecualizador</h2>
+  <p>Filtro con la pendiente opuesta (−6 dB/oct, \(\propto 1/\omega\)) para dejar plana la voz de frente: un <b>integrador</b>. Como \(c_B\) es cero de frente, la voz del médico a la salida del hipercardioide es la misma que la de \(c_F\). Con \(\tau_0\) = 1 muestra, queda \(1-z^{-2} = (1-z^{-1})(1+z^{-1})\), y el integrador cancela el primer factor:</p>
+  <div class="eq">\[ (1-z^{-2})\cdot\frac{1}{1-z^{-1}} = 1+z^{-1}, \qquad \Big|\tfrac12(1+z^{-1})\Big| = \cos\!\Big(\frac{\omega}{2f_s}\Big). \]</div>
+  <div class="tbl"><table>
+    <thead><tr><th>Frente después del ecualizador</th><th>0</th><th>2 kHz</th><th>4 kHz</th><th>6 kHz</th><th>8 kHz</th></tr></thead>
+    <tbody><tr><td>Ganancia</td><td class="num">0 dB</td><td class="num">−0,7 dB</td><td class="num">−3,0 dB</td><td class="num bad">−8,3 dB</td><td class="num bad">−∞</td></tr></tbody>
+  </table></div>
+  <p>Un integrador puro tiene ganancia infinita en 0 Hz y se satura con la DC. Se usa uno <b>con pérdida</b> (pasabajos de 1er orden con corte \(f_c\) bajo):</p>
+  <div class="impl">v[n]   = a·v[n−1] + y_h[n]        a = e^(−2π·fc/fs) ≈ 0,93  (fc ≈ 150–200 Hz)
+y_m[n] = v[n] / 2                  (÷2: mismo nivel que un mic solo)</div>
+  <ul>
+    <li>Arriba de \(f_c\): integra y compensa la resta.</li>
+    <li>Debajo de \(f_c\): ganancia plana, así que la pendiente de la resta queda sin compensar y la cadena se comporta como un <b>pasaaltos natural en \(f_c\)</b>. Eso corta la zona donde el ruido propio es peor, sin filtro extra.</li>
+    <li>El acumulador \(v[n]\) crece más que la muestra: llevarlo en 32 bits o float.</li>
+    <li>Devuelve el color de la voz, no la SNR en graves: sube por igual la voz y el ruido propio.</li>
+  </ul>
+</section>
+
+<section id="bandas">
+  <h2><span class="n">8</span>División en bandas</h2>
+  <p>Arriba de ~3 kHz la aproximación de array chico deja de valer y el frente cae (tabla anterior). Para no perder consonantes:</p>
+  <div class="impl">y[n] = LPF_3k( y_m[n] ) + HPF_3k( x1[n] )</div>
+  <ul>
+    <li><b>Debajo de ~150 Hz:</b> lo corta el ecualizador.</li>
+    <li><b>~150 Hz – 3 kHz:</b> hipercardioide. Ahí está casi toda la energía de la voz y el patrón es estable.</li>
+    <li><b>Arriba de 3 kHz:</b> mic 1 solo. Sin directividad, pero las consonantes quedan intactas.</li>
+  </ul>
+  <p>El hipercardioide mantiene la directividad hasta más arriba que el cardioide (5,1 dB a 4 kHz, paso 9), así que el cruce se podría subir a ~4 kHz. Lo que lo limita es la caída del ecualizador de frente (−3 dB en 4 kHz).</p>
+  <p>El par LPF/HPF tiene que sumar plano en el cruce (filtros complementarios o Linkwitz-Riley), y hay que compensar el retardo de ½ muestra que agrega \(\tfrac12(1+z^{-1})\). Para la primera prueba se puede omitir este paso y escuchar.</p>
+</section>
+
+<section id="costos">
+  <h2><span class="n">9</span>Costos y límites</h2>
+  <h3>Directividad según la frecuencia</h3>
+  <p>El patrón es estable mientras el array es chico; en agudos se degrada. El hipercardioide aguanta más:</p>
+  <div class="tbl"><table>
+    <thead><tr><th>DF (d = 21,4 mm)</th><th>200 Hz</th><th>1 kHz</th><th>2 kHz</th><th>3 kHz</th><th>4 kHz</th><th>6 kHz</th></tr></thead>
+    <tbody>
+      <tr><td>Cardioide</td><td class="num">4,8</td><td class="num">4,7</td><td class="num">4,4</td><td class="num">3,9</td><td class="num">3,0</td><td class="num bad">−0,8</td></tr>
+      <tr><td>Hipercardioide (β = 0,5)</td><td class="num good">6,0</td><td class="num good">6,0</td><td class="num good">5,8</td><td class="num good">5,6</td><td class="num good">5,1</td><td class="num">2,9</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Ruido propio (white noise gain)</h3>
+  <p>El ruido de cada mic es independiente (potencia \(\sigma^2\)). En \(y_h = c_F - \beta c_B\), cada mic aparece dos veces: \(y_h = x_1\,(1+\beta z^{-1}) - x_2\,(z^{-1}+\beta)\), con \(z^{-1}\) el retardo de una muestra. La potencia de ruido <b>depende de la frecuencia</b>:</p>
+  <div class="eq">\[ P_{\text{ruido}}(\omega) = 2\sigma^2\,\big(1+\beta^2+2\beta\cos\omega T\big), \qquad T = \text{1 muestra}. \]</div>
+  <p>En graves vale \(2(1+\beta)^2\sigma^2 = 4{,}5\,\sigma^2\) y en 8 kHz, \(2(1-\beta)^2\sigma^2 = 0{,}5\,\sigma^2\). La voz de frente pasa con \(|H|^2 = 4\sin^2(\omega\tau_0)\), igual que en el cardioide, porque \(c_B\) es cero de frente. Frente a un mic solo:</p>
+  <div class="eq">\[ \mathrm{WNG}(\omega) = \frac{4\sin^2(\omega\tau_0)}{2\,\big(1+\beta^2+2\beta\cos\omega T\big)}. \]</div>
+  <div class="tbl"><table>
+    <thead><tr><th>\(f\)</th><th>200 Hz</th><th>500 Hz</th><th>1 kHz</th><th>2 kHz</th><th>4 kHz</th></tr></thead>
+    <tbody>
+      <tr><td>Hipercardioide (β = 0,5)</td><td class="num bad">−22,6 dB</td><td class="num bad">−14,7 dB</td><td class="num bad">−8,7 dB</td><td class="num">−2,9 dB</td><td class="num good">+2,0 dB</td></tr>
+      <tr><td>Cardioide (referencia)</td><td class="num">−19,1 dB</td><td class="num">−11,2 dB</td><td class="num">−5,3 dB</td><td class="num">0,0 dB</td><td class="num">+3,0 dB</td></tr>
+      <tr><td>Diferencia (hiper − cardioide)</td><td class="num">−3,5 dB</td><td class="num">−3,5 dB</td><td class="num">−3,4 dB</td><td class="num">−2,9 dB</td><td class="num">−1,0 dB</td></tr>
+    </tbody>
+  </table></div>
+  <p>En graves el hipercardioide tiene <b>3,5 dB más de ruido propio</b> que el cardioide, y la diferencia baja a ~1 dB en 4 kHz. Es el precio de los +1,2 dB de directividad. La fórmula coincide con una simulación de ruido blanco independiente en cada mic, dentro de ~0,15 dB. Que se escuche depende del ruido de la sala: si el ruido propio amplificado queda debajo del ruido ambiente, no empeora nada. Medir el ruido de un mic crudo no alcanza: hay que medirlo después de la cadena completa.</p>
+  <h3>Otros límites</h3>
+  <ul>
+    <li>Haz ancho: ~105° a −3 dB. Favorece al médico contra la sala, pero no lo aísla; para un haz más angosto harían falta más mics.</li>
+    <li>Dos hablantes: con el eje apuntando al médico, el paciente queda de costado (−12 dB) o atrás (−6 dB). Si hay que captarlo, revisar la orientación.</li>
+    <li>Diferencia entre mics: llena los nulos, sobre todo en graves (paso 4).</li>
+    <li>El parlante, si queda atrás, pasa a −6 dB: el AEC sigue haciendo todo el trabajo.</li>
+  </ul>
+  <div class="box"><b>Costo de CPU</b><p>Dos restas, una multiplicación, integrador y ÷2: unas 6 operaciones por muestra. Con el pasaaltos y el crossover, menos de ~30. Despreciable para el ESP32-S3 frente al AFE y la wake word.</p></div>
+</section>
+
+<section id="medir">
+  <h2><span class="n">10</span>Qué medir y criterio</h2>
+  <ol>
+    <li>Mics pegados a una regla a 21,4 mm, en endfire. Modo UART, AFE apagado.</li>
+    <li>Tomas de 8 s: voz de frente, la misma voz de costado (90°), voz de frente con ruido o música de costado, y una de silencio para el ruido de fondo.</li>
+    <li>Offline: pasaaltos → hipercardioide → ecualizador. Medir el rechazo frente/costado, la respuesta de frente (±3 dB entre 200 Hz y 6 kHz con división en bandas), la SNR con ruido contra un mic solo y el ruido de fondo después de la cadena.</li>
+    <li>Como cardioide, hiper y dipolo son el mismo código con distinto β, conviene probar los tres sobre las mismas tomas.</li>
+  </ol>
+  <div class="box warn"><b>Criterio de terminado</b><p>Al menos ~8 dB de rechazo de la fuente de costado en 300 Hz – 3 kHz (la teoría da 12) y una mejora de SNR con ruido de sala de al menos ~3 dB contra un mic solo, sin que el ruido de graves amplificado se escuche. Si no se llega, se descarta.</p></div>
+</section>
+
+<section id="simulacion">
+  <h2><span class="n">11</span>Simulación en Python: los gráficos</h2>
+  <p>Salen de <code>tools/lab_cardioide.py</code> (rama <code>prueba-hipercardioide</code>): simula tonos que llegan a los 2 mics desde distintos ángulos, aplica la cadena del paso 6 (cardioides \(c_F\) y \(c_B\), peso β) y el ecualizador del paso 7, y mide el nivel de salida. Se verificó contra la fórmula en frecuencia: error máximo 0,000 dB. Para regenerarlos: <code>python tools/lab_cardioide.py</code>.</p>
+  <figure class="cuadrada">
+    <img src="img/patron_polar.png" alt="Patrón polar a 1 kHz del cardioide y del hipercardioide, con el frente arriba" width="1400" height="1400">
+    <figcaption><b>Patrón polar a 1 kHz.</b> Frente arriba. Cuanto más lejos del centro, más pasa el sonido: el borde es 0 dB y el centro −30 dB. El hipercardioide (naranja) cierra los costados a −11,9 dB y tiene dos nulos a ±109,5°, con un lóbulo chico atrás (−6 dB). El cardioide (azul) deja los costados en −5,9 dB y anula lo de atrás. Las líneas punteadas marcan los nulos.</figcaption>
+  </figure>
+  <figure>
+    <img src="img/respuesta_en_frecuencia.png" alt="Respuesta en frecuencia del hipercardioide en frente, costado y atrás, sin y con ecualizador" width="2000" height="1600">
+    <figcaption><b>Respuesta en frecuencia del hipercardioide.</b> 0 dB es lo que entrega un mic solo. Arriba, solo la resta: sube 6 dB por octava (es la derivada de la voz). Abajo, con el ecualizador: la voz de frente (azul) queda plana entre ~300 Hz y ~2 kHz, el costado queda parejo en −12 dB (esa es la directividad) y atrás en −6 dB. En la zona gris (más de 4 kHz) el frente cae: ahí conviene un mic solo.</figcaption>
+  </figure>
+  <div class="tbl"><table>
+    <thead><tr><th>A 1 kHz, relativo al frente</th><th>Cardioide (β = 0)</th><th>Hipercardioide (β = 0,5)</th></tr></thead>
+    <tbody>
+      <tr><td>Costado (90°)</td><td class="num">−5,9 dB</td><td class="num good">−11,9 dB</td></tr>
+      <tr><td>Atrás (180°)</td><td class="num good">nulo (cero exacto)</td><td class="num">−6,0 dB</td></tr>
+      <tr><td>Nulo del hiper (109,5°)</td><td class="num">—</td><td class="num good">−50,7 dB</td></tr>
+    </tbody>
+  </table></div>
+  <p>El nulo del hipercardioide llega a −50,7 dB y no a −∞: la teoría de array chico predice un cero, el cálculo exacto lo deja un poco por encima.</p>
+</section>
+
+<section id="lab">
+  <h2><span class="n">12</span>Laboratorio polar</h2>
+  <p>La cadena que se implementa (paso 6): dos cardioides con retardo de <b>una muestra entera</b> y el peso β, en fórmula exacta y con diferencia de ganancia entre mics. Con d = 21,4 mm es lo que corre el firmware; cambiar d muestra qué pasa si la PCB no respeta la distancia. Escala radial: 0 a −30 dB respecto del frente.</p>
+  <div class="lab">
+    <canvas id="polar" width="520" height="520" aria-label="Patrón polar del array diferencial"></canvas>
+    <div class="ctrls">
+      <div class="presets" role="group" aria-label="Patrones">
+        <button type="button" data-b="1">Dipolo (β = 1)</button>
+        <button type="button" data-b="0.5">Hipercardioide (β = 0,5)</button>
+        <button type="button" data-b="0.27">Supercardioide (β = 0,27)</button>
+        <button type="button" data-b="0">Cardioide (β = 0)</button>
+      </div>
+      <div class="ctrl"><label for="beta">Peso β (retardo fijo: 1 muestra) <output id="beta-o"></output></label><input id="beta" type="range" min="0" max="1" step="0.01" value="0.5"></div>
+      <div class="ctrl"><label for="d">Separación d <output id="d-o"></output></label><input id="d" type="range" min="10" max="60" step="0.5" value="21.4"></div>
+      <div class="ctrl"><label for="f">Frecuencia <output id="f-o"></output></label><input id="f" type="range" min="0" max="1" step="0.001" value="0.55"></div>
+      <div class="ctrl"><label for="e">Diferencia de ganancia entre mics <output id="e-o"></output></label><input id="e" type="range" min="0" max="3" step="0.1" value="0"></div>
+      <dl class="readout">
+        <dt>Nulo (mínimo en 0–180°)</dt><dd id="r-null"></dd>
+        <dt>Directividad DF</dt><dd id="r-df"></dd>
+        <dt>WNG (vs ruido propio, 1 mic)</dt><dd id="r-wng"></dd>
+        <dt>Primer cero de frente</dt><dd id="r-fz"></dd>
+      </dl>
+      <p class="msg" id="msg" role="status"></p>
+    </div>
+  </div>
+</section>
+
+<section id="apendice">
+  <h2><span class="n">13</span>Apéndice</h2>
+  <h3>Suma contra resta: el mismo beamformer con distinto peso</h3>
+  <p>Con 2 mics, todo beamformer es \(Y(\omega) = \tfrac12\big[X_1 + w(\omega)\,X_2\big]\). El delay-and-sum visto en clase (multiplicar el bin de la DFT por una fase) usa \(w = e^{+j\omega\tau}\); el diferencial, \(w = -e^{-j\omega T}\).</p>
+  <div class="eq">\[ |H_{\text{DSB}}| = \Big|\cos\!\Big(\tfrac{\omega\tau_0}{2}(\cos\theta-\cos\theta_s)\Big)\Big|, \qquad |H_{\text{dif}}| = 2\Big|\sin\!\Big(\tfrac{\omega}{2}(T+\tau_0\cos\theta)\Big)\Big|. \]</div>
+  <p>Con \(\omega\tau_0\ll1\) el DSB vale casi 1 desde cualquier dirección y no separa nada. En el diferencial el argumento del seno sí depende del ángulo.</p>
+  <ul>
+    <li>La fase tiene que ser lineal en \(\omega\) (\(\varphi = \omega\tau\)). Una fase constante sirve solo para banda angosta: con voz, el haz apunta a otro ángulo en cada frecuencia.</li>
+    <li>Un solo bin (Goertzel) sirve para medir o calibrar, no para reconstruir la señal: para eso hacen falta todos los bins (FFT + overlap-add).</li>
+    <li>En frecuencia, el retardo fraccionario sale gratis; el costo es la latencia de un bloque.</li>
+  </ul>
+  <h3>Versión adaptativa (Elko &amp; Pong, 1995)</h3>
+  <p>El hipercardioide del paso 6 es esta misma estructura con \(\beta = 0{,}5\) fijo. Si el ruido no viene siempre del mismo lado, \(\beta\) se puede adaptar para mover el nulo por el semiplano de atrás:</p>
+  <div class="eq">\[ c_F[n] = x_1[n]-x_2[n-1], \quad c_B[n] = x_2[n]-x_1[n-1], \quad y[n] = c_F[n]-\beta\,c_B[n] \;\propto\; (1-\beta)+(1+\beta)\cos\theta. \]</div>
+  <p>De frente la ganancia es 2 para cualquier \(\beta\), así que minimizar la potencia de salida solo puede anular lo de atrás:</p>
+  <div class="eq">\[ \beta[n+1] = \operatorname{clip}_{[0,1]}\!\left(\beta[n] + \mu\,\frac{y[n]\,c_B[n]}{\overline{c_B^2}[n]+\varepsilon}\right). \]</div>
+  <p>El ecualizador del paso 7 va después de \(y[n]\), igual que en el hipercardioide fijo.</p>
+</section>
+
+<footer>Referencias: Elko &amp; Pong, “A simple adaptive first-order differential microphone”, IEEE WASPAA 1995, pp. 169–172 · Benesty &amp; Chen, <em>Study and Design of Differential Microphone Arrays</em>, Springer 2012 · ST DT0117 · nota de aplicación de InvenSense sobre beamforming broadside y endfire. Mediciones de pasaaltos y DSB: tomas estéreo de <code>esp_audio_testing</code> (29/10/2026).</footer>
+</main>
+
+<script>
+window.MathJax = {
+  tex: { inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]] },
+  svg: { fontCache: "global" }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js"></script>
+<script>
+(function () {
+  var C = 343, FS = 16000, RANGO_DB = 30;
+  var $ = function (id) { return document.getElementById(id); };
+  var cv = $("polar"), ctx = cv.getContext("2d");
+
+  function frec() { return 100 * Math.pow(80, +$("f").value); }
+  function params() {
+    return { beta: +$("beta").value, d: +$("d").value / 1000, f: frec(), g: Math.pow(10, -(+$("e").value) / 20) };
+  }
+  // Cadena implementada: c_F = x1 - x2*z, c_B = x2 - x1*z, y = c_F - beta*c_B, con z = e^(-jwT) y T = 1 muestra.
+  // x1 = 1 (referencia); x2 = g * e^(-jw*tau0*cos(theta)) (retardo acustico + diferencia de ganancia).
+  function H(th, p) {
+    var tau0 = p.d / C, w = 2 * Math.PI * p.f, T = 1 / FS;
+    var a = -w * tau0 * Math.cos(th);
+    var x2r = p.g * Math.cos(a), x2i = p.g * Math.sin(a);
+    var zr = Math.cos(w * T), zi = -Math.sin(w * T);
+    var cfr = 1 - (x2r * zr - x2i * zi), cfi = -(x2r * zi + x2i * zr);
+    var cbr = x2r - zr, cbi = x2i - zi;
+    return Math.hypot(cfr - p.beta * cbr, cfi - p.beta * cbi);
+  }
+  function tok(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function dibujar() {
+    var p = params();
+    $("beta-o").textContent = p.beta.toFixed(2);
+    $("d-o").textContent = (p.d * 1000).toFixed(1) + " mm (τ₀ = " + (p.d / C * FS).toFixed(2) + " muestras)";
+    $("f-o").textContent = p.f < 1000 ? p.f.toFixed(0) + " Hz" : (p.f / 1000).toFixed(2) + " kHz";
+    $("e-o").textContent = (+$("e").value).toFixed(1) + " dB";
+
+    var h0 = H(0, p), N = 720, minV = Infinity, minTh = 0, den = 0;
+    for (var i = 0; i <= N; i++) {
+      var th = Math.PI * i / N, v = H(th, p);
+      if (v < minV) { minV = v; minTh = th; }
+      den += ((i === 0 || i === N) ? 0.5 : 1) * v * v * Math.sin(th) * (Math.PI / N);
+    }
+    den *= 0.5;
+    var df = h0 * h0 / den;
+    var wng = h0 * h0 / ((1 + p.g * p.g) * (1 + p.beta * p.beta + 2 * p.beta * Math.cos(2 * Math.PI * p.f / FS)));
+    $("r-null").textContent = (minTh * 180 / Math.PI).toFixed(0) + "°, " + (20 * Math.log10(Math.max(minV, 1e-9) / h0)).toFixed(1) + " dB";
+    $("r-df").textContent = (10 * Math.log10(df)).toFixed(1) + " dB";
+    $("r-wng").textContent = (10 * Math.log10(wng)).toFixed(1) + " dB";
+    var fz = 1 / (p.d / C + 1 / FS);
+    $("r-fz").textContent = fz < 1000 ? fz.toFixed(0) + " Hz" : (fz / 1000).toFixed(2) + " kHz";
+    $("msg").textContent = (h0 < 0.2) ? "El frente casi se anula a esta frecuencia: el array dejó de ser chico." : "";
+
+    var dpr = window.devicePixelRatio || 1, W = cv.clientWidth;
+    if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(W * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, W);
+    var cx = W / 2, cy = W / 2, R = W / 2 - 28;
+    var muted = tok("--muted"), rule = tok("--rule"), acc = tok("--accent"), nul = tok("--null");
+
+    ctx.lineWidth = 1; ctx.strokeStyle = rule; ctx.fillStyle = muted;
+    ctx.font = "11px " + tok("--font-data");
+    for (var k = 0; k <= 3; k++) {
+      var rr = R * (1 - k * 10 / RANGO_DB);
+      ctx.beginPath(); ctx.arc(cx, cy, Math.max(rr, 0.5), 0, 2 * Math.PI); ctx.stroke();
+      if (k < 3) ctx.fillText((-10 * k) + " dB", cx + 4, cy - rr + 12);
+    }
+    for (var a = 0; a < 360; a += 30) {
+      var ra = a * Math.PI / 180;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + R * Math.sin(ra), cy - R * Math.cos(ra)); ctx.stroke();
+    }
+    ctx.textAlign = "center";
+    ctx.fillText("0° frente", cx, cy - R - 10);
+    ctx.fillText("180° atrás", cx, cy + R + 20);
+    ctx.textAlign = "left";
+
+    ctx.beginPath();
+    for (var j = 0; j <= 360; j++) {
+      var t = j * Math.PI / 180;
+      var db = 20 * Math.log10(Math.max(H(t, p), 1e-9) / h0);
+      var r = R * Math.max(0, (db + RANGO_DB) / RANGO_DB);
+      var x = cx + r * Math.sin(t), y = cy - r * Math.cos(t);
+      if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = acc; ctx.lineWidth = 2.2; ctx.stroke();
+    ctx.globalAlpha = 0.10; ctx.fillStyle = acc; ctx.fill(); ctx.globalAlpha = 1;
+
+    ctx.strokeStyle = nul; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
+    [minTh, -minTh].forEach(function (t) {
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + R * Math.sin(t), cy - R * Math.cos(t)); ctx.stroke();
+    });
+    ctx.setLineDash([]);
+  }
+
+  ["beta", "d", "f", "e"].forEach(function (id) { $(id).addEventListener("input", dibujar); });
+  document.querySelectorAll(".presets button").forEach(function (b) {
+    b.addEventListener("click", function () { $("beta").value = b.dataset.b; dibujar(); });
+  });
+  window.addEventListener("resize", dibujar);
+  if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", dibujar);
+  new MutationObserver(dibujar).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  dibujar();
+})();
+</script>
+<script>
+(function () {
+  var C = 343, FS = 16000, FMAX = 8000;
+  var $ = function (id) { return document.getElementById(id); };
+  var cv = $("rf");
+  if (!cv) return;
+  function tok(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  // Cadena real: H = (1 - e^{-j(u+v)}) - beta (e^{-ju} - e^{-jv}), u = w*tau0*cos(th), v = w*T, T = 1 muestra.
+  function mag(f, thDeg, beta, d) {
+    var w = 2 * Math.PI * f, u = w * (d / C) * Math.cos(thDeg * Math.PI / 180), v = w / FS;
+    var x2r = Math.cos(-u), x2i = Math.sin(-u), zr = Math.cos(v), zi = -Math.sin(v);
+    var cfr = 1 - (x2r * zr - x2i * zi), cfi = -(x2r * zi + x2i * zr);
+    return Math.hypot(cfr - beta * (x2r - zr), cfi - beta * (x2i - zi));
+  }
+  function draw() {
+    var beta = +$("rf-b").value, d = +$("rf-d").value / 1000, th = +$("rf-th").value;
+    $("rf-th-o").textContent = th + "°";
+    $("rf-b-o").textContent = beta.toFixed(2);
+    $("rf-d-o").textContent = (d * 1000).toFixed(1) + " mm (τ₀ = " + (d / C * FS).toFixed(2) + " muestras)";
+    var dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = W * 480 / 900;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    var ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    var L = 44, R = W - 12, T = 12, B = H - 40;
+    var curves = [[0, "--accent", 2], [90, "--ok", 2], [180, "--null", 2], [th, "--fg", 3]];
+    var ym = 2;
+    curves.forEach(function (c) { for (var i = 0; i <= 160; i++) ym = Math.max(ym, mag(FMAX * i / 160, c[0], beta, d)); });
+    ym = Math.ceil(ym * 2) / 2;
+    var px = function (f) { return L + (R - L) * f / FMAX; }, py = function (v) { return B - (B - T) * v / ym; };
+    ctx.lineWidth = 1; ctx.strokeStyle = tok("--rule"); ctx.fillStyle = tok("--muted"); ctx.font = "11px " + tok("--font-data");
+    ctx.textAlign = "center";
+    for (var k = 0; k <= 8; k++) { var x = px(k * 1000); ctx.beginPath(); ctx.moveTo(x, T); ctx.lineTo(x, B); ctx.stroke(); ctx.fillText(k + (k === 8 ? " kHz" : ""), x, B + 15); }
+    ctx.textAlign = "right";
+    for (var y = 0; y <= ym + 1e-9; y += 0.5) { var yy = py(y); ctx.beginPath(); ctx.moveTo(L, yy); ctx.lineTo(R, yy); ctx.stroke(); ctx.fillText(y.toFixed(1), L - 6, yy + 4); }
+    ctx.textAlign = "center"; ctx.fillText("frecuencia", (L + R) / 2, B + 31);
+    ctx.save(); ctx.translate(12, (T + B) / 2); ctx.rotate(-Math.PI / 2); ctx.fillText("|H|", 0, 0); ctx.restore();
+    curves.forEach(function (c) {
+      ctx.strokeStyle = tok(c[1]); ctx.lineWidth = c[2]; ctx.beginPath();
+      for (var i = 0; i <= 400; i++) { var f = FMAX * i / 400; (i ? ctx.lineTo : ctx.moveTo).call(ctx, px(f), py(mag(f, c[0], beta, d))); }
+      ctx.stroke();
+    });
+    // ceros que caen en la banda (mínimos locales casi nulos), excluida la continua
+    ctx.fillStyle = tok("--panel"); ctx.lineWidth = 2;
+    curves.forEach(function (c) {
+      ctx.strokeStyle = tok(c[1]);
+      for (var i = 2; i < 400; i++) {
+        var a = mag(FMAX * (i - 1) / 400, c[0], beta, d), m = mag(FMAX * i / 400, c[0], beta, d), b = mag(FMAX * (i + 1) / 400, c[0], beta, d);
+        if (m < a && m <= b && m < 0.03) { ctx.beginPath(); ctx.arc(px(FMAX * i / 400), py(m), 5, 0, 7); ctx.fill(); ctx.stroke(); }
+      }
+      var e = mag(FMAX, c[0], beta, d);
+      if (e < 0.03) { ctx.beginPath(); ctx.arc(px(FMAX), py(e), 5, 0, 7); ctx.fill(); ctx.stroke(); }
+    });
+  }
+  ["rf-th", "rf-b", "rf-d"].forEach(function (id) { $(id).addEventListener("input", draw); });
+  window.addEventListener("resize", draw);
+  if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+  draw();
+})();
+</script>
+
+</body></html>

@@ -24,7 +24,7 @@ Lista completa por tipo de componente. Modelo entre paréntesis = referencia, no
 - **Programación / debug:** conector o pads para flasheo y logs en la PCB final.
 - **Botones:** reset y boot (para flasheo).
 
-**Pines:** ya no se listan acá. Todos (asignados, reservados y por qué) están en `orbita-obsidian/orbita_pinout.md`: consultarlo antes de proponer, revisar o tocar un GPIO, y actualizarlo cuando cambie uno.
+**Pines:** ya no se listan acá. Todos (asignados, reservados y por qué) están en `orbita-obsidian/pines.md`: consultarlo antes de proponer, revisar o tocar un GPIO, y actualizarlo cuando cambie uno.
 
 **Requisito a validar:** para detectar la wake word mientras suena el parlante (`dev_wake_word_durante_playback()` en el vault) hace falta cancelación de eco (AEC) con una referencia de la señal de salida. Condiciona el ruteo del parlante en la PCB.
 
@@ -42,7 +42,7 @@ Etapa 1 completada (2026-09). Desde ahí el trabajo va en frentes paralelos, ya 
 6. **Producto Final** — PCB personalizada y primera tanda de producción.
 
 ## Fuente de verdad de la arquitectura
-La FSM y las decisiones de arquitectura viven en `orbita-obsidian/órbita..md` (estados, transiciones `dev_`/`srv_`, puntos abiertos). Consultarlo en cada decisión de diseño y avisar si una propuesta lo contradice o si hay que actualizarlo — no diseñar de memoria.
+La FSM y las decisiones de arquitectura viven en `orbita-obsidian/fsm.md` (estados, transiciones `dev_`/`srv_`, puntos abiertos). Consultarlo en cada decisión de diseño y avisar si una propuesta lo contradice o si hay que actualizarlo — no diseñar de memoria.
 
 ## Quiénes somos (contexto del equipo)
 Somos estudiantes de Ingeniería Electrónica. Todavía **no cursamos la materia de Sistemas Embebidos**, así que no asumas conocimiento previo de microcontroladores, periféricos, RTOS, drivers, etc. — hay que explicar esos conceptos desde la base cuando aparecen por primera vez.

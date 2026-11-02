@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-/* Layout: arriba los controles y la ecuación viva; abajo las piezas en polar lineal (c_F, β·c_B, y), y una segunda fila con el mismo y descompuesto en omni + figura-8. */
+/* Layout: arriba los controles y la ecuación viva; abajo las piezas en polar lineal (c_F, β·c_B, y), el mismo y descompuesto en omni + figura-8, y la medición en placa. */
 :root {
   --bg: #f4f7f8;
   --panel: #ffffff;
@@ -66,6 +66,13 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .cell .t { font-family: var(--font-data); font-size: 13px; text-align: center; }
 .cell .s { font-size: 12px; color: var(--muted); text-align: center; min-height: 2.6em; }
 .op { display: flex; align-items: center; justify-content: center; font-family: var(--font-data); font-size: 22px; color: var(--muted); }
+[hidden] { display: none !important; }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th { font-weight: 500; color: var(--muted); }
+td:nth-child(n+2), th:nth-child(n+2) { text-align: right; font-family: var(--font-data); }
+td b { color: var(--y); font-weight: 500; }
 canvas { display: block; width: 100%; height: auto; }
 .readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 18px; font-size: 13px; margin: 0; }
 .readout div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--rule); padding: 3px 0; }
@@ -82,7 +89,8 @@ canvas { display: block; width: 100%; height: auto; }
 <main>
 <header style="display:flex;flex-direction:column;gap:8px">
   <h1>Un hipercardioide con dos cardioides</h1>
-  <p class="muted">Un cardioide mira hacia adelante (<span class="m">c_F</span>) y otro hacia atrás (<span class="m">c_B</span>). Se restan con un peso β: <span class="m">y = c_F − β·c_B</span>. Moviendo β se recorre cardioide, supercardioide, hipercardioide y dipolo, sin retardos fraccionarios. Radio lineal: el borde es el nivel de frente de <span class="m">c_F</span>.</p>
+  <p class="muted">Un cardioide mira hacia adelante (<span class="m">c_F</span>) y otro hacia atrás (<span class="m">c_B</span>). Se restan con un peso β: <span class="m">y = c_F − β·c_B</span>. Moviendo β se recorre cardioide, supercardioide, hipercardioide y dipolo. Mics a 21,4 mm = 1 muestra a 16 kHz, así cada cardioide sale con un retardo entero. Radio lineal: el borde es el nivel de frente de <span class="m">c_F</span>.</p>
+  <p class="muted">Teoría completa (cadena, ecualizador, ruido propio, simulación): <a href="teoria_hipercardioide.html" style="color:var(--y)">teoria_hipercardioide.html</a>.</p>
 </header>
 
 <section>
@@ -139,6 +147,26 @@ canvas { display: block; width: 100%; height: auto; }
       <div class="op">=</div>
       <div class="cell"><canvas id="p-y2" width="320" height="320" aria-label="Resultado"></canvas><div class="t" style="color:var(--y)">y (el mismo de arriba)</div><div class="s" id="s-y2"></div></div>
     </div>
+  </div>
+</section>
+
+<section>
+  <h2>3. Medido en placa (01/11)</h2>
+  <div class="panel">
+    <p><b>Cómo:</b> INMP441 a 21,4 mm, β = 0,5, parlante a 0,5 m con ruido continuo. El firmware graba 5 s y manda un WAV <span class="m">[L, R, BF]</span> por UART. Métrica: <span class="m">BF − mic L</span> en 300–3000 Hz (0 dB = igual que un mic solo; negativo = atenuado).</p>
+    <p><b>Corrimiento L/R:</b> el canal R llega <span class="m">0,86</span> muestras antes que L (eléctrico). Medido con la misma toma normal y con los pines L/R intercambiados: eléctrico = promedio de las dos. Se compensa con un FIR de Lagrange de 4 coeficientes sobre R antes de la resta.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Posición</th><th>Ángulo medido</th><th>Sin compensar</th><th>Compensado</th></tr></thead>
+        <tbody>
+          <tr><td>Frente</td><td>76°</td><td>−3,0 dB</td><td><b>−0,7 dB</b></td></tr>
+          <tr><td>Arriba</td><td>97°</td><td>−3,8 dB</td><td><b>−7,1 dB</b></td></tr>
+          <tr><td>Costado</td><td>119°</td><td>−3,8 dB</td><td><b>−15,1 dB</b></td></tr>
+          <tr><td>Atrás</td><td>154°</td><td>+1,7 dB</td><td><b>−3,0 dB</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">Sin compensar no hay directividad (todo entre +2 y −4 dB; atrás incluso pasa más que el frente). Compensado aparece la forma del hipercardioide: frente entero, nulo cerca de 120° (−15 dB) y un lóbulo trasero chico (−3 dB; teórico −6). Mismas tomas en las dos columnas, una por posición; el ángulo sale del retardo medido. Detalle: <span class="m">prueba_2_beam.md</span>.</p>
   </div>
 </section>
 </main>

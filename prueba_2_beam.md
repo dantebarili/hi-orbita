@@ -1,6 +1,6 @@
 # Prueba 2 — beamforming propio (30/10 y 01/11)
 
-Rama `prueba-beamforming`. Hipercardioide diferencial endfire, mics a 21,4 mm (1 muestra), `c_F − 0,5·c_B` + integrador (fc 150 Hz). Teoría: `orbita-obsidian/hipercardioide_con_cardioides.html`.
+Rama `prueba-beamforming`. Hipercardioide diferencial endfire, mics a 21,4 mm (1 muestra), `c_F − 0,5·c_B` + integrador (fc 150 Hz). Teoría: `orbita-obsidian/Beamforming/teoria_hipercardioide.html`; resumen con las mediciones: `resumen_beamforming.html` (misma carpeta).
 
 ## Qué hay
 - `firmware/components/orbita_beamforming/`: beamformer en C puro, con la compensación L/R.
@@ -18,26 +18,28 @@ El canal R llega **0,86 muestras antes** que L (~54 µs). Sigue al canal, no al 
 - R pasa por un **FIR de Lagrange de 4 coeficientes** (retardo 1 + 0,86) y L se retrasa 1 muestra pura → alineados. `BF_CORRIMIENTO_R` en `test_bf.c`.
 - Validado en Python contra un retardo ideal (FFT): mismos dB en las 4 tomas; error < 0,2 dB y < 0,03 muestras hasta 3 kHz. El C simulado coincide con la referencia (1 LSB). Latencia extra: 62,5 µs.
 
-## Resultados con compensación (parlante a 0,5 m, 1 toma por posición)
-| Toma | Posición | Ángulo medido | BF − mic L sin compensar | **con compensación** |
-|---|---|---|---|---|
-| `toma_bf_3` | frente | 52° | −0,3 dB | **−0,6 dB** |
-| `toma_bf_4` | atrás | 143° | −0,7 dB | **−5,7 dB** |
-| `toma_bf_5` | arriba | 88° | −1,5 dB | **−2,1 dB** |
-| `toma_bf_6` | costado | 105° | −4,4 dB | **−10,5 dB** |
+## Resultados en placa (BF compensado en el firmware, parlante a 0,5 m, 1 toma por posición)
+`BF − mic L` en 300–3000 Hz: 0 dB = igual que un mic solo. "Sin compensar" = mismas tomas, beamformer sin alinear calculado en la PC.
 
-- **Primera directividad real:** frente/atrás 5 dB, costado 10 dB (el nulo del hipercardioide está a ~110°). Sin compensar, todo daba igual.
-- Lejos de la teoría (~15 dB atrás) porque frente/atrás no quedaron sobre el eje (52° y 143°, no 0° y 180°).
-- **Arriba no cierra:** debería rechazar como el costado (−2 vs −10 dB). Repetir; sospecha: reflejo de la mesa o los agujeros de los mics hacia arriba.
-- Las tomas del 30/10 no sirven para directividad: todas quedaron entre 60° y 116°.
+| Toma | Posición | Ángulo medido | Sin compensar | **Compensado (placa)** |
+|---|---|---|---|---|
+| `toma_bf_9` | frente | 76° | −3,0 dB | **−0,7 dB** |
+| `toma_bf_11` | arriba | 97° | −3,8 dB | **−7,1 dB** |
+| `toma_bf_8` | costado | 119° | −3,8 dB | **−15,1 dB** |
+| `toma_bf_10` | atrás | 154° | +1,7 dB | **−3,0 dB** |
+
+- **Directividad real:** frente/costado 14 dB, con el nulo cerca de 120° como predice el hipercardioide. Atrás −3 dB: lóbulo trasero (teórico −6). Para más rechazo atrás: `BF_BETA` ~0,27–0,3 (supercardioide), a costa del costado.
+- Firmware vs Python: 1 LSB en 3 tomas; `toma_bf_11` difiere en 223 muestras (0,3 %), probable error de transmisión de esa toma. `toma_bf_7` era de prueba (descartada).
+- El frente quedó a 76°, no a 0°: con el parlante sobre el eje los rechazos serían algo mayores.
+- Las tomas del 30/10 y la tarde del 01/11 (`toma_bf_3`–`6`) dieron lo mismo compensadas en la PC.
 
 ## Próximo
-1. Flashear el modo beamforming con la compensación y repetir 2 tomas por posición, con el parlante **sobre el eje** (0° y 180°) y lejos de superficies.
+1. Repetir 2–3 tomas por posición con el parlante **sobre el eje** (0° y 180°) y lejos de superficies; con eso decidir `beta`.
 2. Probar con voz y STT: crudo vs AFE vs beamformer. Es el número que decide.
 3. Decidir 21,4 mm vs 50 mm: a 50 mm el corrimiento pesa 2,3 veces menos.
 4. Producto: en un consultorio hablan médico y paciente desde lados distintos; un haz fijo atenúa a uno. Definir si sirve antes de seguir.
 
 ## Para la PCB
-- SD del INMP441 necesita 100 kΩ a GND (Fig. 7, p. 11). Hoy no figura en `orbita_pinout.md`.
+- SD del INMP441 necesita 100 kΩ a GND (Fig. 7, p. 11). Hoy no figura en `pines.md`.
 - Sensibilidad ±3 dB por mic (Tabla 1) y corrimiento L/R del bus: calibración por unidad o constante medida en la línea de producción.
 - L/R a GND = izquierdo (Fig. 9–10, p. 12).

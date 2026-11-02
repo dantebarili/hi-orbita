@@ -2,7 +2,7 @@
 
 > **A futuro (diseño de la PCB):** probar los MCP de KiCad (`mixelpixx/KiCAD-MCP-Server`, el más maduro, pide KiCad 9+) y de partes JLCPCB/LCSC (`jlc-mcp`) para revisar esquemáticos y elegir componentes. Son comunitarios e inmaduros: usarlos como segunda opinión, nunca como verificación; los pines y tensiones se confirman a mano contra el datasheet. Detalle en `reports/Herramientas Claude para firmware embebido.md`.
 
-FSM: `órbita..md`. Hardware y pines: `CLAUDE.md`.
+FSM: `fsm.md`. Hardware y pines: `CLAUDE.md`.
 
 Estado: **Cerrada** · **Provisoria** (vale hasta medir/verificar) · **Propuesta** (sin validar) · **Abierta**.
 
@@ -66,7 +66,7 @@ El resto (IDF, Wi-Fi, lwIP, TLS futuro) no está itemizado: es la diferencia ent
 | Concepto | MB | Origen |
 |---|---|---|
 | **Disponible** (N16R8) | **8** | `CLAUDE.md` |
-| Ring out (1024 slots × 1040 B) | 1,04 | calculado (`diseño_ring_orbita.md`) |
+| Ring out (1024 slots × 1040 B) | 1,04 | calculado (`ring.md`) |
 | Ring in (8 chunks de 4 KB) | 0,03 | calculado |
 | **Total usado hoy** | **≈ 1,07** | calculado |
 | *Previsto:* ring out a 60 s (1875 slots) | +0,9 | estimado (diseño) |
@@ -116,7 +116,7 @@ Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). 
 | `app_main` | Arranque | 0 | 1 | 8 KB | sin medir |
 | `envio` (`test.c`, laboratorio) | WAV por UART0 | 0 | 5 | 4 KB | sin medir |
 | `orbita_playback` (S7) | Ring de salida → I2S del parlante (validado con red el 15/10) | 0 | 6 | 4 KB | sin medir |
-| `led` (31/10) | Aro WS2812 por RMT con DMA (buffer ~4 KB interna); cuadros de 20 ms solo mientras anima. Detalle: `aro_luz.md` | 0 | 2 | 3 KB | sin medir |
+| `led` (31/10) | Aro WS2812 por RMT con DMA (buffer ~4 KB interna); cuadros de 20 ms solo mientras anima. Detalle: `leds.md` | 0 | 2 | 3 KB | sin medir |
 
 **REPARTO DE CORES:**
 - core 0: main, wifi, envio (sink) y recepcion (parlante, sink)
@@ -207,16 +207,16 @@ La tarea `captura` lee el I2S (slots de 32 bit, 24 útiles en el INMP441), convi
 
 ### 3.4 Rings, header y tabla de segmentos
 
-Movido a [[diseño_ring_orbita]].
+Movido a [[ring]].
 
 ### 3.5 Sink, mensajes y contrato con Comunicación
 
-Movido a [[protocolo_comunicacion]].
+Movido a [[protocolo]].
 
 ## 4. Puertos serie y cableado de los mics
 
 - **Dos puertos serie, uso separado:** UART0 (chip puente USB-UART del DevKit) solo para logs (`idf.py monitor`); USB-Serial-JTAG nativo libre para comandos y datos (`tools/orbita_serial.py`). Compartirlos hace que el driver se instale dos veces y falle (`ESP_ERR_INVALID_STATE`). Se logra con `CONFIG_ESP_CONSOLE_UART_DEFAULT=y`, `CONFIG_ESP_CONSOLE_UART_NUM=0` y `CONFIG_ESP_CONSOLE_SECONDARY_NONE=y` en `sdkconfig.defaults`. En Windows, cuál es cuál se ve en el Administrador de dispositivos desconectando un cable. En la PCB: chip puente o conector de programación, o USB nativo sin puente (decisión de BOM).
-- **Cableado de los dos mics:** BCLK, WS y DIN (pines en `orbita_pinout.md`) van en paralelo a ambos; cada mic elige su slot con el pin `L/R` (a GND = canal L, a VDD = canal R, según el datasheet del INMP441/ICS-43434: verificar). Alimentación 3,3 V estricta, nunca 5 V.
+- **Cableado de los dos mics:** BCLK, WS y DIN (pines en `pines.md`) van en paralelo a ambos; cada mic elige su slot con el pin `L/R` (a GND = canal L, a VDD = canal R, según el datasheet del INMP441/ICS-43434: verificar). Alimentación 3,3 V estricta, nunca 5 V.
 
 ## 5. Pendientes de producto (sin dueño todavía)
 

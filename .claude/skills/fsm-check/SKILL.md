@@ -1,10 +1,10 @@
 ---
 name: fsm-check
-description: Verifica que una decisión de diseño (firmware, comunicación, o integración de frentes) sea consistente con la FSM y los puntos abiertos documentados en orbita-obsidian/órbita..md. Usar antes de proponer o aceptar cambios que toquen eventos dev_/srv_, transiciones de estado, o el contrato entre el frente Audio y el frente Comunicación.
+description: Verifica que una decisión de diseño (firmware, comunicación, o integración de frentes) sea consistente con la FSM y los puntos abiertos documentados en orbita-obsidian/fsm.md. Usar antes de proponer o aceptar cambios que toquen eventos dev_/srv_, transiciones de estado, o el contrato entre el frente Audio y el frente Comunicación.
 user-invocable: false
 ---
 
-CLAUDE.md establece que `orbita-obsidian/órbita..md` es la fuente de verdad de la arquitectura (la FSM, sus estados, transiciones `dev_`/`srv_`, y los puntos abiertos). Ninguna decisión de diseño debe tomarse de memoria si toca esa capa.
+CLAUDE.md establece que `orbita-obsidian/fsm.md` es la fuente de verdad de la arquitectura (la FSM, sus estados, transiciones `dev_`/`srv_`, y los puntos abiertos). Ninguna decisión de diseño debe tomarse de memoria si toca esa capa.
 
 Antes de proponer o validar un cambio que:
 - agregue, quite, o modifique un evento `dev_*` o `srv_*`,
@@ -12,7 +12,7 @@ Antes de proponer o validar un cambio que:
 - toque el contrato entre el frente Audio (wake word, filtrado) y el frente Comunicación (WebSockets, backend),
 - o proponga un comportamiento durante envío/interrupción (ej. wake word a mitad de un envío, `dev_fin_segmento`),
 
-leer `orbita-obsidian/órbita..md` completo (no solo buscar el término puntual) y verificar:
+leer `orbita-obsidian/fsm.md` completo (no solo buscar el término puntual) y verificar:
 
 1. Si el cambio ya está contemplado en la FSM tal como está documentada.
 2. Si contradice una transición o un punto ya cerrado.

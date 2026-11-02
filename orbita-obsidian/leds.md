@@ -1,6 +1,6 @@
 # Aro de luz (24 x WS2812) — cómo funciona el firmware
 
-Código: `firmware/components/orbita_led/` (dibuja) y `firmware/components/orbita_audio_ws/audio_ws_led.c` (decide el estado). Pin: GPIO1 (`orbita_pinout.md`). Tarea `led`: `arquitectura.md`. Colores elegidos con el artifact "Aro LED de Órbita" (31/10). Estado: **sin probar en placa**.
+Código: `firmware/components/orbita_led/` (dibuja) y `firmware/components/orbita_audio_ws/audio_ws_led.c` (decide el estado). Pin: GPIO1 (`pines.md`). Tarea `led`: `arquitectura.md`. Colores elegidos con el artifact "Aro LED de Órbita" (31/10). Estado: **sin probar en placa**.
 
 ## Capas
 
@@ -209,7 +209,7 @@ Init: crea el mutex primero, después `orbita_led_init`, arranca en SIN RED y la
 
 ## D. Enganches y secuencia
 
-| Llamada | Archivo | FSM (`órbita..md`) |
+| Llamada | Archivo | FSM (`fsm.md`) |
 |---|---|---|
 | `audio_ws_led_init()` | `main.c`, después de la wake word | arranque |
 | `audio_ws_led_conversacion(true)` | `audio_ws_conversacion.c` (`on_wake`) | `dev_wake_word` → `server_send` |
