@@ -1,5 +1,4 @@
 #include "sdkconfig.h"
-#if CONFIG_ORBITA_LAB_WEBSOCKET
 /* ADAPTADOR: audio_sink.c -> send(ctx,msg) -> orbita_ws_send -> servidor.   Protocolo orbita-pcm-v2.
  * Sesion continua: UN `hello` por conexion, audio sin fin, sin `end`. El servidor responde
  * `ready` y manda `ack` cada ~1 s; aca solo se cuentan (sirven para el reenvio, A6).
@@ -155,17 +154,7 @@ static bool wait_ready(uint32_t connection, uint32_t timeout_ms)
 // Si el ready no llega, la proxima llamada en la misma conexion solo vuelve a esperarlo: un segundo
 // hello lo rechaza el servidor y cerraria la conexion.
 // Config que viaja en el hello y queda en el JSON de la toma, para saber despues con que se hizo.
-// Las perillas del VAD solo existen en el Kconfig con el AFE activado: sin AFE se informa -1.
-#ifdef CONFIG_ORBITA_AFE_VAD_MODE
-#define HELLO_VAD_MODE      CONFIG_ORBITA_AFE_VAD_MODE
-#define HELLO_VAD_SPEECH_MS CONFIG_ORBITA_AFE_VAD_MIN_SPEECH_MS
-#define HELLO_VAD_NOISE_MS  CONFIG_ORBITA_AFE_VAD_MIN_NOISE_MS
-#else
-#define HELLO_VAD_MODE      (-1)
-#define HELLO_VAD_SPEECH_MS (-1)
-#define HELLO_VAD_NOISE_MS  (-1)
-#endif
-
+// afe y vad_* quedan fijos (0 y -1): el firmware ya no tiene AFE, pero el protocolo los sigue llevando.
 static bool start_session(uint32_t connection)
 {
     if (s.hello_conn != connection) {
@@ -177,11 +166,9 @@ static bool start_session(uint32_t connection)
         int n = snprintf(s.control, sizeof(s.control),
             "{\"type\":\"hello\",\"protocol\":\"orbita-pcm-v2\",\"id\":\"%016" PRIx64
             "\",\"rate\":16000,\"channels\":1,\"format\":\"s16le\",\"source\":\"%s\","
-            "\"config\":{\"afe\":%d,\"vad_mode\":%d,\"vad_speech_ms\":%d,\"vad_noise_ms\":%d,"
+            "\"config\":{\"afe\":0,\"vad_mode\":-1,\"vad_speech_ms\":-1,\"vad_noise_ms\":-1,"
             "\"play_gain_q15\":%d}}",
-            s.id, ORBITA_PIPELINE_USA_AFE ? "afe" : ORBITA_RAW_MIC_SOURCE,
-            ORBITA_PIPELINE_USA_AFE, HELLO_VAD_MODE, HELLO_VAD_SPEECH_MS, HELLO_VAD_NOISE_MS,
-            ORBITA_PLAY_GAIN_Q15);
+            s.id, ORBITA_RAW_MIC_SOURCE, ORBITA_PLAY_GAIN_Q15);
         if (n <= 0 || (size_t)n >= sizeof(s.control) ||
             orbita_ws_send(ORBITA_WS_TEXT, s.control, n, SEND_TIMEOUT_MS) != ESP_OK) return false;
         s.hello_conn = connection;
@@ -317,4 +304,3 @@ const orbita_sink_t *orbita_audio_ws_sink(void)
     return &sink;
 }
 
-#endif

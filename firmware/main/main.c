@@ -7,7 +7,6 @@
 #include "audio_sink.h"
 #include "pipeline.h"
 #include "sdkconfig.h"
-#if CONFIG_ORBITA_LAB_WEBSOCKET
 #include "orbita_wifi.h"
 #include "orbita_ws.h"
 #include "audio_ws_sink.h"
@@ -19,11 +18,6 @@
 #include "esp_netif.h"
 #include "nvs_flash.h"
 #include "wakeword.h"
-#elif CONFIG_ORBITA_LAB_BEAMFORMING
-#include "test_bf.h"
-#else
-#include "test.h"
-#endif
 
 // Falla de arranque: en laboratorio el equipo NO se reinicia (un reinicio en bucle tapa el
 // motivo). Queda parado repitiendo el error, para leerlo en el monitor. En producto esto
@@ -38,7 +32,6 @@ static void arranque_fallo(const char *que, esp_err_t err)
     }
 }
 
-#if CONFIG_ORBITA_LAB_WEBSOCKET
 // Medir en placa: el ring va a PSRAM, pero DMA y pilas consumen RAM interna.
 static void log_memoria(const char *etapa)
 {
@@ -48,18 +41,16 @@ static void log_memoria(const char *etapa)
              (unsigned)heap_caps_get_largest_free_block(caps),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
 }
-#endif
 
 void app_main(void)
 {
-#if CONFIG_ORBITA_LAB_WEBSOCKET
     // S2: la captura va PRIMERO y no espera a la red. Wi-Fi y WebSocket se levantan despues y
     // se reconectan solos (Wi-Fi cada 5 s, WebSocket con backoff 1-2-4-8 s); mientras tanto el
     // sink retiene el audio en el ring (S1).
     if (!CONFIG_ORBITA_WIFI_SSID[0] || !CONFIG_ORBITA_WS_URI[0])
-        arranque_fallo("Configurar Wi-Fi y URI en Orbita integration", ESP_ERR_INVALID_ARG);
+        arranque_fallo("Configurar Wi-Fi y URI en menuconfig -> Orbita WiFi", ESP_ERR_INVALID_ARG);
     esp_err_t err;
-    // La wake word va primero: su arena (~50 KB) se reserva en RAM interna antes que el AFE.
+    // La wake word va primero: su arena (~50 KB) se reserva en RAM interna antes que el resto.
     log_memoria("antes de wakeword");
     // Cada deteccion abre una conversacion: recien ahi se manda audio al servidor (pre-roll incluido).
     err = orbita_wakeword_start(audio_ws_conversacion_on_wake);
@@ -68,17 +59,17 @@ void app_main(void)
     (void)audio_ws_led_init();
     err = orbita_audio_i2s_init();
     if (err != ESP_OK) arranque_fallo("I2S", err);
-    // El ring del parlante (PSRAM) se reserva antes de que el pipeline/AFE asignen sus buffers.
+    // El ring del parlante (PSRAM) se reserva antes de que el pipeline asigne sus buffers.
     log_memoria("antes de playback");
     err = audio_ws_playback_init();
     if (err != ESP_OK) arranque_fallo("playback", err);
     log_memoria("despues de playback");
-    // No enviar desde on_crudo ni on_afe. La wake word recibe el audio CRUDO (sin AFE): su
-    // on_crudo solo copia el promedio L+R a su ring y vuelve.
+    // No enviar desde on_crudo. La wake word recibe el promedio L+R (omnidireccional): su on_crudo solo
+    // lo copia a su ring y vuelve. Lo que va al servidor sale del beamformer (pipeline, tarea feed).
     const orbita_pipeline_cfg_t pipe_cfg = { .on_crudo = orbita_wakeword_on_crudo };
     err = orbita_pipeline_start(&pipe_cfg);
     if (err != ESP_OK) arranque_fallo("pipeline", err);
-    log_memoria("despues de pipeline/AFE");
+    log_memoria("despues de pipeline");
     // Unico consumidor del ring out: arma los mensajes y los manda por el WebSocket, pero solo durante
     // una conversacion (compuerta cerrada hasta la wake word; el ring guarda los ultimos ~32 s).
     err = audio_ws_conversacion_init();
@@ -103,37 +94,4 @@ void app_main(void)
     if (err != ESP_OK) arranque_fallo("WebSocket", err);
     log_memoria("arranque completo");
     ESP_LOGI("main", "Listo: decir \"Orbita\" para empezar a mandar audio al servidor");
-#elif CONFIG_ORBITA_LAB_BEAMFORMING
-    // Prueba de beamforming: sin red, sin wake word, sin sink. Captura -> PSRAM -> beamformer -> UART0.
-    test_bf_init();
-    esp_err_t err = orbita_audio_i2s_init();
-    if (err != ESP_OK) arranque_fallo("orbita_audio_i2s_init", err);
-    err = orbita_pipeline_start(test_bf_pipeline_cfg());
-    if (err != ESP_OK) arranque_fallo("orbita_pipeline_start", err);
-    test_bf_loop();
-#else
-    // Drivers y rings del modulo de laboratorio (se borra cuando exista el sink de sockets).
-    test_init();
-
-    // --- Audio: I2S y pipeline de captura ---
-    esp_err_t err = orbita_audio_i2s_init();
-    if (err != ESP_OK) {
-        arranque_fallo("orbita_audio_i2s_init", err);
-    }
-
-    err = orbita_pipeline_start(test_pipeline_cfg());     // Se carga el callback del test (test_on_crudo) en la configuracion
-    if (err != ESP_OK) {
-        arranque_fallo("orbita_pipeline_start", err);
-    }
-
-    // Sink de laboratorio: vacia el ring out y cuenta mensajes (no envia nada). Despues del
-    // pipeline, que es quien hace orbita_ring_out_init().
-    err = orbita_sink_start(test_sink());
-    if (err != ESP_OK) {
-        arranque_fallo("orbita_sink_start", err);
-    }
-
-    // Loop de comandos de laboratorio ('g' graba una toma, 's' pide el resumen). No vuelve.
-    test_loop();
-#endif
 }

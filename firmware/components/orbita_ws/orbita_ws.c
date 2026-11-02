@@ -280,7 +280,7 @@ esp_err_t orbita_ws_start(const orbita_ws_config_t *config)
         .buffer_size = ORBITA_WS_MAX_MESSAGE_BYTES,
         .task_stack = 6144,
         .task_prio = 4,
-        // Toda la red en el core 0 (captura y AFE en el core 1).
+        // Toda la red en el core 0 (captura, beamformer y wake word en el core 1).
         .task_core_id_set = true,
         .task_core_id = 0,
         .task_name = "orbita_ws",

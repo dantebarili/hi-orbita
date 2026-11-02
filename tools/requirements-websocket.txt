@@ -1,1 +1,4 @@
 websockets==17.1
+numpy
+scipy
+requests

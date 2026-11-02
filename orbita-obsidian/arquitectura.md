@@ -114,7 +114,6 @@ Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). 
 | `ws_play_reports` | Reportes PLAY por WebSocket | 0 | 3 | 6 KB | sin medir |
 | `orbita_wifi` | Conexión y reintentos | **sin fijar** | 3 | 4 KB | sin medir |
 | `app_main` | Arranque | 0 | 1 | 8 KB | sin medir |
-| `envio` (`test.c`, laboratorio) | WAV por UART0 | 0 | 5 | 4 KB | sin medir |
 | `orbita_playback` (S7) | Ring de salida → I2S del parlante (validado con red el 15/10) | 0 | 6 | 4 KB | sin medir |
 | `led` (31/10) | Aro WS2812 por RMT con DMA (buffer ~4 KB interna); cuadros de 20 ms solo mientras anima. Detalle: `leds.md` | 0 | 2 | 3 KB | sin medir |
 
@@ -185,9 +184,9 @@ La tarea `captura` lee el I2S (slots de 32 bit, 24 útiles en el INMP441), convi
 
 ### 3.3 AFE y wake word
 
-- **AFE (`esp-sr`):** solo VAD (NS, AGC y WakeNet apagados). Desactivable en compilación (`CONFIG_ORBITA_PIPELINE_USA_AFE`); **apagado por defecto; en el alfa se enciende para AEC y VAD** (`plan_orbita.md`, Línea 2). NS y beamforming siguen en pausa (decisión 11/10; `plan_dante.md` se borró el 19/10, queda en el historial de git: `git show 3da73c6:plan_dante.md`). El beamforming (BSS) no actuaba con 2 mics (medido 12/10) y se sacó el 14/10 (`se_init = false`). Sin BSS el AFE pide `feed` de 512 frames: el pipeline alimenta cada chunk de 1024 en 2 llamadas (15/10, compila; sin probar en placa con el AFE encendido); el VAD queda en modo 4 por defecto. El NS del AFE solo existe en `AFE_TYPE_VC`. La cifra "~1,2 MB de PSRAM y ~46 % de un núcleo" es estimación sin fuente.
+- **AFE (`esp-sr`): sacado de `main` el 01/11** (no se usaba; queda en la rama `tests+afe`). Lo que sigue es el historial: solo VAD (NS, AGC y WakeNet apagados). Desactivable en compilación (`CONFIG_ORBITA_PIPELINE_USA_AFE`); **apagado por defecto; en el alfa se enciende para AEC y VAD** (`plan_orbita.md`, Línea 2). NS y beamforming siguen en pausa (decisión 11/10; `plan_dante.md` se borró el 19/10, queda en el historial de git: `git show 3da73c6:plan_dante.md`). El beamforming (BSS) no actuaba con 2 mics (medido 12/10) y se sacó el 14/10 (`se_init = false`). Sin BSS el AFE pide `feed` de 512 frames: el pipeline alimenta cada chunk de 1024 en 2 llamadas (15/10, compila; sin probar en placa con el AFE encendido); el VAD queda en modo 4 por defecto. El NS del AFE solo existe en `AFE_TYPE_VC`. La cifra "~1,2 MB de PSRAM y ~46 % de un núcleo" es estimación sin fuente.
 - **Wake word "Órbita":** modelo propio entrenado con el pipeline de microWakeWord, con su propio búfer de ventana; consume todo el audio siempre. Si corre sobre audio crudo o sobre la salida del AFE se decide con datos (plan en `orbita-dataset/plan_wakeword.md`).
-- **Mono:** al ring out va audio mono (salida del AFE, o canal L del crudo sin AFE; L o mezcla: a decidir con Comunicación). Se reduce lo más tarde posible, nunca antes del ring in.
+- **Mono:** al ring out va la salida del **beamformer** (hipercardioide con la compensación L/R, en `tarea_feed`; `source = "bf"`). La wake word usa el promedio L+R (omnidireccional). Se reduce lo más tarde posible, nunca antes del ring in.
 - **AEC (diseño, 15/10; pasos y pendientes en `plan_orbita.md` Línea 2):**
   - **Cómo funciona:** el parlante reproduce `x(n)`; el mic oye la voz más el eco, `d(n) = voz + h * x(n)` (`h` = camino parlante → aire → mic). Un filtro FIR de `L` coeficientes `w` estima el eco `ŷ(n) = w * x(n)` a partir de la referencia, se resta (`e(n) = d(n) − ŷ(n)`) y `e(n)` ajusta `w` (tipo LMS/NLMS) para minimizar el residuo. Sigue un NLP (supresor del eco que queda) y el VAD. Todo ocurre **dentro** del AFE: `feed` solo entrega mic, mic, ref (`"MMR"`, referencia al final).
   - **`D` = retardo entre que `x(n)` se entrega como referencia y su eco llega al mic.** El filtro solo cancela ecos con retardo dentro de lo que cubre (`filter_length`; unidad **sin verificar**, hipótesis 4 × 32 ms). Si `D` cae fuera, el AEC no cancela nada. Se compensa con una línea de retardo `τ ≈ D − margen` en la referencia, contando **muestras**, no tiempo de reloj.
@@ -215,7 +214,7 @@ Movido a [[protocolo]].
 
 ## 4. Puertos serie y cableado de los mics
 
-- **Dos puertos serie, uso separado:** UART0 (chip puente USB-UART del DevKit) solo para logs (`idf.py monitor`); USB-Serial-JTAG nativo libre para comandos y datos (`tools/orbita_serial.py`). Compartirlos hace que el driver se instale dos veces y falle (`ESP_ERR_INVALID_STATE`). Se logra con `CONFIG_ESP_CONSOLE_UART_DEFAULT=y`, `CONFIG_ESP_CONSOLE_UART_NUM=0` y `CONFIG_ESP_CONSOLE_SECONDARY_NONE=y` en `sdkconfig.defaults`. En Windows, cuál es cuál se ve en el Administrador de dispositivos desconectando un cable. En la PCB: chip puente o conector de programación, o USB nativo sin puente (decisión de BOM).
+- **Dos puertos serie, uso separado:** UART0 (chip puente USB-UART del DevKit) solo para logs (`idf.py monitor`); USB-Serial-JTAG nativo libre (en la rama `tests+afe` lo usan las pruebas por UART). Compartirlos hace que el driver se instale dos veces y falle (`ESP_ERR_INVALID_STATE`). Se logra con `CONFIG_ESP_CONSOLE_UART_DEFAULT=y`, `CONFIG_ESP_CONSOLE_UART_NUM=0` y `CONFIG_ESP_CONSOLE_SECONDARY_NONE=y` en `sdkconfig.defaults`. En Windows, cuál es cuál se ve en el Administrador de dispositivos desconectando un cable. En la PCB: chip puente o conector de programación, o USB nativo sin puente (decisión de BOM).
 - **Cableado de los dos mics:** BCLK, WS y DIN (pines en `pines.md`) van en paralelo a ambos; cada mic elige su slot con el pin `L/R` (a GND = canal L, a VDD = canal R, según el datasheet del INMP441/ICS-43434: verificar). Alimentación 3,3 V estricta, nunca 5 V.
 
 ## 5. Pendientes de producto (sin dueño todavía)

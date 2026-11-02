@@ -2,5 +2,5 @@
 #include "audio_sink.h"
 
 // Un solo consumidor del ring: registrar este sink EN LUGAR de test_sink().
-// Lo invoca tarea_sink; nunca llamar desde captura/on_crudo/on_afe.
+// Lo invoca tarea_sink; nunca llamar desde la captura ni desde on_crudo.
 const orbita_sink_t *orbita_audio_ws_sink(void);

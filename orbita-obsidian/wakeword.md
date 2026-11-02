@@ -66,7 +66,7 @@ En el orden en que actúan:
 | `reiniciar_por_hueco()` | `tarea_wakeword` | Si se perdió audio: `FrontendReset` (la reducción de ruido y el PCAN tienen memoria), `s_paso = 0` y `reiniciar_deteccion()`. La memoria del modelo no se puede resetear sin recargarlo; la espera de 3 s la "lava". |
 | `log_resumen()` | `tarea_wakeword`, cada 10 s | Imprime detecciones, probabilidad máxima, tiempos máximos de frontend e `Invoke`, huecos, overruns, contadores de la captura, stack y RAM interna libre. |
 
-## Medido en PC (`tools/wakeword_ref.py`, 25/10)
+## Medido en PC (`tools/wakeword_ref.py`, 25/10; la herramienta está en la rama `tests+afe`)
 - `okay_nabu`: entrada [1,3,40] int8, escala 26/255, cero −128; salida uint8 con escala 1/256; 13 operaciones.
 - Se detecta igual atenuado hasta −72 dBFS de RMS: el PCAN normaliza el nivel, así que no hace falta ganancia; lo que limita es la SNR.
 - 0 disparos en 10 min de ruido de laboratorio.

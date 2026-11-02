@@ -14,7 +14,7 @@ Un solo lugar con todos los pines y dónde están en el código. Es la fuente de
 | 16 | 9 | I2S parlante: DOUT | En uso (PCB, 16/10) | `ORBITA_PLAY_DOUT_GPIO`, `orbita_playback.h` | DIN del MAX98357A |
 | 1 | 39 | LED aro WS2812: DIN | Propuesto (01/11, RMT; antes GPIO17) | `ORBITA_LED_GPIO`, `orbita_led.h` | DIN del primer LED (330 Ω en serie; DO del último al aire). Es ADC1_CH0: se pierde ese canal analógico |
 | 17 / 18 / 21 | 10 / 11 / 23 | NFC | Propuesto (01/11) | — | Lector NFC. Interfaz sin definir: alcanzan para I2C o UART, no para SPI (4 líneas + IRQ/RST) |
-| 19 / 20 | 13 / 14 | USB-Serial-JTAG (DM / DP) | Reservado | — | Comandos y datos (`tools/orbita_serial.py`) |
+| 19 / 20 | 13 / 14 | USB-Serial-JTAG (DM / DP) | Reservado | — | Sin uso en `main` (en la rama `tests+afe`, comandos y datos de las pruebas UART) |
 | 43 / 44 | 37 / 36 | UART0 (TX / RX) | Reservado | — | Logs (`idf.py monitor`) |
 
 Controladores I2S: mics en `I2S_NUM_0`, parlante en `I2S_NUM_1` (el S3 tiene 2). Si se pasa a mics PDM, tienen que seguir en `I2S_NUM_0`: el driver solo acepta PDM ahí (`i2s_pdm.c`, IDF v5.5.5). Pads según el datasheet WROOM-1 v1.3, Tabla 3; strapping: GPIO0 = pad 27, 3 = 15, 45 = 26, 46 = 16.

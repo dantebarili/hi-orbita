@@ -1,5 +1,4 @@
 #include "sdkconfig.h"
-#if CONFIG_ORBITA_LAB_WEBSOCKET
 
 #include "audio_ws_playback.h"
 #include "audio_ws_wire.h"
@@ -287,4 +286,3 @@ bool audio_ws_playback_is_active(void)
     return orbita_playback_is_active();
 }
 
-#endif

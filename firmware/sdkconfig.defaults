@@ -3,10 +3,7 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_ESP32S3_SPIRAM_SUPPORT=y
 
-# Logs (ESP_LOGI/E) por UART0 (puerto del chip puente USB-UART), no por el
-# USB-Serial-JTAG nativo. Asi liberamos el USB-Serial-JTAG (GPIO19/20) para
-# uso exclusivo nuestro (comandos + datos hacia la PC) sin que el sistema
-# tambien instale su propio driver ahi y choque con el nuestro.
+# Logs (ESP_LOGI/E) por UART0 (puerto del chip puente USB-UART, `idf.py monitor`).
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_CONSOLE_UART_NUM=0
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
@@ -24,13 +21,12 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 # sabemos que es quad, asi que se apaga y se usa lo configurado arriba.
 # CONFIG_ESPTOOLPY_FLASH_MODE_AUTO_DETECT is not set
 
-# Tabla de particiones propia (firmware/partitions.csv). Hace falta una
-# particion "model" para los modelos del AFE de esp-sr y dos slots de app
-# para poder actualizar por OTA mas adelante.
+# Tabla de particiones propia (firmware/partitions.csv): dos slots de app para
+# actualizar por OTA mas adelante y "clips" para los audios locales.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
-# CPU a 240 MHz (el maximo del S3). El AFE es lo mas pesado del sistema y
+# CPU a 240 MHz (el maximo del S3). La wake word es lo mas pesado del sistema y
 # el consumo hay que medirlo con esta frecuencia, que es la de produccion.
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 

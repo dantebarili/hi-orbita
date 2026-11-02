@@ -1,0 +1,6 @@
+# Opcion oculta (sin menu): orbita_ws manda desde varias tareas (sink, playback) y necesita el lock de
+# envio separado del cliente WebSocket. Antes lo activaba el modo "WebSocket" del menu viejo.
+config ORBITA_WS_TX_LOCK
+    bool
+    default y
+    select ESP_WS_CLIENT_SEPARATE_TX_LOCK

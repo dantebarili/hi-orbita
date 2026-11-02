@@ -76,7 +76,7 @@ Cada mensaje WebSocket binario tiene header + PCM, **4096 B en total como maximo
 
 ## Verificacion y memoria
 
-Pruebas host (tras resolver dependencias con ESP-IDF; compilador C en PATH):
+Pruebas host (estan en la rama `tests+afe`; tras resolver dependencias con ESP-IDF; compilador C en PATH):
 
 ```
 cmake -S tools/tests/downlink -B <carpeta-temporal>

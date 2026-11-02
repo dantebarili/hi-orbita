@@ -92,7 +92,7 @@ static void reiniciar_por_hueco(void)
 // uint16 del frontend -> int8 del modelo: int8 = round(v * 1/25.6 / escala_in) + cero_in.
 // No se usa la formula fija de ESPHome ((v*256 + 333)/666 - 128): asume escala 26/256 y los
 // modelos traen 26/255 (difiere en ~6 % de los valores por 1 LSB). Mismo calculo en float32 que
-// tools/wakeword_ref.py, para que el test bit a bit de igual.
+// tools/wakeword_ref.py (rama tests+afe), para que el test bit a bit de igual.
 static void cuantizar(const uint16_t *v, int8_t *out)
 {
     for (int i = 0; i < FE_FEATURES; i++) {

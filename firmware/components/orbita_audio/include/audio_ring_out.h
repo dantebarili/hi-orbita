@@ -13,12 +13,12 @@
 
 // --- Constantes del ring ---
 #define ORBITA_RING_VERSION      1                                    // Para comprobar que el sink y el ring comparten el header
-#define ORBITA_SLOT_SAMPLES      512                                  // 32 ms mono a 16 kHz (= un fetch del AFE)
+#define ORBITA_SLOT_SAMPLES      512                                  // 32 ms mono a 16 kHz (= medio chunk de captura)
 #define ORBITA_SLOT_AUDIO_BYTES  (ORBITA_SLOT_SAMPLES * 2)            // 1024 B
 #define ORBITA_RING_SLOTS        1024                                 // ~32,8 s (32 ms por slot), 1,04 MB en PSRAM
 
 // Bits de `flags`. Con los dos en 0 (sin VAD) la compuerta queda ABIERTA: se manda igual.
-#define ORBITA_FLAG_VAD_OK       (1u << 0)   // el VAD midio este bloque (sin AFE no hay VAD)
+#define ORBITA_FLAG_VAD_OK       (1u << 0)   // el VAD midio este bloque (hoy no hay VAD: siempre 0)
 #define ORBITA_FLAG_VOZ          (1u << 1)   // el VAD detecto voz (solo vale si VAD_OK)
 
 /* HEADER: sirve para clasificar slots
@@ -60,8 +60,8 @@ typedef struct {
  * @brief   Reserva los ORBITA_RING_SLOTS slots en PSRAM (~1 MB). Llamar UNA vez.
  *
  * @details ORDEN DE ARRANQUE: (1) antes de crear las tareas que usan el ring (productor y sink): no
- *          esta pensado para que `init` corra en paralelo con `write`/`read`; (2) antes de iniciar el AFE:
- *          el bloque es contiguo y, si `esp-sr` ya fragmento la PSRAM, puede fallar.
+ *          esta pensado para que `init` corra en paralelo con `write`/`read`; (2) temprano: el bloque es
+ *          contiguo y, con la PSRAM fragmentada, puede fallar.
  *
  * @return  ESP_OK; ESP_ERR_INVALID_STATE si ya estaba iniciado; ESP_ERR_NO_MEM si no hay PSRAM.
  */

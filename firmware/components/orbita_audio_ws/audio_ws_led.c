@@ -1,5 +1,4 @@
 #include "sdkconfig.h"
-#if CONFIG_ORBITA_LAB_WEBSOCKET
 // Ver el cartel en audio_ws_led.h. Lo llaman wakeword, WebSocket, playback y esp_timer (todas tareas, ninguna
 // ISR). Un mutex cubre los tres datos Y el pedido al aro: si dos tareas recalculan a la vez, el ultimo pedido
 // que llega al aro es siempre el del estado mas nuevo. (Un spinlock no sirve: adentro no se puede usar la cola.)
@@ -83,4 +82,3 @@ void audio_ws_led_conversacion(bool abierta) { actualizar(&s_conversacion, abier
 
 void audio_ws_led_hablando(bool hablando) { actualizar(&s_hablando, hablando); }
 
-#endif

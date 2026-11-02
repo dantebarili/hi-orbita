@@ -6,8 +6,8 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
-#include "audio_afe.h"
 #include "audio_capture.h"
+#include "beamforming.h"
 #include "audio_ring_out.h"
 #include "orbita_tiempo.h"
 #include "pipeline.h"
@@ -72,11 +72,12 @@ static void hpf_a_16bit(const int32_t *in, int16_t *out, size_t frames)
 // Bloques mono de 512 muestras que salen de un chunk (hoy 2). Cada uno sera un slot del ring out.
 #define BLOQUES_POR_CHUNK   (ORBITA_CHUNK_FRAMES / ORBITA_SLOT_SAMPLES)
 
-// Buffer de tarea_feed (sin AFE): el chunk estereo reducido a mono, un bloque por fila.
-// Es static para no gastar el stack de la tarea (2 KB de 4 KB).
-#if !ORBITA_PIPELINE_USA_AFE
+// Buffer de tarea_feed: el chunk estereo ya beamformado (mono), un bloque por fila. Las filas son
+// contiguas en memoria, asi el beamformer escribe el chunk entero de una. Static: no gasta el stack de la tarea.
 static int16_t s_mono_buf[BLOQUES_POR_CHUNK][ORBITA_SLOT_SAMPLES];
-#endif
+
+// Estado del beamformer (sigue de un chunk al otro). Lo toca solo tarea_feed.
+static orbita_bf_t s_bf;
 
 // Contadores: cada uno lo escribe UNA sola tarea.
 static volatile uint32_t s_i2s_errores;
@@ -86,22 +87,16 @@ static volatile uint32_t s_max_captura_us;        // captura: una vuelta sin la 
 static volatile uint32_t s_max_ring_in_send_us;   // captura: xRingbufferSend al ring in
 static volatile uint32_t s_max_on_crudo_us;       // captura: el callback on_crudo
 static volatile uint32_t s_ring_in_max_items;     // captura: chunks esperando en el ring in (maximo)
-static volatile uint32_t s_max_feed_us;           // feed: una vuelta sin la espera (con AFE incluye afe_feed)
-static volatile uint32_t s_max_ring_out_write_us; // feed (sin AFE) o fetch (con AFE): ring_out_write
-#if ORBITA_PIPELINE_USA_AFE
-static volatile uint32_t s_max_fetch_us;          // fetch: una vuelta sin la espera del AFE
-static volatile uint32_t s_max_on_afe_us;         // fetch: el callback on_afe
-#endif
+static volatile uint32_t s_max_feed_us;           // feed: una vuelta sin la espera (beamformer incluido)
+static volatile uint32_t s_max_ring_out_write_us; // feed: ring_out_write
 
-// Errores de escritura al ring out (argumento invalido: no deberia pasar). La escribe quien produce slots.
+// Errores de escritura al ring out (argumento invalido: no deberia pasar). La escribe tarea_feed.
 static volatile uint32_t s_ring_out_errores;
 
-// Cada feed tiene que producir un numero entero de fetch (hoy 2).
-_Static_assert(ORBITA_CHUNK_FRAMES % ORBITA_AFE_FETCH_FRAMES == 0, "ORBITA_CHUNK_FRAMES debe ser multiplo de ORBITA_AFE_FETCH_FRAMES");
 // Cada chunk tiene que dar un numero entero de bloques mono: si no, el resto se perderia sin aviso.
 _Static_assert(ORBITA_CHUNK_FRAMES % ORBITA_SLOT_SAMPLES == 0, "ORBITA_CHUNK_FRAMES debe ser multiplo de ORBITA_SLOT_SAMPLES");
 
-/* RING IN: captura -> feed (con o sin AFE)
+/* RING IN: captura -> feed
  *  Dato:        ring de freeRTOS, chunks estereo 16 bit, sin header (NOSPLIT, 1 chunk por item)
  *  Item:        4096 B (1024 frames = 64 ms)    Capacidad: 8 items = 512 ms (~32 KB, en PSRAM)
  *  Productor:   tarea_captura (prio 6)    Consumidor: tarea_feed (prio 5), ambas core 1
@@ -113,31 +108,15 @@ static RingbufHandle_t s_ring_in;
 static TaskHandle_t s_feed_handle;
 static volatile uint32_t s_overruns_ring_in;     // la escribe la captura
 static volatile uint32_t s_chunks_invalidos;   // las dos siguientes las escribe tarea_feed
-static volatile uint32_t s_bloques_mono;       // bloques mono armados (sin AFE; 2 por chunk)
-
-#if ORBITA_PIPELINE_USA_AFE
-static TaskHandle_t s_fetch_handle;
-// Frames que pide cada afe_feed (lo fija esp-sr: 512 sin beamforming, 1024 con BSS). El chunk de captura
-// (ORBITA_CHUNK_FRAMES) tiene que ser multiplo: se alimenta en ORBITA_CHUNK_FRAMES / s_feed_frames llamadas.
-static int s_feed_frames;
-static volatile uint32_t s_chunks_alimentados; // las siguientes las escribe tarea_feed / tarea_fetch
-static volatile uint32_t s_chunks_recibidos;
-static volatile uint32_t s_fetch_vacios;
-static volatile uint32_t s_fetch_invalidos;
-static volatile uint32_t s_bloques_voz;
-#endif
+static volatile uint32_t s_bloques_mono;       // bloques mono armados (2 por chunk)
 
 // Muestras (mono, 16 kHz) perdidas desde la ultima llamada, para el `lost_samples` del proximo slot.
 // Convierte los contadores de perdida en muestras: un error de I2S o un chunk que no entro al ring in
-// son 1024 frames; un overflow del DMA, ORBITA_DMA_FRAME_NUM (240); un chunk invalido del ring in, 1024;
-// con AFE, un fetch invalido, 512. Aproximado (un overflow parcial no se mide exacto).
-// La llama SOLO la tarea que escribe el ring out (feed sin AFE, fetch con AFE): usa estado static.
+// son 1024 frames; un overflow del DMA, ORBITA_DMA_FRAME_NUM (240); un chunk invalido del ring in, 1024.
+// Aproximado (un overflow parcial no se mide exacto). La llama SOLO tarea_feed: usa estado static.
 static uint32_t muestras_perdidas_nuevas(void)
 {
     static uint32_t i2s_prev, dma_prev, ring_in_prev, chunk_inv_prev;
-#if ORBITA_PIPELINE_USA_AFE
-    static uint32_t fetch_inv_prev;
-#endif
     uint32_t i2s  = s_i2s_errores;
     uint32_t dma  = orbita_audio_get_dma_overflows();
     uint32_t ring_in = s_overruns_ring_in;
@@ -146,11 +125,6 @@ static uint32_t muestras_perdidas_nuevas(void)
                       + (dma - dma_prev) * ORBITA_DMA_FRAME_NUM
                       + (ring_in - ring_in_prev) * ORBITA_CHUNK_FRAMES
                       + (chunk_inv - chunk_inv_prev) * ORBITA_CHUNK_FRAMES;
-#if ORBITA_PIPELINE_USA_AFE
-    uint32_t fetch_inv = s_fetch_invalidos;
-    perdidas += (fetch_inv - fetch_inv_prev) * ORBITA_AFE_FETCH_FRAMES;
-    fetch_inv_prev = fetch_inv;
-#endif
     chunk_inv_prev = chunk_inv;
     i2s_prev = i2s;
     dma_prev = dma;
@@ -231,10 +205,11 @@ static void tarea_captura(void *arg)
 }
 
 // =============================================================================
-//  TAREA DE FEED  -  ring in -> AFE  (sin AFE: ring in -> mono L -> bloques de 512)
+//  TAREA DE FEED  -  ring in -> beamformer -> bloques mono de 512 -> ring out
 // =============================================================================
 static void tarea_feed(void *arg)
 {
+    uint32_t pausados_prev = s_chunks_pausados;
     while (1) {
         // Espera un chunk entero (hasta 100 ms). Devuelve un puntero DENTRO del
         // ring (no copia) y en `n` cuantos bytes tiene. NULL = no llego nada.
@@ -245,28 +220,21 @@ static void tarea_feed(void *arg)
         }
         uint32_t t_feed = orbita_t_us();
 
-#if ORBITA_PIPELINE_USA_AFE
         if (n == ORBITA_CHUNK_BYTES) {
-            // Un chunk de 1024 frames puede ser 1 o 2 feeds, segun lo que pida el AFE (ver s_feed_frames).
-            for (int f = 0; f < ORBITA_CHUNK_FRAMES; f += s_feed_frames) {
-                orbita_afe_feed(p + f * ORBITA_CHANNELS);   // aca se va el tiempo de la tarea
-            }
-            s_chunks_alimentados++;
-        } else {
-            s_chunks_invalidos++;    // sin log (puede haber una toma en curso)
-        }
-#else
-        if (n == ORBITA_CHUNK_BYTES) {
-            // Estereo L,R,L,R...: se promedian los dos mics sin cambiar la captura I2S.
-            const int16_t *estereo = (const int16_t *)p;
             // Lo perdido antes de este chunk va en el primer slot; el segundo es continuo con el primero.
             uint32_t perdidas = muestras_perdidas_nuevas();
+            // Si el audio no es continuo con el chunk anterior (se perdio audio o hubo una pausa del
+            // parlante), las muestras viejas que guarda el beamformer ya no valen: se arranca de cero.
+            uint32_t pausados = s_chunks_pausados;
+            if (perdidas > 0 || pausados != pausados_prev) {
+                orbita_bf_reset(&s_bf);
+                pausados_prev = pausados;
+            }
+            // Estereo L,R,L,R... -> hipercardioide mono, el chunk entero (los 2 bloques son contiguos).
+            orbita_bf_procesar(&s_bf, (const int16_t *)p, &s_mono_buf[0][0], ORBITA_CHUNK_FRAMES);
             for (size_t b = 0; b < BLOQUES_POR_CHUNK; b++) {
-                for (size_t k = 0; k < ORBITA_SLOT_SAMPLES; k++) {
-                    s_mono_buf[b][k] = orbita_mono_lr(estereo, b * ORBITA_SLOT_SAMPLES + k);
-                }
                 s_bloques_mono++;
-                // flags = 0: sin AFE no hay VAD, compuerta abierta (se manda igual).
+                // flags = 0: no hay VAD, compuerta abierta (se manda igual).
                 uint32_t t_w = orbita_t_us();
                 if (orbita_ring_out_write(s_mono_buf[b], ORBITA_SLOT_SAMPLES, 0, perdidas) != ESP_OK) {
                     s_ring_out_errores++;
@@ -277,7 +245,6 @@ static void tarea_feed(void *arg)
         } else {
             s_chunks_invalidos++;
         }
-#endif
 
         // Se devuelve el lugar al ring, haya sido valido el chunk o no.
         vRingbufferReturnItem(s_ring_in, p);
@@ -285,60 +252,9 @@ static void tarea_feed(void *arg)
     }
 }
 
-#if ORBITA_PIPELINE_USA_AFE
-// =============================================================================
-//  TAREA DE FETCH  -  AFE -> callback on_afe
-// =============================================================================
-static void tarea_fetch(void *arg)
-{
-    while (1) {
-        // Espera hasta 100 ms a que el AFE tenga audio procesado. El timeout es parte
-        // de la API del AFE: sin audio, devuelve error en vez de colgarse.
-        const int16_t *audio = NULL;
-        size_t bytes = 0;
-        bool voz = false;
-        if (orbita_afe_fetch(&audio, &bytes, 100, &voz) != ESP_OK) {
-            s_fetch_vacios++;
-            continue;
-        }
-
-        if (bytes != ORBITA_AFE_FETCH_BYTES) {
-            s_fetch_invalidos++;
-            continue;
-        }
-        uint32_t t_fetch = orbita_t_us();     // desde aca: trabajo sin la espera del AFE
-        s_chunks_recibidos++;
-        if (voz) {
-            s_bloques_voz++;
-        }
-
-        // Al ring out: VAD_OK solo si el VAD quedo activo tras afe_config_check (si no, voz=false
-        // no significa silencio y una compuerta cortaria todo); VOZ segun el VAD.
-        // Los `fetch` vacios/invalidos no entran en las perdidas (pendiente de decidir).
-        uint8_t flags = orbita_afe_vad_activo() ? (ORBITA_FLAG_VAD_OK | (voz ? ORBITA_FLAG_VOZ : 0)) : 0;
-        uint32_t t_w = orbita_t_us();
-        if (orbita_ring_out_write(audio, bytes / ORBITA_BYTES_PER_SAMPLE, flags, muestras_perdidas_nuevas()) != ESP_OK) {
-            s_ring_out_errores++;
-        }
-        orbita_max_us(&s_max_ring_out_write_us, t_w);
-
-        // `audio` es memoria del AFE y vale hasta el proximo fetch: el callback copia lo que
-        // necesite, sin esperar. Si fetch se atrasa, el AFE llena su buffer interno (1,6 s) y
-        // sobrescribe audio sin avisar: no se puede contar esa perdida.
-        if (s_cfg.on_afe != NULL) {
-            uint32_t t_cb = orbita_t_us();
-            s_cfg.on_afe(audio, bytes / ORBITA_BYTES_PER_SAMPLE, voz);
-            orbita_max_us(&s_max_on_afe_us, t_cb);
-        }
-        orbita_max_us(&s_max_fetch_us, t_fetch);
-    }
-}
-#endif  // ORBITA_PIPELINE_USA_AFE
 
 // =============================================================================
-//  INICIA CONFIG: se lo llama con orbita_pipeline_start(cfg)
-//  no se elige la opcion desde el arfgumento pero la constante hara q se inicie 
-//  con / sin AFE y de ahi sale el pipeline que esta en uso
+//  ARRANQUE: orbita_pipeline_start(cfg)
 // =============================================================================
 esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
 {
@@ -349,41 +265,16 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
         s_cfg = *cfg;
     }
 
-#if !ORBITA_PIPELINE_USA_AFE
-    ESP_LOGI(TAG, "Audio crudo mono: %s; pasa-altos %d Hz (2.o orden) en la captura", ORBITA_RAW_MIC_SOURCE, HPF_HZ);
-#endif
-    // El ring out se reserva ANTES del AFE (bloque contiguo de PSRAM; esp-sr la fragmenta) y antes
-    // de crear las tareas que lo usan. Si ya estaba iniciado (otro modulo), se sigue con ese.
+    orbita_bf_init(&s_bf, ORBITA_BF_ADELANTE_ES_L, ORBITA_BF_GANANCIA_ATRAS, ORBITA_BF_BETA, ORBITA_BF_FC_HZ,
+                   ORBITA_SAMPLE_RATE_HZ, ORBITA_BF_CORRIMIENTO_R);
+    ESP_LOGI(TAG, "Audio al servidor: hipercardioide (beta %.2f, corrimiento R %.2f); wake word: L+R; pasa-altos %d Hz",
+             (double)ORBITA_BF_BETA, (double)ORBITA_BF_CORRIMIENTO_R, HPF_HZ);
+    // El ring out (bloque contiguo de PSRAM) se reserva antes de crear las tareas que lo usan.
+    // Si ya estaba iniciado (otro modulo), se sigue con ese.
     esp_err_t ring_err = orbita_ring_out_init();
     if (ring_err != ESP_OK && ring_err != ESP_ERR_INVALID_STATE) {
         return ring_err;
     }
-
-#if ORBITA_PIPELINE_USA_AFE
-    esp_err_t err = orbita_afe_init();
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    // El chunk lo fija la libreria, no nosotros: si cambia (otro tipo de AFE, otra
-    // version de esp-sr), se frena aca en vez de entregar audio con tamanos desfasados.
-    int feed_frames = orbita_afe_feed_chunk_frames();
-    if (feed_frames <= 0 || ORBITA_CHUNK_FRAMES % feed_frames != 0) {
-        ESP_LOGE(TAG, "ORBITA_CHUNK_FRAMES=%d no es multiplo de los frames que pide feed (%d)",
-                 ORBITA_CHUNK_FRAMES, feed_frames);
-        esp_rom_printf("pipeline: ORBITA_CHUNK_FRAMES=%d, feed pide %d\n", ORBITA_CHUNK_FRAMES, feed_frames);
-        return ESP_ERR_INVALID_SIZE;
-    }
-    s_feed_frames = feed_frames;
-    int fetch_frames = orbita_afe_fetch_chunk_frames();
-    if (fetch_frames != ORBITA_AFE_FETCH_FRAMES) {
-        ESP_LOGE(TAG, "ORBITA_AFE_FETCH_FRAMES=%d no coincide con lo que entrega fetch (%d)",
-                 ORBITA_AFE_FETCH_FRAMES, fetch_frames);
-        esp_rom_printf("pipeline: ORBITA_AFE_FETCH_FRAMES=%d, fetch entrega %d\n", ORBITA_AFE_FETCH_FRAMES, fetch_frames);
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-#endif
 
     // En PSRAM explicito (antes dependia del umbral SPIRAM_MALLOC_ALWAYSINTERNAL). Mismo tamano que
     // xRingbufferCreateNoSplit(): (item + cabecera) x cantidad.
@@ -394,22 +285,15 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
         return ESP_ERR_NO_MEM;
     }
 
-    // Fetch primero (solo con AFE): saca del AFE lo que produce, para que nunca se llene.
-    // Despues feed: el consumidor tiene que existir antes que el productor (la captura).
+    // Feed primero: el consumidor tiene que existir antes que el productor (la captura).
     // Core 1, prioridad 5: menor que la captura (6), que puede interrumpirlas.
-#if ORBITA_PIPELINE_USA_AFE
-    if (xTaskCreatePinnedToCore(tarea_fetch, "fetch", 4096, NULL, 5, &s_fetch_handle, 1) != pdPASS) {
-        return ESP_ERR_NO_MEM;
-    }
-#endif
     if (xTaskCreatePinnedToCore(tarea_feed, "feed", 4096, NULL, 5, &s_feed_handle, 1) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
 
     // Linea de base de las perdidas: el I2S esta encendido desde orbita_audio_i2s_init() y nadie lo
-    // leyo hasta ahora (con AFE, orbita_afe_init() tarda segundos y el DMA acumula overflows). Eso es
-    // anterior al stream: se descarta el resultado para que el primer slot no traiga ese numero.
-    // Seguro: feed/fetch estan esperando datos y todavia no llaman a la funcion.
+    // leyo hasta ahora (el DMA acumula overflows). Eso es anterior al stream: se descarta el resultado
+    // para que el primer slot no traiga ese numero. Seguro: feed espera datos y todavia no la llama.
     (void)muestras_perdidas_nuevas();
 
     // Captura todo el tiempo, desde el arranque, fija al core 1 (WiFi usa el 0 por defecto).
@@ -432,10 +316,6 @@ void orbita_pipeline_reset_tiempos(void)
     s_ring_in_max_items = 0;
     s_max_feed_us = 0;
     s_max_ring_out_write_us = 0;
-#if ORBITA_PIPELINE_USA_AFE
-    s_max_fetch_us = 0;
-    s_max_on_afe_us = 0;
-#endif
 }
 
 void orbita_pipeline_get_stats(orbita_pipeline_stats_t *out)
@@ -460,16 +340,4 @@ void orbita_pipeline_get_stats(orbita_pipeline_stats_t *out)
     if (s_feed_handle != NULL) {
         out->stack_libre_feed = uxTaskGetStackHighWaterMark(s_feed_handle);
     }
-#if ORBITA_PIPELINE_USA_AFE
-    out->chunks_alimentados = s_chunks_alimentados;
-    out->chunks_recibidos = s_chunks_recibidos;
-    out->fetch_vacios = s_fetch_vacios;
-    out->fetch_invalidos = s_fetch_invalidos;
-    out->bloques_voz = s_bloques_voz;
-    out->max_fetch_us = s_max_fetch_us;
-    out->max_on_afe_us = s_max_on_afe_us;
-    if (s_fetch_handle != NULL) {
-        out->stack_libre_fetch = uxTaskGetStackHighWaterMark(s_fetch_handle);
-    }
-#endif
 }

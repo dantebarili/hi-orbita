@@ -1,5 +1,17 @@
 menu "Orbita WiFi"
 
+    config ORBITA_WIFI_SSID
+        string "Wi-Fi SSID (red de 2,4 GHz)"
+        default ""
+    config ORBITA_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default ""
+        help
+            Credenciales locales: sdkconfig y firmware las contienen. No compartirlos.
+    config ORBITA_WS_URI
+        string "WebSocket URI del servidor (ws://IP-PC:8765)"
+        default ""
+
     config ORBITA_WIFI_TX_POWER
         int "Potencia maxima de transmision (0 = la del driver; 8..84, unidad 0.25 dBm)"
         range 0 84

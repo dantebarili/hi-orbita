@@ -13,7 +13,7 @@
  *
  *          x1 = mic de adelante, x2 = mic de atras (ya multiplicado por la correccion de calibracion).
  *
- *          CORRIMIENTO L/R (01/11, prueba_2_beam.md): el canal R del I2S llega adelantado 0,86 muestras
+ *          CORRIMIENTO L/R (01/11, vault Beamforming/resumen_beamforming.html): el canal R del I2S llega adelantado 0,86 muestras
  *          (electrico, sigue al canal, no al mic). Antes de la resta se retrasa R con un FIR de Lagrange
  *          de 4 coeficientes (retardo 1 + corrimiento) y L con 1 muestra pura: quedan alineados.
  *          Validado en Python contra un retardo ideal (FFT): mismos dB en las 4 tomas; error < 0,2 dB
@@ -27,6 +27,19 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+/* PARAMETROS DEL PRODUCTO (los usa orbita_pipeline; medidos en placa el 01/11, ver vault Beamforming/)
+ *  Adelante:     slot L = mic de adelante (apunta al que habla). Si se monta al reves, false.
+ *  beta:         0,5 hipercardioide (nulo ~110°, costados -12 dB, atras -6 dB). 0,27 = supercardioide
+ *                (mas rechazo atras, menos de costado).
+ *  fc:           150 Hz el integrador (debajo, pasaaltos natural).
+ *  Ganancia:     1,0 = sin calibrar (los mics difieren ~1,3 dB; la calibracion por unidad esta pendiente).
+ *  Corrimiento:  el canal R llega 0,86 muestras antes que L (electrico, del bus I2S). */
+#define ORBITA_BF_ADELANTE_ES_L    true
+#define ORBITA_BF_BETA             0.5f
+#define ORBITA_BF_FC_HZ            150.0f
+#define ORBITA_BF_GANANCIA_ATRAS   1.0f
+#define ORBITA_BF_CORRIMIENTO_R    0.86f
 
 typedef struct {
     // --- Parametros (los fija orbita_bf_init) ---

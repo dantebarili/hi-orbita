@@ -16,19 +16,20 @@ Actualizado 2026-10-26. Reemplaza a `plan_prototipo_alfa.md` (borrado hoy; sigue
 
 ## Línea 2 — AEC + pipeline de audio (Dante, en paralelo, antes del merge)
 
-Objetivo: pipeline usable y demostrable a inversores con la placa actual (2 mics + parlante). Usar un solo mic es desperdicio: el AFE aprovecha los dos.
+Objetivo: pipeline usable y demostrable a inversores con la placa actual (2 mics + parlante).
+**01/11:** el beamformer propio (hipercardioide compensado) ya va en el pipeline de `main`; el AFE se sacó de `main` (queda en la rama `tests+afe` con las herramientas de prueba). Los ítems de AFE de abajo quedan en pausa.
 
-- [ ] **AGC y AEC offline en la PC** (ítem del 22/10, pasado del plan viejo): sobre tomas crudas L y R (WAV de 2 canales de `test.c`) a 0,5 / 1 / 2 m, con y sin ruido. AGC después de la captura (no tocar la ganancia/shift de captura); medir SNR, no volumen, porque el AGC sube ruido y voz juntos. AEC: reproducir un audio conocido por parlante, grabar mic + referencia (mismas muestras) y probar un AEC offline (speexdsp/WebRTC) para estimar el retardo referencia→mic. Terminado = tabla SNR (o eco residual) antes/después por distancia y decisión de qué entra al firmware.
+- [ ] **AGC y AEC offline en la PC** (ítem del 22/10, pasado del plan viejo): sobre tomas crudas L y R (WAV de 2 canales de `test.c`, rama `tests+afe`) a 0,5 / 1 / 2 m, con y sin ruido. AGC después de la captura (no tocar la ganancia/shift de captura); medir SNR, no volumen, porque el AGC sube ruido y voz juntos. AEC: reproducir un audio conocido por parlante, grabar mic + referencia (mismas muestras) y probar un AEC offline (speexdsp/WebRTC) para estimar el retardo referencia→mic. Terminado = tabla SNR (o eco residual) antes/después por distancia y decisión de qué entra al firmware.
 - [ ] **Medir RAM interna** con AFE + parlante + Wi-Fi (S4: el recorte de `orbita_ws` ya está; falta el número y cargarlo en `arquitectura.md` §1, sumando DMA de salida ≈ 4 KB y pila de `playback` 4 KB).
 - [ ] **AEC dentro del AFE** (`aec_init = true`, formato `"MMR"`, referencia = audio mandado al parlante). Resolver lo abierto:
   - de dónde sale la referencia (`orbita_playback` no la expone todavía);
   - alinear contando muestras (escritas al I2S vs. índice de captura), no con reloj;
   - achicar el DMA de salida (hoy 120 ms, es retardo de la referencia) hasta el mínimo con `underruns = 0` con Wi-Fi activo, y/o línea de retardo de la referencia;
   - `filter_length` (unidad sin verificar) y convergencia del filtro entre respuestas.
-- [ ] **Decidir beamforming**: SE ya está activo en la rama. Confirmar que realmente actúa (el 12/10 la salida era el mic 0 idéntico al crudo) y que convive con AEC (con 2 mics SE tiene prioridad sobre NS).
+- [x] **Decidir beamforming**: beamformer propio en `main` (01/11). Historial: SE ya estaba activo en la rama. Confirmar que realmente actúa (el 12/10 la salida era el mic 0 idéntico al crudo) y que convive con AEC (con 2 mics SE tiene prioridad sobre NS).
 - [ ] **Barge-in**: VAD como disparador de `play_stop` propio, con contador con fuga (+1 con voz, −2 sin voz, corte a ≈ 0,5-1 s, ignorar ~300 ms tras `STARTED`), umbrales en Kconfig. Acordar el evento `barge_in` con Juani.
 - [ ] **Banco de pruebas con la prueba de ElevenLabs** (STT en la nube): medir transcripción y funcionamiento a distintas distancias (p. ej. 0,5 / 1 / 2 / 3 m), con y sin parlante sonando, con y sin AEC; tabla de WER/aciertos de "Órbita" + latencia por etapa. Es el material para mostrar a inversores.
-- [ ] Comparar crudo vs. AFE en las mismas tomas (`tools/comparar_canales.py`) para decidir si el AFE rompe o ayuda a la voz que llega al servidor.
+- [ ] Comparar crudo vs. AFE en las mismas tomas (`tools/comparar_canales.py`, rama `tests+afe`) para decidir si el AFE rompe o ayuda a la voz que llega al servidor.
 - [ ] Con AFE, `ws://` en el alfa (TLS no entra por RAM).
 
 ## Línea 3 — Prototipo alfa (ordenar lo que falta)

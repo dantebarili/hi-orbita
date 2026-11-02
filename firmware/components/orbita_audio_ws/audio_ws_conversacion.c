@@ -1,5 +1,4 @@
 #include "sdkconfig.h"
-#if CONFIG_ORBITA_LAB_WEBSOCKET
 // Ver el cartel en audio_ws_conversacion.h. Lo llaman tres tareas distintas: wakeword (on_wake),
 // la del WebSocket (fin, actividad) y la de esp_timer (timeout). El estado va protegido con un spinlock.
 
@@ -77,4 +76,3 @@ void audio_ws_conversacion_fin(void)
     cerrar("conversation_end del servidor");
 }
 
-#endif

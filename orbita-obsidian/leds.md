@@ -148,9 +148,9 @@ const pedido_t p = { .color = color, .brillo = brillo, .patron = patron };
 
 ## C. `audio_ws_led.c` — decide el estado
 
-### C1. Solo en modo WebSocket
+### C1. Siempre compilado
 
-`#if CONFIG_ORBITA_LAB_WEBSOCKET ... #endif`: sin ese modo en menuconfig, el archivo desaparece antes de compilar.
+Antes iba entre `#if CONFIG_ORBITA_LAB_WEBSOCKET ... #endif`; desde el 01/11 el firmware tiene un solo modo y el `#if` se sacó.
 
 ### C2. Tabla de estilos (toda la estética acá)
 
