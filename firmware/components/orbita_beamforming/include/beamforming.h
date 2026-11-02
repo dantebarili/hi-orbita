@@ -12,6 +12,12 @@
  *            y[n]   = v[n] / 2               mismo nivel que un mic solo
  *
  *          x1 = mic de adelante, x2 = mic de atras (ya multiplicado por la correccion de calibracion).
+ *
+ *          CORRIMIENTO L/R (01/11, prueba_2_beam.md): el canal R del I2S llega adelantado 0,86 muestras
+ *          (electrico, sigue al canal, no al mic). Antes de la resta se retrasa R con un FIR de Lagrange
+ *          de 4 coeficientes (retardo 1 + corrimiento) y L con 1 muestra pura: quedan alineados.
+ *          Validado en Python contra un retardo ideal (FFT): mismos dB en las 4 tomas; error < 0,2 dB
+ *          y < 0,03 muestras hasta 3 kHz. Latencia extra: 1 muestra (62,5 us).
  *          Sin dependencias de ESP-IDF: es C puro, se puede compilar y probar en la PC.
  *          Falta (a proposito, primera prueba): division en bandas (> 3 kHz con un mic solo).
  */
@@ -29,7 +35,10 @@ typedef struct {
     float beta;              // 0 cardioide, 0,27 supercardioide, 0,5 hipercardioide, 1 dipolo
     bool  ecualizar;         // false: sale y_h/2 crudo (sube 6 dB/oct), util para depurar
     float a;                 // polo del integrador
+    float h_r[4];            // FIR de Lagrange que retrasa R (1 + corrimiento_r) muestras
     // --- Estado (sigue de un bloque al otro) ---
+    float l_ant;             // L[n-1]: L retrasado 1 muestra
+    float r_hist[3];         // R[n-1], R[n-2], R[n-3] para el FIR
     float x1_ant;            // x1[n-1]
     float x2_ant;            // x2[n-1]
     float v;                 // acumulador del integrador
@@ -44,9 +53,11 @@ typedef struct {
  * @param [in]  beta            peso de c_B (0,5 = hipercardioide)
  * @param [in]  fc_hz           corte del integrador (~150 Hz); <= 0 apaga el ecualizador
  * @param [in]  fs_hz           frecuencia de muestreo (16000)
+ * @param [in]  corrimiento_r   muestras que el canal R llega ADELANTADO respecto de L (0 a 1; medido: 0,86).
+ *                              0 = sin compensar (igual que antes, salvo 1 muestra de latencia)
  */
 void orbita_bf_init(orbita_bf_t *bf, bool adelante_es_l, float ganancia_atras,
-                    float beta, float fc_hz, float fs_hz);
+                    float beta, float fc_hz, float fs_hz, float corrimiento_r);
 
 /** Pone el estado en cero (llamar si hubo un hueco en el audio: las muestras anteriores ya no valen). */
 void orbita_bf_reset(orbita_bf_t *bf);

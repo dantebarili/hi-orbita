@@ -45,6 +45,9 @@ static const char *TAG = "test_bf";
 #define BF_BETA              0.5f
 #define BF_FC_HZ             150.0f
 #define BF_GANANCIA_ATRAS    1.0f
+// Corrimiento electrico: R llega 0,86 muestras antes que L (01/11, cables L/R intercambiados + toma de arriba).
+// 0 = sin compensar. Tiene que coincidir con --corrimiento-r de tools/analizar_beamforming.py.
+#define BF_CORRIMIENTO_R     0.86f
 
 static int16_t *s_toma;                       // BF_TOMA_FRAMES frames estereo, en PSRAM
 static volatile bool s_grabando;              // main -> captura: copiar chunks a s_toma
@@ -130,7 +133,8 @@ static void test_bf_tomar(void)
 
     // ---------- 3. Beamformer + envio, chunk por chunk ----------
     orbita_bf_t bf;                           // estado nuevo por toma: la toma anterior no es continua con esta
-    orbita_bf_init(&bf, BF_ADELANTE_ES_L, BF_GANANCIA_ATRAS, BF_BETA, BF_FC_HZ, ORBITA_SAMPLE_RATE_HZ);
+    orbita_bf_init(&bf, BF_ADELANTE_ES_L, BF_GANANCIA_ATRAS, BF_BETA, BF_FC_HZ, ORBITA_SAMPLE_RATE_HZ,
+                   BF_CORRIMIENTO_R);
     uint32_t bf_us_max = 0, enviados = 0;
 
     for (uint32_t c = 0; c < BF_TOMA_CHUNKS; c++) {
@@ -160,11 +164,11 @@ static void test_bf_tomar(void)
     // bf_us_max: cuanto tarda el beamformer en un chunk de 64 ms (en la PSRAM; en la captura seria similar o menos).
     snprintf(s_ultima_toma, sizeof(s_ultima_toma),
              "Fin: mandados %u de %u bytes, canales=[L,R,BF], huecos=%u, dma_overflows=%u, i2s_errores=%u, "
-             "bf_us_max=%u por chunk de 64 ms, beta=%.2f fc=%.0f adelante=%s ganancia_atras=%.3f",
+             "bf_us_max=%u por chunk de 64 ms, beta=%.2f fc=%.0f adelante=%s ganancia_atras=%.3f corr_r=%.2f",
              (unsigned)enviados, (unsigned)data_size, (unsigned)s_huecos,
              (unsigned)(fin.dma_overflows - ini.dma_overflows), (unsigned)(fin.i2s_errores - ini.i2s_errores),
              (unsigned)bf_us_max, (double)BF_BETA, (double)BF_FC_HZ, BF_ADELANTE_ES_L ? "L" : "R",
-             (double)BF_GANANCIA_ATRAS);
+             (double)BF_GANANCIA_ATRAS, (double)BF_CORRIMIENTO_R);
     ESP_LOGI(TAG, "%s", s_ultima_toma);
 }
 

@@ -20,8 +20,15 @@ from scipy.signal import butter, csd, lfilter, sosfilt, welch
 FS = 16000   # se pisa con la del WAV en main()
 
 
+def alinear(l, r, corrimiento_r):
+    """Igual que orbita_bf_procesar: R por un FIR de Lagrange (retardo 1 + corrimiento), L 1 muestra pura."""
+    D = 1.0 + corrimiento_r
+    h = [-(D - 1) * (D - 2) * (D - 3) / 6, D * (D - 2) * (D - 3) / 2, -D * (D - 1) * (D - 3) / 2, D * (D - 1) * (D - 2) / 6]
+    return np.concatenate(([0.0], l[:-1])), lfilter(h, [1.0], r)
+
+
 def hipercardioide(x1, x2, beta, fc):
-    """Misma cadena que orbita_bf_procesar (en float64)."""
+    """Misma cadena que orbita_bf_procesar (en float64), con x1/x2 ya alineados por alinear()."""
     x1_ant = np.concatenate(([0.0], x1[:-1]))
     x2_ant = np.concatenate(([0.0], x2[:-1]))
     c_f = x1 - x2_ant
@@ -66,6 +73,10 @@ def main():
     p.add_argument("--fc", type=float, default=150.0)
     p.add_argument("--adelante", choices=["L", "R"], default="L")
     p.add_argument("--ganancia-atras", type=float, default=1.0)
+    p.add_argument("--corrimiento-r", type=float, default=0.86,
+                   help="muestras que R llega adelantado (BF_CORRIMIENTO_R del firmware)")
+    p.add_argument("--firmware-viejo", action="store_true",
+                   help="tomas grabadas antes del 01/11 (beamformer sin alinear L/R)")
     a = p.parse_args()
 
     global FS
@@ -73,7 +84,8 @@ def main():
     if datos.ndim != 2 or datos.shape[1] != 3:
         raise SystemExit(f"Se esperaba WAV de 3 canales; vino {datos.shape}")
     l, r, bf = (datos[:, k].astype(np.float64) for k in range(3))
-    x1, x2 = (l, r) if a.adelante == "L" else (r, l)
+    l_al, r_al = (l, r) if a.firmware_viejo else alinear(l, r, a.corrimiento_r)
+    x1, x2 = (l_al, r_al) if a.adelante == "L" else (r_al, l_al)
     x2 = x2 * a.ganancia_atras
 
     ref = hipercardioide(x1, x2, a.beta, a.fc)
