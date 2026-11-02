@@ -2,7 +2,7 @@
 
 Building in public **por feature**: cada serie cuenta cómo se construyó una pieza difícil (beamforming, wake word, conversación, aro LED), con la prueba real y el número medido. Nada de internals sin imagen (ring buffer, protocolo): si no se ve ni se oye, no es reel.
 
-Promesa: dos estudiantes de electrónica que no cursaron Embebidos hacen un aparato que escucha al médico. **Objetivo:** seguidores y autoridad técnica. **Cadencia:** 2 reels/semana (IG, TikTok, Shorts), 1 posteo de LinkedIn por serie. Filmar por tandas.
+Promesa: dos estudiantes de electrónica construyen desde cero un asistente de voz para consultorios (la placa, el chip y la IA); cada video, una pieza difícil y cómo se resolvió. **Objetivo:** seguidores y autoridad técnica. **Cadencia:** 2 reels/semana (IG, TikTok, Shorts), 1 posteo de LinkedIn por serie. Filmar por tandas.
 
 ## Fórmula de cada reel (40 s máx.)
 1. **0-2 s, el número o el fallo** en pantalla y en movimiento (gráfico, placa, LED). Hook < 12 palabras + texto de 3-5.

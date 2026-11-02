@@ -12,7 +12,7 @@
 | 8-16 s | "Armamos esto: una placa, dos micrófonos y un parlante." | 2 MICS + PARLANTE | Primer plano de los micrófonos y el parlante, señalándolos |
 | 16-26 s | "Escucha, manda el audio a la nube y te contesta con voz." | ESCUCHA → NUBE → RESPONDE | Demo real: le hablás, se ve la terminal con el texto y suena la respuesta |
 | 26-31 s | "Todavía no entiende la palabra 'Órbita'. Eso es lo que viene." | AÚN NO ENTIENDE "ÓRBITA" | Vos hablándole sin que reaccione |
-| 31-35 s | "Somos estudiantes y no cursamos Embebidos. Seguinos y mirá si lo logramos." | SEGUINOS | Vos a cámara, placa al fondo |
+| 31-35 s | "Somos dos estudiantes construyéndolo desde cero: la placa, el chip y la IA. Seguinos y mirá si lo logramos." | SEGUINOS | Vos a cámara, placa al fondo |
 
 ~100 palabras habladas. Leer en voz alta y recortar un 20 %.
 
@@ -28,7 +28,7 @@
 - [ ] Avisarle a Juani que sale el video.
 
 ## Caption (primera línea con la palabra clave)
-> Construyendo un aparato de voz para consultorios, sin haber cursado Embebidos. Placa con 2 micrófonos que escucha, manda el audio a la nube y responde. Todavía no entiende "Órbita": en el próximo mostramos qué oyó la placa por primera vez. #building #esp32 #estudiantesdeingenieria #electronica #maker
+> Construyendo desde cero un asistente de voz para consultorios: la placa, el chip y la IA. Escucha con 2 micrófonos, manda el audio a la nube y responde. #building #esp32 #estudiantesdeingenieria #electronica #maker
 
 ## Notas
 - Si la demo de voz falla en cámara, filmar igual: es el formato "Fail del día" y suma credibilidad.
