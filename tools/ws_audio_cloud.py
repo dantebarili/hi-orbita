@@ -1,10 +1,12 @@
 """Conversación de voz por nube para el prototipo de laboratorio (corre en la PC, no en el ESP).
 
-Dentro de una conversación: detecta cuando hablás, espera un silencio, y hace STT -> LLM -> TTS -> PLAY al ESP.
-Mide la latencia de cada etapa. Todo se configura en cloud_config.py; el servidor está en servidor_wakeword.py.
+Dentro de una conversación: el audio va en vivo al STT de ElevenLabs (scribe_v2_realtime), que cierra la frase por
+silencio y devuelve el texto -> LLM -> TTS -> PLAY al ESP. Una sesión de STT por turno: se cierra al llegar el texto
+(no se paga mientras piensa el LLM ni mientras suena el parlante) y la siguiente lleva la última respuesta como
+contexto (`previous_text`). Mide la latencia de cada etapa. Config en cloud_config.py; servidor en servidor_wakeword.py.
 """
 import asyncio
-import io
+import base64
 import json
 import logging
 import os
@@ -13,37 +15,23 @@ import time
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 import numpy as np
 import requests
 from scipy.ndimage import minimum_filter1d
-from scipy.signal import butter, filtfilt, sosfilt, sosfilt_zi
+from scipy.signal import butter, filtfilt, sosfilt
+from websockets.asyncio.client import connect
 
 from ws_audio_speech import MAX_PLAY_SECONDS, SAMPLE_RATE
 
 LOG = logging.getLogger("audio_cloud")
 
-BLOCK = SAMPLE_RATE // 10          # 100 ms: unidad del detector de voz
-BAND_HZ = (150, 3400)              # el detector mide el nivel SOLO en la banda de voz (el mic tiene mucho rumble <100 Hz);
-                                   # al STT va el audio crudo, sin filtrar
-PREROLL_BLOCKS = 5                 # 0.5 s antes del inicio detectado: no comerse el arranque de la frase
-TAIL_BLOCKS = 5                    # 0.5 s después del último bloque con voz: no comerse el final de la palabra
-BAND_SOS = butter(4, BAND_HZ, btype='bandpass', fs=SAMPLE_RATE, output='sos')
-ONSET_BLOCKS = 3                   # 0.3 s seguidos sobre el umbral = empezaste a hablar
-END_QUIET_BLOCKS = 8               # 0.8 s de silencio cierran la frase (era 1.2 s, 01/11). Pausas normales entre palabras:
-                                   # 0.2-0.5 s; dudas ("eeh") hasta ~1 s. Si corta a mitad de frase, subir a 10
-MAX_UTTERANCE_SAMPLES = 15 * SAMPLE_RATE
-RING_SAMPLES = 20 * SAMPLE_RATE    # historial de audio recibido
-MIN_THRESHOLD = 25                 # RMS mínimo para empezar a oír voz (el mic crudo es muy bajo)
-NOISE_FACTOR = 2                   # umbral de inicio = NOISE_FACTOR x piso de ruido (subir si se dispara solo)
-END_MIN_THRESHOLD = 35             # para cerrar la frase se exige silencio bajo un umbral más alto (histéresis);
-END_NOISE_FACTOR = 2.5               # si no, el ruido de fondo la mantiene abierta
-POST_PLAY_GUARD_S = 0.0            # espera mínima tras play_done; hoy 0: manda el silencio recibido (SETTLE_QUIET_S), no un tiempo fijo
-                                   # el audio llega atrasado respecto del mic, por eso se mide al llegar y no en muestras)
-SETTLE_QUIET_S = 0.0               # silencio exigido tras el PLAY antes de volver a escuchar. Era 0.5: si hablabas enseguida
-                                   # se reiniciaba y se descartaba tu frase (hasta SETTLE_MAX_S). El firmware ya tapa el mic
-                                   # mientras suena + 320 ms de cola (PAUSA_COLA_CHUNKS), asi que el eco no llega (01/11).
-SETTLE_MAX_S = 8                   # tope por si el silencio no llega
+STT_URL = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
+STT_OPEN_TIMEOUT_S = 5
+STT_RETRY_S = 2.0                  # si la sesión de STT falla, se reintenta al recibir audio después de esto
+CONTEXT_CHARS = 50                 # previous_text: "funciona mejor con menos de 50 caracteres" (doc de ElevenLabs)
+MAX_UTTERANCE_S = 15               # red de seguridad: si el STT no cierra la frase, se usa el último parcial
 HISTORY_MESSAGES = 12
 # --- Audio de la respuesta antes de mandarlo al parlante (01/11: el parlante saturaba con la voz cruda) ---
 # Pasaaltos (el parlante chico no da graves pero gasta excursion en ellos) + limitador de picos, compensando
@@ -95,60 +83,98 @@ def _check(response, who):
 
 
 # -- clientes ---------------------------------------------------------------
-class ElevenLabs:
-    BASE = "https://api.elevenlabs.io/v1"
-    name = "elevenlabs"
+class ScribeRealtime:
+    """STT en vivo de ElevenLabs. `open()` crea una sesión (un WebSocket) por turno."""
 
-    def __init__(self, key, voice_id, tts_model, stt_model):
-        self.voice_id, self.tts_model, self.stt_model = voice_id, tts_model, stt_model
+    def __init__(self, key, model, vad_silence_s):
+        if not 0.192 <= vad_silence_s <= 3.0:
+            raise ValueError("STT_VAD_SILENCE_S tiene que estar entre 0.192 y 3.0 s (límite de ElevenLabs)")
+        params = [("model_id", model), ("audio_format", f"pcm_{SAMPLE_RATE}"), ("language_code", "es"),
+                  ("commit_strategy", "vad"), ("vad_silence_threshold_secs", vad_silence_s)]
+        self.url = f"{STT_URL}?{urlencode(params)}"
+        self.headers = {"xi-api-key": key}
+        self.name = model
+
+    def open(self, previous_text, on_event):
+        return SttSession(self, previous_text, on_event)
+
+
+class SttSession:
+    """Una sesión de STT en vivo. `send()` encola audio (se manda apenas abre); los eventos llegan a
+    on_event(sesión, tipo, texto) con tipo "open" (texto = ms que tardó en abrir), "partial", "committed" o "error"."""
+
+    def __init__(self, stt, previous_text, on_event):
+        self.queue = asyncio.Queue()
+        self.on_event = on_event
+        self.task = asyncio.create_task(self._run(stt, previous_text))
+
+    def send(self, pcm):
+        self.queue.put_nowait(pcm)
+
+    async def close(self):
+        self.task.cancel()
+        await asyncio.gather(self.task, return_exceptions=True)
+
+    async def _run(self, stt, previous_text):
+        t0 = time.monotonic()
+        try:
+            async with connect(stt.url, additional_headers=stt.headers, open_timeout=STT_OPEN_TIMEOUT_S,
+                               max_size=2 ** 20) as ws:
+                started = json.loads(await asyncio.wait_for(ws.recv(), STT_OPEN_TIMEOUT_S))
+                if started.get("message_type") != "session_started":
+                    raise RuntimeError(f"esperaba session_started y llegó {str(started)[:200]}")
+                self.on_event(self, "open", f"{(time.monotonic() - t0) * 1000:.0f}")
+                tasks = {asyncio.create_task(self._send(ws, previous_text)), asyncio.create_task(self._receive(ws))}
+                try:
+                    done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        task.result()          # propaga el error de la que terminó
+                finally:
+                    for task in tasks:
+                        task.cancel()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self.on_event(self, "error", str(error) or type(error).__name__)
+
+    async def _send(self, ws, previous_text):
+        first = True
+        while True:
+            pcm = await self.queue.get()
+            msg = {"message_type": "input_audio_chunk", "audio_base_64": base64.b64encode(pcm).decode(),
+                   "commit": False, "sample_rate": SAMPLE_RATE}
+            if first and previous_text:
+                msg["previous_text"] = previous_text   # solo en el primer trozo: después da error
+            first = False
+            await ws.send(json.dumps(msg))
+
+    async def _receive(self, ws):
+        async for raw in ws:
+            msg = json.loads(raw)
+            kind = msg.get("message_type", "")
+            if kind in ("partial_transcript", "committed_transcript"):
+                self.on_event(self, kind.split("_")[0], msg.get("text", ""))
+            elif kind == "warning":
+                LOG.warning("STT: %s", msg.get("warning"))
+            elif "error" in msg:
+                raise RuntimeError(f"{kind}: {msg['error']}")
+        raise RuntimeError("ElevenLabs cerró la sesión")
+
+
+class ElevenLabsTTS:
+    BASE = "https://api.elevenlabs.io/v1"
+
+    def __init__(self, key, voice_id, model):
+        self.voice_id, self.model = voice_id, model
         self.http = requests.Session()   # reusa la conexión TLS entre pedidos
         self.http.headers["xi-api-key"] = key
-
-    def transcribe(self, pcm):
-        wav = io.BytesIO()
-        with wave.open(wav, "wb") as file:
-            file.setparams((1, 2, SAMPLE_RATE, 0, "NONE", "not compressed"))
-            file.writeframes(pcm)
-        response = self.http.post(f"{self.BASE}/speech-to-text",
-                                  data={"model_id": self.stt_model, "language_code": "es"},
-                                  files={"file": ("voz.wav", wav.getvalue(), "audio/wav")}, timeout=30)
-        return _check(response, "ElevenLabs STT").json().get("text", "").strip()
 
     def speak(self, text):
         """PCM s16le mono 16 kHz, el formato que espera PLAY."""
         response = self.http.post(f"{self.BASE}/text-to-speech/{self.voice_id}",
                                   params={"output_format": "pcm_16000"},
-                                  json={"text": text, "model_id": self.tts_model}, timeout=30)
+                                  json={"text": text, "model_id": self.model}, timeout=30)
         pcm = _check(response, "ElevenLabs TTS").content
-        return pcm[:len(pcm) - len(pcm) % 2]
-
-
-class Deepgram:
-    """STT Nova-3 y TTS Aura-2 (voces en español). Crédito inicial grande y sin vencimiento."""
-    BASE = "https://api.deepgram.com/v1"
-    name = "deepgram"
-
-    def __init__(self, key, stt_model, voice):
-        self.stt_model, self.voice = stt_model, voice
-        self.http = requests.Session()
-        self.http.headers["Authorization"] = f"Token {key}"
-
-    def transcribe(self, pcm):
-        wav = io.BytesIO()
-        with wave.open(wav, "wb") as file:
-            file.setparams((1, 2, SAMPLE_RATE, 0, "NONE", "not compressed"))
-            file.writeframes(pcm)
-        response = self.http.post(f"{self.BASE}/listen", params={"model": self.stt_model, "language": "es", "smart_format": "true"},
-                                  data=wav.getvalue(), headers={"Content-Type": "audio/wav"}, timeout=30)
-        channels = _check(response, "Deepgram STT").json()["results"]["channels"]
-        return channels[0]["alternatives"][0]["transcript"].strip()
-
-    def speak(self, text):
-        """PCM s16le mono 16 kHz crudo (container=none), el formato que espera PLAY."""
-        response = self.http.post(f"{self.BASE}/speak", params={"model": self.voice, "encoding": "linear16",
-                                                                "sample_rate": SAMPLE_RATE, "container": "none"},
-                                  json={"text": text}, timeout=30)
-        pcm = _check(response, "Deepgram TTS").content
         return pcm[:len(pcm) - len(pcm) % 2]
 
 
@@ -237,23 +263,22 @@ class Gemini:
         return answer, usage.get("promptTokenCount", 0), usage.get("candidatesTokenCount", 0)
 
 
+
+
 class CloudServices:
     """STT + LLM + TTS según cloud_config; compartido por las conexiones (la historia del LLM vive acá)."""
 
     def __init__(self, cfg):
-        if cfg.SPEECH == "deepgram":
-            if not _key(cfg, "DEEPGRAM_API_KEY"):
-                raise ValueError("falta DEEPGRAM_API_KEY en tools/cloud_config.py (SPEECH = 'deepgram')")
-            self.speech = Deepgram(_key(cfg, "DEEPGRAM_API_KEY"), cfg.DEEPGRAM_STT_MODEL, cfg.DEEPGRAM_VOICE)
-            self.voice_name = cfg.DEEPGRAM_VOICE
-        elif cfg.SPEECH == "elevenlabs":
-            if not _key(cfg, "ELEVENLABS_API_KEY"):
-                raise ValueError("falta ELEVENLABS_API_KEY en tools/cloud_config.py (SPEECH = 'elevenlabs')")
-            self.speech = ElevenLabs(_key(cfg, "ELEVENLABS_API_KEY"), cfg.ELEVENLABS_VOICE_ID,
-                                     cfg.ELEVENLABS_TTS_MODEL, cfg.ELEVENLABS_STT_MODEL)
-            self.voice_name = cfg.ELEVENLABS_VOICE_ID
-        else:
-            raise ValueError('SPEECH debe ser "deepgram" o "elevenlabs"')
+        if getattr(cfg, "SPEECH", "elevenlabs") != "elevenlabs":
+            LOG.warning("SPEECH = %r ya no existe (se sacó Deepgram): se usa ElevenLabs", cfg.SPEECH)
+        key = _key(cfg, "ELEVENLABS_API_KEY")
+        if not key:
+            raise ValueError("falta ELEVENLABS_API_KEY en tools/cloud_config.py")
+        self.stt = ScribeRealtime(key, getattr(cfg, "STT_MODEL", "scribe_v2_realtime"),
+                                  float(getattr(cfg, "STT_VAD_SILENCE_S", 0.8)))
+        self.stt_context = _context(getattr(cfg, "STT_CONTEXT", ""))
+        self.tts = ElevenLabsTTS(key, cfg.ELEVENLABS_VOICE_ID, cfg.ELEVENLABS_TTS_MODEL)
+        self.voice_name = cfg.ELEVENLABS_VOICE_ID
         provider = {"gemini": (Gemini, "GEMINI_API_KEY", cfg.GEMINI_MODEL),
                     "claude": (Claude, "ANTHROPIC_API_KEY", cfg.CLAUDE_MODEL)}.get(cfg.LLM)
         if provider is None:
@@ -269,121 +294,114 @@ class CloudServices:
         self.save_audio = bool(getattr(cfg, "SAVE_AUDIO", False))
 
 
+def _context(text):
+    """Últimos CONTEXT_CHARS caracteres, cortando en una palabra entera (para previous_text)."""
+    text = " ".join(text.split())
+    if len(text) <= CONTEXT_CHARS:
+        return text
+    cut = text[-CONTEXT_CHARS:]
+    return cut[cut.find(" ") + 1:] if " " in cut else cut
+
+
 # -- una conexión -----------------------------------------------------------
 class Conversation:
-    """Estados: idle (espera voz) -> capturing (hasta silencio) -> busy (nube + reproducción) -> idle."""
+    """Estados: listening (el audio va al STT en vivo) -> busy (LLM + TTS + reproducción) -> listening.
+    El cierre de la frase lo decide el STT (silencio de STT_VAD_SILENCE_S); acá no hay detector de voz propio."""
 
     def __init__(self, services, output, session_id, send_pcm, play_done):
         self.services, self.output, self.session_id = services, Path(output), session_id
         self.send_pcm, self.play_done = send_pcm, play_done
-        self.buf = bytearray()
-        self.fbuf = np.empty(0, np.float32)   # misma ventana que buf, filtrada en banda: solo para medir nivel
-        self.fzi = sosfilt_zi(BAND_SOS) * 0
-        self.chunk_rms = 0.0
-        self.buf_start = 0            # índice (en muestras) del primer byte de buf
-        self.state = "idle"
-        self.cap_from = 0
-        self.threshold = MIN_THRESHOLD
-        self.end_threshold = END_MIN_THRESHOLD
-        self.ignore_until = 0
         self.clock = time.monotonic   # inyectable en los tests
-        self.settling, self.settle_deadline, self.quiet_s = False, 0.0, 0.0
-        self.hold_until = 0.0         # reloj: hasta cuándo se descarta lo que llega (guard post-PLAY)
+        self.state = "listening"
+        self.received = 0             # muestras recibidas desde el inicio de la conversación
+        self.ignore_until = 0         # las muestras anteriores a esta no van al STT (las subclases lo fijan)
+        self.stt = None               # sesión de STT abierta (una por turno)
+        self.stt_retry_at = 0.0
+        self.stt_open_ms = None
+        self.previous_text = services.stt_context
+        self.pcm = bytearray()        # audio mandado al STT en este turno (para SAVE_AUDIO)
+        self.partial = ""
+        self.t_text = None            # última vez que cambió el texto parcial (~ fin de habla)
+        self.t_speech = None          # primer parcial con texto del turno
+        self.last_activity = self.clock()
         self.turns = 0
         self.task = None
 
-    @property
-    def latest(self):
-        return self.buf_start + len(self.buf) // 2
-
     def feed(self, pcm):
-        now = self.clock()
-        self.buf += pcm
-        filtered, self.fzi = sosfilt(BAND_SOS, np.frombuffer(pcm, dtype='<i2').astype(np.float32), zi=self.fzi)
-        self.fbuf = np.concatenate((self.fbuf, filtered.astype(np.float32)))
-        self.chunk_rms = float(np.sqrt((filtered ** 2).mean())) if len(filtered) else 0.0
-        excess = len(self.buf) // 2 - RING_SAMPLES
-        if excess > 0:
-            del self.buf[:excess * 2]
-            self.fbuf = self.fbuf[excess:]
-            self.buf_start += excess
-        if self.settling:                 # eco/cola del parlante: sordo hasta que lo RECIBIDO quede en silencio
-            loud = self.chunk_rms > self.end_threshold
-            self.quiet_s = 0.0 if loud else self.quiet_s + len(pcm) / (2 * SAMPLE_RATE)
-            if (now >= self.hold_until and self.quiet_s >= SETTLE_QUIET_S) or now >= self.settle_deadline:
-                self.settling = False
-                LOG.info("Silencio tras la respuesta; escuchando de nuevo")
-        if self.settling:
-            self.ignore_until = self.latest   # lo recibido hasta acá no cuenta
-        if self.state == "idle":
-            self._watch()
-        if self.state == "capturing":
-            self._scan()
-
-    def _blocks_rms(self, first_sample):
-        offset = max(first_sample - self.buf_start, 0)
-        audio = np.frombuffer(bytes(self.buf), dtype="<i2")[offset:]      # crudo: es lo que va al STT
-        count = len(audio) // BLOCK
-        if count == 0:
-            return audio, np.empty(0)
-        blocks = self.fbuf[offset:offset + count * BLOCK].reshape(count, BLOCK)   # filtrado: solo para el nivel
-        return audio, np.sqrt((blocks ** 2).mean(axis=1))
-
-    def _watch(self):
-        """Busca el inicio de voz: ONSET_BLOCKS bloques seguidos sobre NOISE_FACTORx el piso de ruido."""
-        first = max(self.ignore_until, self.buf_start)
-        _, ring = self._blocks_rms(self.buf_start)
-        _, rms = self._blocks_rms(first)
-        if len(ring) < 10 or len(rms) < ONSET_BLOCKS:
+        start, self.received = self.received, self.received + len(pcm) // 2
+        if self.state != "listening":
+            return                    # pensando o sonando: no se manda (ni se paga)
+        pcm = pcm[max(self.ignore_until - start, 0) * 2:]
+        if not pcm:
             return
-        floor = float(np.percentile(ring, 20))
-        self.threshold = max(NOISE_FACTOR * floor, MIN_THRESHOLD)
-        self.end_threshold = max(END_NOISE_FACTOR * floor, END_MIN_THRESHOLD)
-        loud = rms > self.threshold
-        for i in range(len(loud) - ONSET_BLOCKS + 1):
-            if loud[i:i + ONSET_BLOCKS].all():
-                self.cap_from = first + max(i - PREROLL_BLOCKS, 0) * BLOCK
-                self.state = "capturing"
-                LOG.info("Voz detectada (umbral RMS %.0f); escuchando hasta silencio", self.threshold)
+        if self.stt is None:
+            if self.clock() < self.stt_retry_at:
                 return
+            self.stt = self.services.stt.open(self.previous_text, self._on_stt)
+        self.stt.send(pcm)
+        self.pcm += pcm
+        if self.t_speech is not None and self.clock() - self.t_speech > MAX_UTTERANCE_S and self.partial:
+            LOG.warning("Más de %d s sin cierre del STT: se usa el último parcial", MAX_UTTERANCE_S)
+            self._committed(self.partial)
 
-    def _scan(self):
-        audio, rms = self._blocks_rms(self.cap_from)
-        loud = np.nonzero(rms > self.end_threshold)[0]
-        if len(loud) and (len(rms) - 1 - loud[-1] >= END_QUIET_BLOCKS or len(audio) >= MAX_UTTERANCE_SAMPLES):
-            self.state = "busy"
-            self.task = asyncio.create_task(self._turn(audio[:(loud[-1] + 1 + TAIL_BLOCKS) * BLOCK].tobytes(), time.monotonic()))
+    def _on_stt(self, session, kind, text):
+        if session is not self.stt:
+            return                    # evento de una sesión vieja
+        now = self.clock()
+        if kind == "open":
+            self.stt_open_ms = int(text)
+            LOG.info("STT en vivo abierta en %s ms", text)
+        elif kind == "partial":
+            if text and text != self.partial:
+                self.partial, self.t_text, self.last_activity = text, now, now
+                self.t_speech = self.t_speech or now
+        elif kind == "committed":
+            self._committed(text)
+        elif kind == "error":
+            LOG.error("STT en vivo: %s. Reintento en %.0f s (se pierde lo dicho hasta acá)", text, STT_RETRY_S)
+            self.stt, self.stt_retry_at = None, now + STT_RETRY_S
+            self.partial, self.t_speech, self.pcm = "", None, bytearray()
 
-    async def _turn(self, pcm, t_end):
+    def _committed(self, text):
+        if self.state != "listening":
+            return
+        question = re.sub(r"\[[^\]]*\]", "", text).strip()   # ElevenLabs marca "[ruido]", "[interferencia]": no es una pregunta
+        question = self.clean_question(question)
+        t_end = self.t_text or self.clock()
+        pcm = bytes(self.pcm)
+        self.partial, self.t_speech, self.pcm = "", None, bytearray()
+        self.last_activity = self.clock()
+        if not question:
+            LOG.info("STT sin pregunta (%r): sigo escuchando", text)
+            return
+        self.state = "busy"
+        stt, self.stt = self.stt, None
+        self.task = asyncio.create_task(self._turn(stt, question, pcm, t_end))
+
+    async def _turn(self, stt, question, pcm, t_end):
+        t_stt = self.clock()
         record = dict(time=datetime.now(timezone.utc).isoformat(), session=self.session_id,
-                      utterance_seconds=round(len(pcm) / (2 * SAMPLE_RATE), 2),
-                      speech=self.services.speech.name, llm=self.services.llm_name)
+                      utterance_seconds=round(len(pcm) / (2 * SAMPLE_RATE), 2), stt=self.services.stt.name,
+                      llm=self.services.llm_name, question=question, stt_open_ms=self.stt_open_ms)
         try:
-            question = await asyncio.to_thread(self.services.speech.transcribe, pcm)
-            question = re.sub(r"\[[^\]]*\]", "", question).strip()   # ElevenLabs marca "[ruido]", "[interferencia]": no es una pregunta
-            question = self.clean_question(question)
-            t_stt = time.monotonic()
-            record["question"] = question
-            if not question:
-                LOG.info("STT sin texto (ruido); se descarta")
-                if self.services.save_audio:
-                    await asyncio.to_thread(self._save_wavs, pcm, b"")
-                return
+            if stt is not None:
+                await stt.close()     # libera la sesión: no se paga mientras piensa ni mientras suena
             answer, tokens_in, tokens_out = await asyncio.to_thread(self.services.llm.reply, question)
-            t_llm = time.monotonic()
-            speech = (await asyncio.to_thread(self.services.speech.speak, answer))[:MAX_PLAY_SECONDS * SAMPLE_RATE * 2]
+            t_llm = self.clock()
+            speech = (await asyncio.to_thread(self.services.tts.speak, answer))[:MAX_PLAY_SECONDS * SAMPLE_RATE * 2]
             speech = normalize(speech)
-            t_tts = time.monotonic()
+            t_tts = self.clock()
             await self.send_pcm(speech)
-            t_sent = time.monotonic()
+            t_sent = self.clock()
+            self.previous_text = _context(answer)    # contexto de la próxima sesión: "¿y la dosis?" se entiende
             record.update(answer=answer, tokens_in=tokens_in, tokens_out=tokens_out,
                           reply_seconds=round(len(speech) / (2 * SAMPLE_RATE), 2),
                           stt_s=round(t_stt - t_end, 3), llm_s=round(t_llm - t_stt, 3),
                           tts_s=round(t_tts - t_llm, 3), send_s=round(t_sent - t_tts, 3),
                           total_s=round(t_sent - t_end, 3))
-            LOG.info("Turno %d: %r -> %r | STT %.2f s, LLM %.2f s, TTS %.2f s, envío %.2f s | fin de habla -> PLAY: %.2f s "
-                     "(+%.1f s de silencio que espera el detector)", self.turns + 1, question, answer, record["stt_s"],
-                     record["llm_s"], record["tts_s"], record["send_s"], record["total_s"], END_QUIET_BLOCKS / 10)
+            LOG.info("Turno %d: %r -> %r | STT %.2f s, LLM %.2f s, TTS %.2f s, envío %.2f s | fin de habla -> PLAY: "
+                     "%.2f s (el STT incluye el silencio que espera para cerrar)", self.turns + 1, question, answer,
+                     record["stt_s"], record["llm_s"], record["tts_s"], record["send_s"], record["total_s"])
             if self.services.save_audio:
                 await asyncio.to_thread(self._save_wavs, pcm, speech)
             # Esperar el fin de la reproducción para no tomar el propio parlante como pregunta nueva.
@@ -398,12 +416,9 @@ class Conversation:
             LOG.error("Falló el turno: %s. Se sigue escuchando", error)
         finally:
             self.turns += 1
-            self.ignore_until = self.latest
-            now = self.clock()
-            self.hold_until = now + POST_PLAY_GUARD_S
-            self.settle_deadline = now + SETTLE_MAX_S
-            self.quiet_s, self.settling = 0.0, True
-            self.state = "idle"
+            self.ignore_until = self.received    # lo que llegó mientras sonaba no cuenta
+            self.state = "listening"
+            self.last_activity = self.clock()
             await asyncio.to_thread(self._log, record)
 
     def clean_question(self, question):
@@ -422,7 +437,11 @@ class Conversation:
                 file.setparams((1, 2, SAMPLE_RATE, 0, "NONE", "not compressed"))
                 file.writeframes(pcm)
 
+
     async def close(self):
         if self.task is not None:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
+        if self.stt is not None:
+            stt, self.stt = self.stt, None
+            await stt.close()

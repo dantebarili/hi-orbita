@@ -1,20 +1,24 @@
 # Servidor — lo que funcionó en el de prueba
 
-Resumen para el servidor definitivo. Código: `tools/servidor_wakeword.py` + `tools/ws_audio_cloud.py`; config en `tools/cloud_config.py`. Detalle y mediciones en `arquitectura.md` §6. Estado al 01/11/2026.
+Resumen para el servidor definitivo. Código: `tools/servidor_wakeword.py` + `tools/ws_audio_cloud.py`; config en `tools/cloud_config.py`. Detalle y mediciones en `arquitectura.md` §6. Estado al 02/11/2026.
 
-## Detectar voz y fin de frase
-- **Medir el nivel en banda de voz (pasabanda 150–3400 Hz), mandar al STT el audio crudo.** El mic tiene mucho ruido grave: en banda ancha la voz casi no supera el fondo; filtrado, la SNR pasa de 3–6 dB a > 20 dB.
-- **Umbrales relativos al piso de ruido**, no fijos: inicio = 2 × piso (mín. 25), cierre = 2,5 × piso (mín. 35). Dos umbrales distintos (histéresis) para que el ruido no mantenga la frase abierta.
-- **Márgenes:** 0,5 s antes del inicio y 0,5 s después de la última voz, para no comerse la primera ni la última sílaba.
-- Sacar las marcas de ElevenLabs STT (`[ruido]`, `[interferencia]`) y descartar el turno si no queda texto.
+## STT (decisión 02/11)
+**Prueba (`tools/`): en vivo con `scribe_v2_realtime`.** Deepgram y el STT por frase entera se sacaron.
+- **Una sesión de STT por turno:** se abre con la wake word o al terminar la respuesta, y se cierra al llegar el texto final. No se paga mientras piensa el LLM ni mientras suena el parlante (ElevenLabs cobra por audio enviado, silencio incluido). Tiempo de apertura: se registra (`stt_open_ms`), sin medir todavía.
+- **Cierre de frase por ElevenLabs** (`commit_strategy=vad`, `STT_VAD_SILENCE_S` = 0,8 s; acepta 0,192–3 s). Sin detector de voz propio. Red de seguridad: si no cierra en 15 s, se usa el último parcial.
+- **`previous_text`:** contexto de < 50 caracteres, solo en el primer envío de cada sesión. 1.ª sesión: `STT_CONTEXT`; después: el final de la última respuesta (así se entiende un "¿y la dosis?").
+- **Formato:** `pcm_16000` mono (el recomendado): es la salida del beamformer, sin conversiones. Envíos de 0,1–1 s; el ESP manda ~128 ms por mensaje.
+- ElevenLabs junta ~2 s antes de transcribir: los cubre el pre-roll de 3 s que manda el ESP con la wake word.
+- La sesión se cierra sola tras 15 s sin mensajes (no se paga). Si falla, se reintenta a los 2 s y se pierde lo dicho hasta ahí.
+- Sacar las marcas (`[ruido]`, `[interferencia]`) y descartar el turno si no queda texto (también si solo dijo "Órbita").
+- **No implementado, disponible:** `keyterms` (palabras clave con costo extra; en vivo hasta 50 de 20 caracteres, en diferido hasta 1000 de 50): remedios, "Órbita".
 
 ## Tiempos actuales
 | Qué | Valor | Dónde |
 |---|---|---|
-| Voz confirmada | 0,3 s sobre el umbral | `ONSET_BLOCKS` |
-| Fin de frase | 0,8 s de silencio (antes 1,2) | `END_QUIET_BLOCKS` |
-| Volver a escuchar tras la respuesta | apenas llega `play_done` (antes 0,5 s de silencio) | `SETTLE_QUIET_S` |
-| Fin de conversación | 8 s sin voz → `conversation_end` | `IDLE_END_S` |
+| Fin de frase (lo decide ElevenLabs) | 0,8 s de silencio | `STT_VAD_SILENCE_S` |
+| Volver a escuchar tras la respuesta | apenas llega `play_done` | `_turn` |
+| Fin de conversación | 8 s sin texto del STT → `conversation_end` | `IDLE_END_S` |
 | Pre-roll al detectar "Órbita" | 3 s (firmware) | `AUDIO_WS_PREROLL_SLOTS` |
 | Timeout local de la conversación | 60 s sin actividad del servidor (firmware) | `AUDIO_WS_CONV_TIMEOUT_S` |
 | Heartbeat | ping cada 10 s, sin pong en 3 s = caída (firmware) | `orbita_ws.c` |
@@ -41,6 +45,18 @@ Resumen para el servidor definitivo. Código: `tools/servidor_wakeword.py` + `to
 - Cortes del WebSocket cada 20–30 s con reconexión en ~1 s **no son reinicios** (un reinicio tarda varios segundos): eran pérdidas de paquetes por un **cable USB malo**. Mirar cuánto tarda en reconectar antes de culpar al firmware.
 
 ## Para el servidor definitivo
-- **Dictado médico:** el cierre de 0,8 s va a cortar en las pausas para pensar (usar 1,5–2 s o cierre por comando), y el timeout local de 60 s del firmware corta un dictado largo: hace falta un "sigo escuchando" del servidor. Acordarlo en la FSM.
-- **Streaming** de STT (con fin de frase del proveedor) y de LLM/TTS por oración: es lo que más latencia saca (~1,5–2,5 s).
+**Modelos de STT de ElevenLabs** (doc, 02/11):
+
+| Modelo | Tipo | Para qué |
+|---|---|---|
+| `scribe_v2_realtime` | En vivo (WebSocket) | Pedidos urgentes ("Órbita, …"): ~150 ms de mediana al texto final |
+| `scribe_v2_medical` | Diferido (archivo) | Transcripción de la consulta: −35 % de errores en audio clínico vs `scribe_v2`, mismos idiomas (español incluido), mismo precio; separa hablantes (médico/paciente) |
+| `scribe_v2` | Diferido | General; español ≤ 5 % de WER |
+| `scribe_v1` | — | Deprecado |
+
+- **Esquema:** consulta en diferido con `scribe_v2_medical`, **todo junto al final del turno** (mejor separación de hablantes; el resumen llega después); pedidos urgentes en vivo. Coincide con `fsm.md` (resumen continuo + interrupción urgente). Depende de la política de captura (hoy el ESP solo manda tras la wake word).
+- **Datos de salud:** BAA (HIPAA) y modo sin retención (`enable_logging=false`) solo en plan Enterprise. Revisar requisitos legales en Argentina (datos sensibles) antes de usar pacientes reales.
+- **Conexión:** desde el servidor con la API key (`xi-api-key`), nunca desde el ESP; el server igual necesita el audio (diferido, registro, LLM).
+- **Dictado médico:** 0,8 s va a cortar en las pausas para pensar (usar 1,5–2 s o cierre por comando), y el timeout local de 60 s del firmware corta un dictado largo: hace falta un "sigo escuchando" del servidor. Acordarlo en la FSM.
+- **Streaming de LLM/TTS por oración:** lo que más latencia queda por sacar.
 - `wss://` y timestamp de envío en el ESP para medir el tramo mic → servidor.

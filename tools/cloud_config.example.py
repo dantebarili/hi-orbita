@@ -2,18 +2,18 @@
 primera vez; editar ESA copia. Nada mas se pasa por linea de comandos."""
 
 # --- Claves (solo las del proveedor que uses; si queda "", se lee la variable de entorno homonima) ---
-DEEPGRAM_API_KEY = ""     # console.deepgram.com -> API Keys (USD 200 de credito inicial, sin vencimiento)
 GEMINI_API_KEY = ""       # aistudio.google.com/apikey (gratis, sin tarjeta; con limites de uso)
 ANTHROPIC_API_KEY = ""    # console.anthropic.com (pago; solo si LLM = "claude")
-ELEVENLABS_API_KEY = ""   # solo si SPEECH = "elevenlabs"
+ELEVENLABS_API_KEY = ""   # elevenlabs.io -> API Keys (STT y voz)
 
-# --- STT + voz ---
-SPEECH = "deepgram"                         # "deepgram" o "elevenlabs"
-DEEPGRAM_STT_MODEL = "nova-3"
-DEEPGRAM_VOICE = "aura-2-celeste-es"        # voces es: https://developers.deepgram.com/docs/tts-models
+# --- STT en vivo (ElevenLabs) ---
+STT_MODEL = "scribe_v2_realtime"
+STT_VAD_SILENCE_S = 0.8             # silencio que cierra la frase (ElevenLabs acepta 0.192 a 3.0). Si corta a mitad, subir
+STT_CONTEXT = "Charla con el asistente Orbita"   # previous_text de la 1.a sesion (< 50 caracteres); despues, la ultima respuesta
+
+# --- Voz (ElevenLabs) ---
 ELEVENLABS_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
 ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5"
-ELEVENLABS_STT_MODEL = "scribe_v1"
 
 # --- Que modelo conversa ---
 LLM = "gemini"                      # "gemini" (gratis) o "claude" (pago)

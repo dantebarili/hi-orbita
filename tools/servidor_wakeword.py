@@ -1,7 +1,7 @@
 """Servidor de chat de voz con wake word en el ESP: la ESP manda audio solo después de detectar "Órbita".
 
 Uso: python tools/servidor_wakeword.py   (sin argumentos; claves y voz en tools/cloud_config.py)
-Dependencias: pip install -r tools/requirements-websocket.txt requests numpy scipy  (+ anthropic si LLM = "claude").
+Dependencias: pip install -r tools/requirements-websocket.txt  (+ anthropic si LLM = "claude").
 
 Protocolo (además de orbita-pcm-v2):
   ESP -> servidor  {"type":"wake","index":N,"seq":S,"preroll_samples":P}  justo antes del primer audio de una
@@ -41,7 +41,7 @@ OUTPUT = HERE / "prueba_websocket"
 ACTIVACIONES_DEFAULT = HERE.parent.parent / "orbita-dataset" / "dataset_FULL" / "fuentes" / "activaciones_placa"
 
 IDLE_END_S = 8.0           # sin voz durante 8 s (tras la detección o tras una respuesta): fin de la conversación
-WORD_S = 1.5               # el detector de voz arranca 1,5 s antes de la detección: la palabra, no lo dicho antes
+WORD_S = 1.5               # al STT va desde 1,5 s antes de la detección: la palabra, no lo dicho antes
 CLIP_AFTER_S = 1.0         # el WAV de la activación lleva 1 s después de la detección
 CLIP_BEFORE_S = 3.0        # y 3 s antes (= el pre-roll de la ESP)
 WAKE_WORD = "orbita"
@@ -83,13 +83,9 @@ class WakeConversation(Conversation):
             self.clip += pcm
             if len(self.clip) >= start + clip_bytes:
                 self.clip_file = self._save_clip(bytes(self.clip[start:start + clip_bytes]))
-        before = self.state
         super().feed(pcm)
-        now = self.clock()
-        if self.state != "idle" or self.settling or before != "idle":
-            self.last_activity = now     # hablando, esperando la nube, sonando o recién terminó
-        elif now - self.last_activity >= IDLE_END_S:
-            self.finished = True
+        if self.state == "listening" and self.clock() - self.last_activity >= IDLE_END_S:
+            self.finished = True         # nadie habló (sin texto del STT) desde la detección o la última respuesta
 
     def clean_question(self, question):
         if self.first_text is None and question:
@@ -204,8 +200,9 @@ async def main():
     activaciones = Path(getattr(cfg, "ACTIVACIONES_DIR", "") or ACTIVACIONES_DEFAULT)
     async with serve(lambda ws: handle(ws, services, activaciones), cfg.HOST, cfg.PORT, max_size=8192,
                      max_queue=8, compression=None, ping_interval=20, ping_timeout=20, close_timeout=5):
-        LOG.info("Servidor wake word en %s:%d | LLM %s | voz/STT %s (%s) | activaciones en %s | Ctrl+C para salir",
-                 cfg.HOST, cfg.PORT, services.llm_name, services.speech.name, services.voice_name, activaciones)
+        LOG.info("Servidor wake word en %s:%d | LLM %s | STT %s (cierre %.2f s de silencio) | voz %s | activaciones en %s"
+                 " | Ctrl+C para salir", cfg.HOST, cfg.PORT, services.llm_name, services.stt.name,
+                 float(getattr(cfg, "STT_VAD_SILENCE_S", 0.8)), services.voice_name, activaciones)
         await asyncio.Event().wait()
 
 
