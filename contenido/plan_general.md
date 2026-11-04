@@ -34,5 +34,16 @@ Orden sugerido: A1, B1, A2, B3, B2, B4 (A1 y B3 son las historias de fallo, las 
 - Nombrar a Juani (avisarle antes). Privacidad como argumento solo con la política de captura decidida.
 - No afirmar números sin verificar. Si el CTA promete un video, ese video sale.
 
+## Estética (todos los reels)
+Siempre la de [hiorbita.com](https://hiorbita.com/): textos en pantalla, gráficos, portadas y subtítulos.
+- **Colores:**
+  - Fondo `#EEF3FA` (o blanco).
+  - Texto `#0C1526`; secundario `#5C6B82`.
+  - Acento `#2F6BFF`; azul claro `#6FA8FF`.
+  - Grilla y bordes `#E2E8F0`.
+  - En comparaciones, lo "bueno" va en acento y lo otro en `#94A3B8`.
+- **Letra:** títulos en Geist, grandes, de peso normal y con letras juntas; el resto en Instrument Sans (en `contenido/fuentes/`, Regular y SemiBold, licencia OFL; instalarlas también en el editor de video).
+- **Gráficos:** 1080×1350 para insertar en el cuadro 9:16. Se generan como en `graficos_reel03/graficos.py`.
+
 ## Herramientas
 Método original: skills de Ootto-AI/claude-content-skills (MIT), hoy **no instaladas**. Para edición: plugin *IT Reelsmaker* (cortes, subtítulos, render 1080×1920).

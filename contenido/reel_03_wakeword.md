@@ -1,37 +1,38 @@
-# Reel B3 — "Sin grabar a nadie"
+# Reel B3 — "Sin ningún clip real"
 
-**Duración:** ~40 s · **Meta:** compartidos y comentarios · **Formato:** fail → arreglo, con demo en vivo.
-Fuentes: `orbita-obsidian/wakeword.md`, commits `e17692c` y `61be89e`, `orbita-training/docs/dataset.md`.
+**Duración:** ~48 s · **Meta:** compartidos y comentarios · **Formato:** fail → explicación con gráficos → CTA.
+Fuentes: `orbita-dataset/docs/resultados_v0.md` (validación, "Robustez", "Con grabaciones reales"), `orbita-dataset/docs/dataset.md` (positivos 100 % sintéticos), `orbita-obsidian/wakeword.md`.
 
 ## Hooks (probar 2-3)
-1. "Entrenamos una IA para reconocer 'Órbita' sin grabar a nadie diciéndola." ← elegido
+1. "Entrenamos una IA para que se despierte cuando escuche la palabra 'Órbita' y sin ningún clip real." ← elegido
 2. "El modelo que más entrenamos fue el que peor anduvo."
-3. "Entrenamos una IA 4 veces más. Dejó de entendernos."
-4. "En la computadora andaba perfecto. En la placa, sorda."
+3. "Entrenamos una IA 4 veces más. Se volvió demasiado segura."
 
 ## Guion
 
 | Tiempo | Dicho | Texto en pantalla | Imagen |
 |---|---|---|---|
-| 0-3 s | "Entrenamos una IA para reconocer 'Órbita' sin grabar a nadie diciéndola." | 0 VOCES REALES | Vos diciendo "Órbita" a la placa; el aro LED despierta |
-| 3-10 s | "Queremos que solo escuche cuando la llamás. Por eso la detección corre adentro del chip, sin internet." | CORRE EN EL CHIP | Primer plano del ESP32-S3; el log de la terminal corriendo |
-| 10-17 s | "Para enseñarle, generamos más de 11.000 'Órbita' con voces argentinas hechas con IA." | 11.727 VOCES IA | Montaje rápido de clips de ElevenLabs sonando uno tras otro |
-| 17-24 s | "La entrenamos 45.000 pasos. En la compu, impecable. En la placa, con gente de verdad, sorda." | 45.000 PASOS → SORDA | Gráfico de entrenamiento; después vos repitiendo "Órbita" sin respuesta |
-| 24-31 s | "Volvimos a una versión de mucho antes, la del paso 11.000. Esa sí." | PASO 11.000 ✓ | Decís "Órbita" y el aro LED cambia de color |
-| 31-36 s | "90 % de aciertos y cero disparos falsos en más de 5 horas de charla en español." | 90 % · 0 FALSOS EN 5 H | Números grandes sobre la placa encendida |
-| 36-40 s | "Ahora la probamos a tres metros, con la tele prendida. En el próximo te mostramos." | ¿A 3 METROS? | Vos alejándote de la placa |
+| 0-4 s | "Entrenamos una IA para que se despierte cuando escuche la palabra 'Órbita' y sin ningún clip real." | 0 VOCES REALES | Vos diciendo "Órbita" a la placa; el aro LED despierta |
+| 4-11 s | "No queríamos mandar a internet todo lo que se habla en un consultorio: sale caro y es privado. Por eso la escucha corre en un chip de menos de 5 dólares." | SIN INTERNET · CHIP < US$5 | Primer plano del ESP32-S3 |
+| 11-15 s | "Para enseñarle usamos solo 11.727 voces argentinas hechas con IA." | 11.727 VOCES IA | Montaje rápido de clips de ElevenLabs |
+| 15-21 s | "La entrenamos 45.000 pasos. Con sus ejemplos, el error no paró de bajar." | ERROR ÷ 13 | **Gráfico 1:** `1_error_entrenamiento.png` |
+| 21-29 s | "Pero con audio que nunca había escuchado, entrenarla más la empeoró. Eso es overfitting: memorizó en vez de aprender." | OVERFITTING · NOTA 0,86 → 0,70 | **Gráfico 2:** `2_nota_validacion.png` |
+| 29-36 s | "Y se volvió demasiado segura: con puro ruido, la de 45.000 llegó a estar 99,5 % segura de escuchar 'Órbita'. La de 11.000, 41 %." | 99,5 % vs 41 % | **Gráfico 3:** `3_certeza_ruido.png`; o la demo del clip de ruido disparando el LED |
+| 36-41 s | "Hoy en la placa está la del paso 11.000: con ruido casi no se dispara." | PASO 11.000 ✓ | La llamás y el aro LED cambia de color |
+| 41-48 s | "¿El problema de fondo? Con voces reales detecta 1 de cada 3. Para la próxima versión, ¿nos mandás un audio diciendo 'Órbita'?" | 11 DE 30 · ¿NOS MANDÁS TU "ÓRBITA"? | Vos frente a la placa, a cámara |
 
-~95 palabras habladas: leer en voz alta y ajustar.
+~130 palabras habladas (~48 s): si queda largo, acortar el hook o el tramo 29-36 s.
 
 ## Antes de filmar
-- [ ] **Confirmar en `dataset.md` que ningún positivo del entrenamiento es una grabación real.** Si hay alguno, el hook pasa a "casi sin grabar a nadie" o se usa otro.
-- [ ] **Confirmar en `resultados_v0.md` (no está en ninguno de los dos repos locales) que el 90,3 % y los 0 disparos en 5,3 h son del modelo de 11.000 pasos, y sobre qué audio se midió el 90,3 %.** Si no se confirma, sacar el tramo 31-36 s.
-- [ ] **No decir por qué falló el de 45.000** salvo que esté medido. La sospecha (memorizó las voces de IA) va como pregunta en la caption, no como afirmación.
-- [ ] Filmar el "antes" de verdad: flashear el `orbita_45k_int8.tflite` (cutoff 0,8) y grabar que no detecta. Después flashear el de 11.000.
-- [ ] El CTA de los 3 m va solo si esa prueba se va a hacer (está pendiente en `wakeword.md`, "Verificación" 3).
+- [x] **Gráficos** en `graficos_reel03/` (1080×1350): `python graficos.py <entrenamiento.log>` (el log está en `orbita-dataset/train_v0/run_orbita.tgz`). El error es la media móvil de 250 pasos (0,032 en el paso 1.000 → 0,0024); la "Tendencia" del gráfico 2 es la media de 9 evaluaciones. El 3 sale de "Robustez", punto 4 (máximo de cada modelo en MUSAN `noise`), no del log.
+- [ ] **Demo del gráfico 3:** ubicar el clip que dio 0,995 y reproducírselo a la placa con el 45.000 flasheado.
+- [ ] **No decir que el 45.000 "no oye voces reales":** medido afuera de la placa detecta más que el 11.000 (17 contra 11 de 30). El overfitting que está medido son las falsas activaciones de alta confianza y la caída del avr.
+- [ ] **Privacidad:** el equipo escucha siempre, pero solo en el chip; a internet manda recién con la wake word, más los 3 s previos (`protocolo.md`, "Política de captura"). No decir "no escucha" ni "no guarda nada".
+- [ ] **"Menos de 5 dólares":** el módulo ESP32-S3-WROOM-1-N16R8 sale US$3,44 en LCSC (C2913202) por cantidad y ~US$6 por unidad suelta. Revisar el precio antes de publicar.
+- [ ] **CTA de audios:** decir para qué se usan (entrenar y probar la v1), pedir permiso explícito y definir por dónde se mandan antes de publicar.
 - [ ] No mostrar claves de ElevenLabs ni `cloud_config.py`.
 
 ## Caption
-> Entrenamos nuestra propia wake word, "Órbita", para un ESP32-S3 con más de 11.000 voces generadas con IA. El modelo más entrenado no reconocía voces reales; volvimos a uno de mucho antes y anduvo. ¿Por qué creés que pasó? #tinyml #esp32 #machinelearning #electronica #buildinpublic
+> Entrenamos nuestra wake word "Órbita" para un ESP32-S3 solo con voces generadas con IA. Entrenarla más la empeoró: overfitting. Para la v1 necesitamos voces de verdad: ¿nos mandás la tuya? #tinyml #esp32 #machinelearning #electronica #buildinpublic
 
 **Portada:** la placa con "0 VOCES REALES".
