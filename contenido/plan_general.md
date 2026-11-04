@@ -22,6 +22,7 @@ Promesa: dos estudiantes de electrónica construyen desde cero un asistente de v
 | | B2. *"El chip y la PC tienen que dar el mismo número. Exacto."* · BIT A BIT | 697 × 40 features y 232 probabilidades idénticas (`wakeword.md`) |
 | | B3. *"El modelo que más entrené fue el que peor anduvo."* · MÁS ≠ MEJOR | 45.000 pasos no detectaba voces reales; volvió el de 11.000 |
 | | B4. *"Dije 'Órbita' y se prendió."* · FUNCIONÓ | Demo en vivo + aro LED. Falta medir aciertos a 0,5-3 m |
+| | B5. *"Esta IA corre en un chip de menos de 5 dólares."* · CHIP < US$5 → guion en `reel_04_ia_en_el_chip.md` | 26.049 coeficientes, int8, PIE del S3, 2,1 ms por inferencia (`wakeword.md`) |
 | **C. Conversación** | C1. *"Le hablé y me contestó."* · HABLÓ. C2. *"¿Cuánto tarda en contestarte?"* · LATENCIA | Servidor STT en vivo. **Es frente de Juani: hablarlo con él antes** |
 | **D. Lo que falta** | D1. *"El parlante se escucha a sí mismo."* · EL ECO (AEC). D2. *"Del protoboard a una placa de verdad."* · PCB | Mostrar como en curso |
 
