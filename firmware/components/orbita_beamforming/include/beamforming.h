@@ -13,13 +13,21 @@
  *
  *          x1 = mic de adelante, x2 = mic de atras (ya multiplicado por la correccion de calibracion).
  *
- *          CORRIMIENTO L/R (01/11, prueba_2_beam.md): el canal R del I2S llega adelantado 0,86 muestras
+ *          CORRIMIENTO L/R (01/11, vault Beamforming/resumen_beamforming.html): el canal R del I2S llega adelantado 0,86 muestras
  *          (electrico, sigue al canal, no al mic). Antes de la resta se retrasa R con un FIR de Lagrange
  *          de 4 coeficientes (retardo 1 + corrimiento) y L con 1 muestra pura: quedan alineados.
  *          Validado en Python contra un retardo ideal (FFT): mismos dB en las 4 tomas; error < 0,2 dB
  *          y < 0,03 muestras hasta 3 kHz. Latencia extra: 1 muestra (62,5 us).
  *          Sin dependencias de ESP-IDF: es C puro, se puede compilar y probar en la PC.
- *          Falta (a proposito, primera prueba): division en bandas (> 3 kHz con un mic solo).
+ *
+ *          DIVISION EN BANDAS (06/11): arriba de ~4 kHz el frente del hipercardioide cae (-3 dB en 4 kHz,
+ *          -16 dB en 7 kHz) y se pierden consonantes. Crossover Linkwitz-Riley de 4.o orden en ORBITA_BF_CRUCE_HZ:
+ *
+ *            salida = LP(y) + HP(x1[n-1])     LP/HP: 2 biquads Butterworth (Q = 0,707) en cascada cada uno
+ *
+ *          LP + HP suman plano en modulo (pasa-todo). x1[n-1]: el mic de adelante, 1 muestra atras para quedar
+ *          en fase con el hipercardioide (que de frente vale ~(x1[n] + x1[n-1])/2). Simulado (dominio z, este
+ *          mismo codigo): frente dentro de -2 dB en 200 Hz - 7 kHz; costado y atras nunca pasan de 0 dB.
  */
 
 #pragma once
@@ -27,6 +35,29 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+/* PARAMETROS DEL PRODUCTO (los usa orbita_pipeline; medidos en placa el 01/11, ver vault Beamforming/)
+ *  Adelante:     slot L = mic de adelante (apunta al que habla). Si se monta al reves, false.
+ *  beta:         0,5 hipercardioide (nulo ~110°, costados -12 dB, atras -6 dB). 0,27 = supercardioide
+ *                (mas rechazo atras, menos de costado).
+ *  fc:           150 Hz el integrador (debajo, pasaaltos natural).
+ *  Ganancia:     1,0 = sin calibrar (los mics difieren ~1,3 dB; la calibracion por unidad esta pendiente).
+ *  Corrimiento:  el canal R llega 0,86 muestras antes que L (electrico, del bus I2S).
+ *  Cruce:        4 kHz. Debajo, hipercardioide; arriba, el mic de adelante solo. A 4 kHz el frente pierde
+ *                2,0 dB en el cruce (a 3 kHz, 1,7) pero queda +2 dB de directividad en 3-3,5 kHz. 0 = sin bandas. */
+#define ORBITA_BF_ADELANTE_ES_L    true
+#define ORBITA_BF_BETA             0.5f
+#define ORBITA_BF_FC_HZ            150.0f
+#define ORBITA_BF_GANANCIA_ATRAS   1.0f
+#define ORBITA_BF_CORRIMIENTO_R    0.86f
+#define ORBITA_BF_CRUCE_HZ         4000.0f
+
+/** Biquad: filtro IIR de 2.o orden, forma directa II traspuesta (la misma que el pasa-altos de pipeline.c).
+ *  y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2], con a0 ya normalizado a 1. */
+typedef struct {
+    float b0, b1, b2, a1, a2;   // coeficientes (los calcula orbita_bf_init)
+    float z1, z2;               // memorias: siguen de un bloque al otro
+} orbita_biquad_t;
 
 typedef struct {
     // --- Parametros (los fija orbita_bf_init) ---
@@ -36,6 +67,9 @@ typedef struct {
     bool  ecualizar;         // false: sale y_h/2 crudo (sube 6 dB/oct), util para depurar
     float a;                 // polo del integrador
     float h_r[4];            // FIR de Lagrange que retrasa R (1 + corrimiento_r) muestras
+    bool  bandas;            // false: hipercardioide en toda la banda (cruce_hz <= 0)
+    orbita_biquad_t lp[2];   // pasa-bajos LR4 sobre el hipercardioide (2 biquads en cascada)
+    orbita_biquad_t hp[2];   // pasa-altos LR4 sobre el mic de adelante
     // --- Estado (sigue de un bloque al otro) ---
     float l_ant;             // L[n-1]: L retrasado 1 muestra
     float r_hist[3];         // R[n-1], R[n-2], R[n-3] para el FIR
@@ -55,9 +89,11 @@ typedef struct {
  * @param [in]  fs_hz           frecuencia de muestreo (16000)
  * @param [in]  corrimiento_r   muestras que el canal R llega ADELANTADO respecto de L (0 a 1; medido: 0,86).
  *                              0 = sin compensar (igual que antes, salvo 1 muestra de latencia)
+ * @param [in]  cruce_hz        cruce del crossover (4000): debajo hipercardioide, arriba el mic de adelante.
+ *                              <= 0 = sin bandas (hipercardioide en toda la banda, como antes del 06/11)
  */
 void orbita_bf_init(orbita_bf_t *bf, bool adelante_es_l, float ganancia_atras,
-                    float beta, float fc_hz, float fs_hz, float corrimiento_r);
+                    float beta, float fc_hz, float fs_hz, float corrimiento_r, float cruce_hz);
 
 /** Pone el estado en cero (llamar si hubo un hueco en el audio: las muestras anteriores ya no valen). */
 void orbita_bf_reset(orbita_bf_t *bf);

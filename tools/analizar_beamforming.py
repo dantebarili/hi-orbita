@@ -7,6 +7,9 @@ Analiza una toma de la prueba de beamforming (WAV de 3 canales: L, R, beamformad
 2. Niveles en la banda de voz (300 Hz - 3 kHz) de L, R y BF, y BF relativo al mic de adelante.
    Para el rechazo: grabar la misma voz de frente y de costado y restar los "BF - adelante".
 3. Retardo de R respecto de L (retardo_por_banda). De aca sale ORBITA_BF_CORRIMIENTO_R.
+4. Division en bandas (06/11): "BF - adelante" por banda hasta 7 kHz, con bandas (lo que mando el
+   firmware) y sin bandas (recalculado aca desde L y R, misma toma). De frente: con bandas tiene que
+   quedar dentro de ~-2 dB en todas; sin bandas cae arriba de 4 kHz.
 
 COMO SE CALCULA EL RETARDO (3.)
    Un retardo de t muestras es una fase que crece en linea recta con la frecuencia: fase(w) = -w*t.
@@ -24,7 +27,7 @@ COMO SE CALCULA EL RETARDO (3.)
    del bus I2S, el modelo de mic o el driver I2S. Medido en una sola placa: confirmar en 2-3 mas.
 
 Uso: python analizar_beamforming.py toma.wav [--beta 0.5] [--fc 150] [--adelante R] [--ganancia-atras 1.0]
-     (los parametros tienen que coincidir con los #define de firmware/main/test_bf.c)
+     [--cruce 4000]   (los parametros tienen que coincidir con los #define de firmware/main/test_bf.c)
 """
 
 import argparse
@@ -43,8 +46,24 @@ def alinear(l, r, corrimiento_r):
     return np.concatenate(([0.0], l[:-1])), lfilter(h, [1.0], r)
 
 
-def hipercardioide(x1, x2, beta, fc):
-    """Misma cadena que orbita_bf_procesar (en float64), con x1/x2 ya alineados por alinear()."""
+def biquad_butter(pasa_altos, fc):
+    """Igual que biquad_butter de beamforming.c: Butterworth 2.o orden (Q = 0,707), bilineal (RBJ)."""
+    w0 = 2 * np.pi * fc / FS
+    c, alfa = np.cos(w0), np.sin(w0) / (2 * 0.70710678)
+    k = (1 + c) / 2 if pasa_altos else (1 - c) / 2
+    b = [k, -2 * k if pasa_altos else 2 * k, k]
+    return np.array(b) / (1 + alfa), np.array([1.0, -2 * c / (1 + alfa), (1 - alfa) / (1 + alfa)])
+
+
+def lr4(x, pasa_altos, fc):
+    """Linkwitz-Riley 4.o orden = dos Butterworth de 2.o orden en cascada."""
+    b, a = biquad_butter(pasa_altos, fc)
+    return lfilter(b, a, lfilter(b, a, x))
+
+
+def hipercardioide(x1, x2, beta, fc, cruce=0.0):
+    """Misma cadena que orbita_bf_procesar (en float64), con x1/x2 ya alineados por alinear().
+    cruce > 0: LR4 -> hipercardioide debajo + x1[n-1] (mic de adelante) arriba."""
     x1_ant = np.concatenate(([0.0], x1[:-1]))
     x2_ant = np.concatenate(([0.0], x2[:-1]))
     c_f = x1 - x2_ant
@@ -53,7 +72,20 @@ def hipercardioide(x1, x2, beta, fc):
     if fc > 0:
         a = np.exp(-2 * np.pi * fc / FS)
         y_h = lfilter([1.0], [1.0, -a], y_h)      # v[n] = a*v[n-1] + y_h[n]
-    return np.clip(np.rint(0.5 * y_h), -32768, 32767)
+    y = 0.5 * y_h
+    if cruce > 0:
+        y = lr4(y, False, cruce) + lr4(x1_ant, True, cruce)
+    return np.clip(np.rint(y), -32768, 32767)
+
+
+def tabla_bandas(ad, bf, bf_sin):
+    """BF - adelante por banda, con y sin division en bandas (0 dB = igual que un mic solo)."""
+    print("BF - adelante por banda (0 dB = un mic solo; de frente con bandas: ~0 a -2 dB en todas):")
+    print("     banda [Hz]   con bandas   sin bandas")
+    for lo, hi in ((300, 1000), (1000, 2000), (2000, 3000), (3000, 4000), (4000, 5000), (5000, 7000), (300, 7000)):
+        sos = butter(4, [lo, hi], btype="bandpass", fs=FS, output="sos")
+        n_ad = nivel_db(ad, sos)
+        print(f"  {lo:5d}-{hi:5d}   {nivel_db(bf, sos) - n_ad:+8.1f} dB  {nivel_db(bf_sin, sos) - n_ad:+8.1f} dB")
 
 
 def nivel_db(x, sos):
@@ -91,6 +123,8 @@ def main():
     p.add_argument("--ganancia-atras", type=float, default=1.0)
     p.add_argument("--corrimiento-r", type=float, default=0.86,
                    help="muestras que R llega adelantado (BF_CORRIMIENTO_R del firmware)")
+    p.add_argument("--cruce", type=float, default=4000.0,
+                   help="cruce del crossover en Hz (BF_CRUCE_HZ del firmware); 0 = sin bandas (tomas anteriores al 06/11)")
     p.add_argument("--firmware-viejo", action="store_true",
                    help="tomas grabadas antes del 01/11 (beamformer sin alinear L/R)")
     a = p.parse_args()
@@ -104,7 +138,7 @@ def main():
     x1, x2 = (l_al, r_al) if a.adelante == "L" else (r_al, l_al)
     x2 = x2 * a.ganancia_atras
 
-    ref = hipercardioide(x1, x2, a.beta, a.fc)
+    ref = hipercardioide(x1, x2, a.beta, a.fc, a.cruce)
     dif = np.abs(ref - bf)
     print(f"Muestras: {len(bf)} ({len(bf) / FS:.2f} s)")
     print(f"Firmware vs referencia: dif max = {dif.max():.0f} LSB, muestras con dif > 2 LSB = {(dif > 2).sum()}")
@@ -116,6 +150,7 @@ def main():
     print(f"Nivel 300 Hz - 3 kHz (dB rel. 1 LSB^2): L={n_l:.1f}  R={n_r:.1f}  BF={n_bf:.1f}")
     print(f"L - R = {n_l - n_r:+.1f} dB (de costado deberia ser ~0: si no, falta calibrar ganancia)")
     print(f"BF - adelante = {n_bf - n_ad:+.1f} dB (comparar entre tomas de frente y de costado)")
+    tabla_bandas(l if a.adelante == "L" else r, bf, hipercardioide(x1, x2, a.beta, a.fc, 0.0))
     retardo_por_banda(l, r)
 
 
