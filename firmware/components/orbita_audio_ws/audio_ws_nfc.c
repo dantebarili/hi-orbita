@@ -2,6 +2,7 @@
 // Ver el cartel en audio_ws_nfc.h. La sesion (s_uid) la escribe solo la tarea nfc y la lee el sink: spinlock.
 
 #include "audio_ws_nfc.h"
+#include "audio_ws_led.h"
 #include "orbita_nfc.h"
 #include "orbita_ws.h"
 #include "esp_log.h"
@@ -56,6 +57,7 @@ static void toque(const orbita_nfc_uid_t *uid)
     else memcpy(s_uid, hex, sizeof(hex));       // sin sesion u otra tarjeta: esta pasa a ser la sesion
     portEXIT_CRITICAL(&s_lock);
 
+    audio_ws_led_nfc(!misma);                   // latido verde (login) o blanco (logout): el medico ve que anduvo
     if (misma) {
         ESP_LOGI(TAG, "Logout %s", hex);
         avisar("logout", hex);

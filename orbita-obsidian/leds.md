@@ -160,7 +160,7 @@ static const estilo_t ESTILOS[N_ESTADOS] = {
     [REPOSO]     = { {0x64, 0xB5, 0xF6},  70, ORBITA_LED_FIJO    },   // celeste, 27 % (06/11; era 12 % y despues 39 %)
     [ESCUCHANDO] = { {0x64, 0xB5, 0xF6}, 255, ORBITA_LED_RESPIRA },   // mismo celeste, pleno
     [HABLANDO]   = { {0x9F, 0xA8, 0xFF}, 255, ORBITA_LED_FIJO    },   // lavanda
-    [SIN_RED]    = { {0xFF, 0xA7, 0x26}, 115, ORBITA_LED_LATIDO  },   // ámbar, 45 %
+    [SIN_RED]    = { {0xFF, 0xA7, 0x26},  70, ORBITA_LED_LATIDO  },   // ámbar, al brillo del reposo (06/11)
 };
 ```
 
@@ -219,7 +219,7 @@ Init: crea el mutex primero, después `orbita_led_init`, arranca en SIN RED y la
 | timer 500 ms | `audio_ws_led.c` | `error_reintento` |
 
 ```
-arranque          → SIN RED (ámbar, latido)
+arranque          → SIN RED (ámbar tenue, latido)
 conecta (≤500 ms) → REPOSO (celeste 27 %, fijo)
 "Órbita"          → ESCUCHANDO (celeste, respira)
 llega el audio    → HABLANDO (lavanda, fijo)
@@ -244,3 +244,5 @@ se cae el Wi-Fi   → SIN RED (salvo hablando, que gana)
 - Nivel lógico: a 5 V el "1" pide ~3,5 V y el S3 da 3,3 V → buffer 74AHCT1G125 en la PCB (sin verificar contra el datasheet del LED).
 - Gamma 2,2: valor típico; ajustar `LED_GAMMA` si se ve raro.
 - RAM interna (~7,5 KB: 4 KB DMA + 3 KB pila) y corriente real: medir en placa.
+
+**Avisos NFC (06/11, rama `integracion-nfc`):** un toque de la tarjeta muestra un latido (1,3 s) verde al loguear o blanco tenue al desloguear, con prioridad sobre todo; después vuelve el estado que corresponda (`audio_ws_led_nfc`).

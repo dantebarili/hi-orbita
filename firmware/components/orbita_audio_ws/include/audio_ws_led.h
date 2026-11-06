@@ -5,8 +5,9 @@
 
 /* LED DE ESTADO: traduce la FSM del vault a un color y un patron del aro (orbita_led). La tabla de colores
  * esta en audio_ws_led.c: es el unico lugar donde se cambian. Prioridad, de mayor a menor:
+ *  LOGIN/OUT   toque de la tarjeta NFC, 1 latido (1,3 s) (fuera de la FSM)          verde / blanco tenue
  *  HABLANDO    parlante sonando                         (audio_play)                 lavanda, fijo
- *  SIN RED     WebSocket desconectado                   (error_reintento)            ambar, latido
+ *  SIN RED     WebSocket desconectado                   (error_reintento)            ambar tenue, latido
  *  ESCUCHANDO  conversacion abierta                     (server_send / server_back)  celeste, respiracion
  *  REPOSO      nada de lo anterior                      (audio_wake)                 celeste tenue, fijo
  * La red se consulta cada 500 ms con orbita_ws_is_connected(); el resto llega por los avisos de abajo.
@@ -20,3 +21,6 @@ void audio_ws_led_conversacion(bool abierta);
 
 // El parlante empezo (STARTED) o termino (DONE / STOPPED).
 void audio_ws_led_hablando(bool hablando);
+
+// Toque NFC: un latido verde (login) o blanco tenue (logout) y despues vuelve al estado. Lo llama la tarea nfc.
+void audio_ws_led_nfc(bool login);
