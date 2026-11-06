@@ -6,6 +6,7 @@
 #include "orbita_nfc.h"
 #include "orbita_ws.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <stdio.h>
@@ -13,8 +14,10 @@
 
 static const char *TAG = "nfc";
 
-#define NFC_PERIODO_MS        150     // entre busquedas (igual que el banco)
-#define NFC_AUSENTE_TOQUE     3       // busquedas vacias para que la proxima deteccion cuente como toque nuevo
+#define NFC_AUTOPOLL_VUELTAS  100     // InAutoPoll: el PN532 busca solo 100 x 300 ms = 30 s y vuelve (chequeo de vida)
+#define NFC_PERIODO_MS        150     // con la tarjeta apoyada: cada cuanto se mira si la sacaron
+#define NFC_AUSENTE_TOQUE     3       // busquedas vacias para dar la tarjeta por retirada
+#define NFC_REBOTE_MS         1500    // la misma tarjeta que reaparece antes de esto no es un toque nuevo
 #define NFC_REINTENTO_MIN_MS  10000   // lector que no contesta: primer reintento...
 #define NFC_REINTENTO_MAX_MS  60000   // ...y la espera crece hasta esto (no llenar el monitor de errores)
 #define NFC_SEND_TIMEOUT_MS   1000
@@ -68,11 +71,23 @@ static void toque(const orbita_nfc_uid_t *uid)
     }
 }
 
+static bool mismo_uid(const orbita_nfc_uid_t *a, const orbita_nfc_uid_t *b)
+{
+    return a->length == b->length && memcmp(a->bytes, b->bytes, a->length) == 0;
+}
+
+/* Dos fases, para no hacer polling desde el ESP mientras no hay tarjeta:
+ *  ESPERA:  InAutoPoll. El PN532 busca solo y la tarea DUERME hasta el IRQ (sin I2C). Cada 30 s vuelve sin
+ *           tarjeta y se rearma: si el lector se colgo, ahi se nota.
+ *  APOYADA: hay que saber cuando la sacan, y el PN532 no avisa eso: se mira cada 150 ms (InListPassiveTarget)
+ *           hasta 3 vacias seguidas. Si en vez de sacarla la cambian por otra, es un toque de la nueva. */
 static void tarea_nfc(void *arg)
 {
     (void)arg;
-    bool listo = false;
-    unsigned ausente = NFC_AUSENTE_TOQUE;       // una tarjeta ya apoyada al arrancar cuenta como toque
+    bool listo = false, apoyada = false;
+    orbita_nfc_uid_t actual = {0}, retirada = {0};
+    int64_t t_retirada = 0;
+    unsigned ausente = 0;
     uint32_t espera_ms = NFC_REINTENTO_MIN_MS;
     while (1) {
         if (!listo) {
@@ -90,17 +105,33 @@ static void tarea_nfc(void *arg)
         }
         orbita_nfc_uid_t uid;
         bool presente;
-        if (orbita_nfc_read_uid(&s_nfc, &uid, &presente) != ESP_OK) {
-            ESP_LOGW(TAG, "Fallo la lectura: se reinicia el lector (la sesion se mantiene)");
-            listo = false;
+        esp_err_t err = apoyada ? orbita_nfc_read_uid(&s_nfc, &uid, &presente)
+                                : orbita_nfc_wait_card(&s_nfc, NFC_AUTOPOLL_VUELTAS, &uid, &presente);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Fallo el lector: se reinicia (la sesion se mantiene)");
+            listo = apoyada = false;
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
-        if (!presente) {
-            if (ausente < NFC_AUSENTE_TOQUE) ausente++;
-        } else {
-            if (ausente >= NFC_AUSENTE_TOQUE) toque(&uid);     // aparecio: toque nuevo. Si sigue apoyada, nada
+        if (!apoyada) {                                 // ESPERA: volvio el InAutoPoll
+            if (!presente) continue;                    // 30 s sin tarjeta: se rearma
+            apoyada = true;
             ausente = 0;
+            bool rebote = mismo_uid(&uid, &retirada) &&
+                          esp_timer_get_time() - t_retirada < (int64_t)NFC_REBOTE_MS * 1000;
+            if (!rebote) toque(&uid);
+            actual = uid;
+        } else if (presente) {                          // APOYADA: sigue ahi, o la cambiaron por otra
+            ausente = 0;
+            if (!mismo_uid(&uid, &actual)) {
+                toque(&uid);
+                actual = uid;
+            }
+        } else if (++ausente >= NFC_AUSENTE_TOQUE) {    // la sacaron: vuelve a esperar sin polling
+            apoyada = false;
+            retirada = actual;
+            t_retirada = esp_timer_get_time();
+            continue;
         }
         vTaskDelay(pdMS_TO_TICKS(NFC_PERIODO_MS));
     }

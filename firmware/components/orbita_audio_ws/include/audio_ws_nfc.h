@@ -6,8 +6,13 @@
  * responde como asistente general. El driver es orbita_nfc (banco de Juani, experiments/nfc-pn532-irq).
  *  Lector:    PN532 por I2C (I2C_NUM_0, 100 kHz, direccion 0x24) + IRQ activa baja (NXP UM0701-02, §6.2 y §6.3.3).
  *  Pines:     pines.md. SDA/SCL usan las pull-up del modulo: en la PCB hay que ponerlas.
- *  Tarea:     "nfc", core 0, prioridad 2, pila 4 KB. Busca tarjeta cada 150 ms (cada busqueda prende el campo RF).
- *  Toque:     una tarjeta que aparece despues de 3 busquedas sin nada (~0,5 s sin tarjeta).
+ *  Tarea:     "nfc", core 0, prioridad 2, pila 4 KB.
+ *  Sin tarjeta: InAutoPoll (UM0701-02 §7.3.13): el PN532 busca solo (tipos 0x10 y 0x20, 300 ms por vuelta, apaga el
+ *             campo RF entre intentos) y la tarea DUERME hasta el IRQ: sin polling ni I2C desde el ESP. Vuelve cada
+ *             30 s sin tarjeta y se rearma (asi se nota si el lector se colgo).
+ *  Apoyada:   el PN532 no avisa cuando la sacan: se mira cada 150 ms hasta 3 busquedas vacias (~0,5 s).
+ *  Toque:     una tarjeta que aparece (InAutoPoll) o que reemplaza a la apoyada. La misma tarjeta que reaparece en
+ *             menos de 1,5 s no cuenta (rebote: que un falso retiro no la desloguee sola).
  *  Sesion:    sin sesion + toque = login. Toque de la MISMA tarjeta = logout. Otra tarjeta = la reemplaza (login).
  *             La tarjeta se puede sacar: la sesion sigue.
  *  Servidor:  {"type":"nfc","event":"login"|"logout","uid":"04A1B2C3"} en cada cambio (si hay conexion; si no,

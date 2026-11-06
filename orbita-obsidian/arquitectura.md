@@ -116,7 +116,7 @@ Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). 
 | `app_main` | Arranque | 0 | 1 | 8 KB | sin medir |
 | `orbita_playback` (S7) | Ring de salida → I2S del parlante (validado con red el 15/10) | 0 | 6 | 4 KB | sin medir |
 | `led` (31/10) | Aro WS2812 por RMT con DMA (buffer ~4 KB interna); cuadros de 20 ms solo mientras anima. Detalle: `leds.md` | 0 | 2 | 3 KB | sin medir |
-| `nfc` (06/11, rama `integracion-nfc`) | PN532 por I2C + IRQ: busca tarjeta cada 150 ms (bloquea con timeouts acotados), login/logout del médico. Detalle: `audio_ws_nfc.h` | 0 | 2 | 4 KB | sin medir |
+| `nfc` (06/11, rama `integracion-nfc`) | PN532 por I2C + IRQ: sin tarjeta duerme en el IRQ mientras el PN532 busca solo (InAutoPoll); con la tarjeta apoyada mira cada 150 ms si la sacaron. Login/logout del médico. Detalle: `audio_ws_nfc.h` | 0 | 2 | 4 KB | sin medir |
 
 **REPARTO DE CORES:**
 - core 0: main, wifi, envio (sink) y recepcion (parlante, sink)

@@ -42,6 +42,25 @@ int main(void)
     }
     data[5] = 11; assert(!pn532_uid(data, sizeof(data), uid, &length));
     data[5] = 4; data[0] = 2; assert(!pn532_uid(data, sizeof(data), uid, &length));
-    puts("PASS: tramas, checksums, truncados, respuesta incorrecta y limites de UID");
+
+    // InAutoPoll (UM0701-02 7.3.13): NbTg, Type, Ln, Tg, SENS_RES[2], SEL_RES, NFCIDLength, NFCID.
+    bool found;
+    const uint8_t nada[] = {0};
+    assert(pn532_autopoll_uid(nada, 1, &found, uid, &length) && !found);
+    for (size_t i = 0; i < sizeof(sizes); i++) {
+        uint8_t ap[3 + 5 + 10] = {1, 0x10, (uint8_t)(5 + sizes[i]), 1, 0, 4, 8, sizes[i]};
+        for (uint8_t k = 0; k < sizes[i]; k++) ap[8 + k] = (uint8_t)(0xA0 + k);
+        size_t total_ap = 8 + sizes[i];
+        assert(pn532_autopoll_uid(ap, total_ap, &found, uid, &length) && found && length == sizes[i]);
+        assert(uid[0] == 0xA0 && uid[sizes[i] - 1] == 0xA0 + sizes[i] - 1);
+        for (size_t corte = 1; corte < total_ap; corte++)        // truncada en cualquier punto: se rechaza
+            assert(!pn532_autopoll_uid(ap, corte, &found, uid, &length));
+        ap[1] = 0x20; assert(pn532_autopoll_uid(ap, total_ap, &found, uid, &length) && found);
+        ap[1] = 0x40; assert(!pn532_autopoll_uid(ap, total_ap, &found, uid, &length));   // DEP: no se acepta
+        ap[1] = 0x10; ap[7] = 5; assert(!pn532_autopoll_uid(ap, total_ap, &found, uid, &length));
+    }
+    const uint8_t tres[] = {3};
+    assert(!pn532_autopoll_uid(tres, 1, &found, uid, &length));
+    puts("PASS: tramas, checksums, truncados, respuesta incorrecta, limites de UID e InAutoPoll");
     return 0;
 }

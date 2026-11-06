@@ -19,9 +19,9 @@ static void irq_handler(void *arg)
     if (wake) portYIELD_FROM_ISR();
 }
 
-static esp_err_t wait_ready(orbita_nfc_t *nfc)
+static esp_err_t wait_ready(orbita_nfc_t *nfc, uint32_t timeout_ms)
 {
-    int64_t end = esp_timer_get_time() + 1000000; // límite de laboratorio: 1 s
+    int64_t end = esp_timer_get_time() + (int64_t)timeout_ms * 1000; // 1 s, salvo InAutoPoll (dura lo que busca)
     // Nivel antes de dormir: también funciona si el flanco ocurrió antes.
     // Semáforos viejos no autorizan leer: siempre comprobar IRQ activa.
     while (gpio_get_level(nfc->irq_pin) != 0) {
@@ -36,8 +36,9 @@ static esp_err_t wait_ready(orbita_nfc_t *nfc)
     return ESP_OK;
 }
 
-static esp_err_t command(orbita_nfc_t *nfc, const uint8_t *cmd, size_t cmd_len,
-                         uint8_t *out, size_t cap, size_t *out_len)
+// El ACK siempre llega enseguida (1 s de limite); la respuesta puede tardar resp_timeout_ms.
+static esp_err_t command_timeout(orbita_nfc_t *nfc, const uint8_t *cmd, size_t cmd_len,
+                                 uint8_t *out, size_t cap, size_t *out_len, uint32_t resp_timeout_ms)
 {
     uint8_t tx[40], rx[65];
     size_t n = pn532_encode(cmd, cmd_len, tx, sizeof(tx));
@@ -45,14 +46,14 @@ static esp_err_t command(orbita_nfc_t *nfc, const uint8_t *cmd, size_t cmd_len,
     *out_len = 0;
     esp_err_t err = i2c_master_transmit(nfc->device, tx, n, 100);
     vTaskDelay(pdMS_TO_TICKS(10)); // separación entre transacciones, también al despertar
-    if (err == ESP_OK) { vTaskDelay(pdMS_TO_TICKS(10)); err = wait_ready(nfc); }
+    if (err == ESP_OK) { vTaskDelay(pdMS_TO_TICKS(10)); err = wait_ready(nfc, 1000); }
     if (err == ESP_OK) err = i2c_master_receive(nfc->device, rx, sizeof(ack) + 1, 100);
     if (err == ESP_OK && (!(rx[0] & 1) || memcmp(rx + 1, ack, sizeof(ack)))) {
         ESP_LOGE(TAG, "Comando 0x%02X: ACK invalido (status + 6 bytes):", cmd[0]);
         ESP_LOG_BUFFER_HEX_LEVEL(TAG, rx, sizeof(ack) + 1, ESP_LOG_ERROR);
         err = ESP_ERR_INVALID_RESPONSE;
     }
-    if (err == ESP_OK) err = wait_ready(nfc);
+    if (err == ESP_OK) err = wait_ready(nfc, resp_timeout_ms);
     if (err == ESP_OK) err = i2c_master_receive(nfc->device, rx, sizeof(rx), 100);
     const uint8_t *payload = NULL;
     size_t length = 0;
@@ -70,6 +71,12 @@ static esp_err_t command(orbita_nfc_t *nfc, const uint8_t *cmd, size_t cmd_len,
     }
     memcpy(out, payload, length); *out_len = length;
     return ESP_OK;
+}
+
+static esp_err_t command(orbita_nfc_t *nfc, const uint8_t *cmd, size_t cmd_len,
+                         uint8_t *out, size_t cap, size_t *out_len)
+{
+    return command_timeout(nfc, cmd, cmd_len, out, cap, out_len, 1000);
 }
 
 esp_err_t orbita_nfc_open(orbita_nfc_t *nfc, i2c_master_bus_handle_t bus, gpio_num_t irq_pin)
@@ -167,5 +174,29 @@ esp_err_t orbita_nfc_read_uid(orbita_nfc_t *nfc, orbita_nfc_uid_t *uid, bool *pr
         return ESP_ERR_INVALID_RESPONSE;
     }
     *present = true;
+    return ESP_OK;
+}
+
+esp_err_t orbita_nfc_wait_card(orbita_nfc_t *nfc, uint8_t polls, orbita_nfc_uid_t *uid, bool *present)
+{
+    if (!nfc || !uid || !present || polls == 0 || polls == 0xff) return ESP_ERR_INVALID_ARG;
+    *present = false; memset(uid, 0, sizeof(*uid));
+    if (!nfc->device || !nfc->ready) return ESP_ERR_INVALID_STATE;
+    // UM0701-02 7.3.13: PollNr = polls, Period = 1 (150 ms), Type 0x10 (Mifare) y 0x20 (ISO14443-4A). Cada
+    // vuelta prueba los 2 tipos: 300 ms. El PN532 busca solo y apaga el campo entre intentos; el IRQ baja al
+    // encontrar una tarjeta o al agotar los intentos (NbTg = 0). Mientras tanto la tarea duerme, sin I2C.
+    const uint8_t autopoll[] = {0x60, polls, 0x01, 0x10, 0x20};
+    const uint32_t espera_ms = (uint32_t)polls * 2 * 150 + 2000;     // lo que puede durar + margen
+    uint8_t out[55]; size_t n;
+    esp_err_t err = command_timeout(nfc, autopoll, sizeof(autopoll), out, sizeof(out), &n, espera_ms);
+    if (err != ESP_OK) return err;
+    bool found;
+    if (!pn532_autopoll_uid(out, n, &found, uid->bytes, &uid->length)) {
+        ESP_LOGE(TAG, "InAutoPoll: payload inesperado (%u bytes)", (unsigned)n);
+        ESP_LOG_BUFFER_HEX_LEVEL(TAG, out, n, ESP_LOG_ERROR);
+        nfc->ready = false;
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    *present = found;
     return ESP_OK;
 }

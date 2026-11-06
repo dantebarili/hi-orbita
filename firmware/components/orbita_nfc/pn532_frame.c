@@ -38,3 +38,20 @@ bool pn532_uid(const uint8_t *p, size_t n, uint8_t uid[10], uint8_t *uid_len)
     memcpy(uid, p + 6, len); *uid_len = len;
     return true;
 }
+
+bool pn532_autopoll_uid(const uint8_t *p, size_t n, bool *found, uint8_t uid[10], uint8_t *uid_len)
+{
+    // NbTg, Type, Ln, TargetData = Tg, SENS_RES[2], SEL_RES, NFCIDLength, NFCID (igual que InListPassiveTarget).
+    if (!p || !found || !uid || !uid_len || n < 1 || p[0] > 2) return false;
+    *found = false;
+    if (p[0] == 0) return n == 1;
+    if (n < 3) return false;
+    uint8_t type = p[1], ln = p[2];
+    const uint8_t *d = p + 3;
+    if ((type != 0x10 && type != 0x20) || ln < 6 || (size_t)3 + ln > n) return false;
+    uint8_t len = d[4];
+    if ((len != 4 && len != 7 && len != 10) || (size_t)5 + len > ln) return false;
+    memcpy(uid, d + 5, len); *uid_len = len;
+    *found = true;
+    return true;
+}
