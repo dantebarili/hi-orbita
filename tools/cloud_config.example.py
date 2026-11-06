@@ -13,6 +13,7 @@ STT_VAD_THRESHOLD = 0.6             # probabilidad de voz del VAD de ElevenLabs 
 STT_GATE_DBFS = -45.0               # compuerta: bloques de 20 ms mas bajos que esto van al STT como silencio (voces de fondo).
                                     # Voz cerca: -21 a -37 dBFS; fondo: -49 a -65 (activaciones del 01 y 06/11). None = sin compuerta
 STT_CONTEXT = "Charla con el asistente Orbita"   # previous_text de la 1.a sesion (< 50 caracteres); despues, la ultima respuesta
+WAKE_ACK_TEXT = "¿Sí?"              # aviso cuando se dice "Orbita" sola (se genera una vez al arrancar); "" = sin aviso
 
 # --- Voz (ElevenLabs) ---
 ELEVENLABS_VOICE_ID = "oq8K6jJPiW08295EbH2y"

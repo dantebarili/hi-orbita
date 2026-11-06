@@ -23,6 +23,7 @@ Resumen para el servidor definitivo. Código: `tools/servidor_wakeword.py` + `to
 | Volver a escuchar tras la respuesta | apenas llega `play_done` | `_turn` |
 | Fin de conversación | 8 s sin texto del STT → `conversation_end` | `IDLE_END_S` |
 | Pre-roll al detectar "Órbita" | 3 s (firmware) | `AUDIO_WS_PREROLL_SLOTS` |
+| "Órbita" sola → aviso "¿Sí?" (06/11) | 0,4 s tras el cierre de la frase, si no empezó la pregunta. Clip generado al arrancar (0,64 s), sin LLM ni TTS en el momento. La wake word se reconoce aunque el STT la escriba "Orvita"/"Orovida" (antes se respondía como pregunta, ~3 s). | `WAKE_ACK_TEXT` (`""` = sin aviso), `ACK_ESPERA_S`, `WAKE_PARECIDO` |
 | Timeout local de la conversación | 60 s sin actividad del servidor (firmware) | `AUDIO_WS_CONV_TIMEOUT_S` |
 | Heartbeat | ping cada 10 s, sin pong en 3 s = caída (firmware) | `orbita_ws.c` |
 

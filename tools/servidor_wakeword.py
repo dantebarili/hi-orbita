@@ -15,6 +15,7 @@ mono, 16 bit: lo mismo que ve el modelo) y una fila en activaciones.csv con lo q
 """
 import asyncio
 import csv
+from difflib import SequenceMatcher
 import json
 import logging
 from datetime import datetime
@@ -29,7 +30,7 @@ import wave
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
-from ws_audio_cloud import CloudServices, Conversation
+from ws_audio_cloud import CloudServices, Conversation, StreamNormalizer
 from ws_audio_protocol import HEADER
 from ws_audio_session import Session
 from ws_audio_speech import SAMPLE_RATE, play_begin, play_data, play_end
@@ -45,7 +46,11 @@ WORD_S = 1.5               # al STT va desde 1,5 s antes de la detección: la pa
 CLIP_AFTER_S = 1.0         # el WAV de la activación lleva 1 s después de la detección
 CLIP_BEFORE_S = 3.0        # y 3 s antes (= el pre-roll de la ESP)
 WAKE_WORD = "orbita"
-
+# 06/11: el STT escribe la palabra inventada como "Orvita", "Orovida"... y se tomaba como pregunta (respuesta del
+# LLM a la wake word sola, lenta). Se compara la primera palabra con b=v y d=t; 0,8 deja afuera "obvia" (0,73).
+WAKE_PARECIDO = 0.8
+ACK_ESPERA_S = 0.4         # "Órbita" sola: si en este tiempo no empezó la pregunta, suena el aviso (WAKE_ACK_TEXT)
+ACK_TEXT_DEFAULT = "¿Sí?"
 
 def load_config():
     try:
@@ -65,11 +70,33 @@ def _sin_tildes(text):
     return "".join(c for c in unicodedata.normalize("NFD", text.lower()) if unicodedata.category(c) != "Mn")
 
 
+def _es_wake(palabra):
+    p = palabra.replace("v", "b").replace("d", "t")
+    return len(p) >= 4 and SequenceMatcher(None, p, WAKE_WORD).ratio() >= WAKE_PARECIDO
+
+
+def quitar_wake(question):
+    """Saca la wake word del principio, como sea que la haya escrito el STT ("Órbita", "Orvita", "Or bita").
+    Devuelve el resto ("" si era solo la wake word) o la pregunta entera si no empieza con ella."""
+    palabras = list(re.finditer(r"[a-z]+", _sin_tildes(question)))  # sin tildes tiene el mismo largo que el original
+    if not palabras:
+        return question
+    if _es_wake(palabras[0].group()):
+        fin = palabras[0].end()
+    elif len(palabras) > 1 and _es_wake(palabras[0].group() + palabras[1].group()):
+        fin = palabras[1].end()
+    else:
+        return question
+    return question[fin:].lstrip(" \t,.:;!?\"'").strip()
+
+
 class WakeConversation(Conversation):
     """Una conversación = desde un `wake` hasta el `conversation_end`. La muestra 0 es el inicio del pre-roll."""
 
-    def __init__(self, services, session_id, send_pcm, play_done, preroll_samples, activaciones):
+    def __init__(self, services, session_id, send_pcm, play_done, preroll_samples, activaciones, ack_pcm=None):
         super().__init__(services, OUTPUT, session_id, send_pcm, play_done)
+        self.ack_pcm = ack_pcm          # "¿Sí?" ya generado y normalizado (None = sin aviso)
+        self.t_wake = self.clock()
         self.id = secrets.randbits(64)
         self.preroll = preroll_samples
         self.ignore_until = max(preroll_samples - int(WORD_S * SAMPLE_RATE), 0)
@@ -96,12 +123,34 @@ class WakeConversation(Conversation):
         if self.first_text is None and question:
             self.first_text = question
         # Sacar la wake word del principio: "Órbita, ¿qué hora es?" -> "¿qué hora es?". Si era solo "Órbita",
-        # no hay pregunta todavía: se sigue escuchando.
-        resto = re.sub(rf"^[\s\"'¡¿]*{WAKE_WORD}[\s,.:;!?]*", "", _sin_tildes(question))
+        # no hay pregunta todavía: suena el aviso y se sigue escuchando.
+        resto = quitar_wake(question)
         if not re.search(r"\w", resto):
-            LOG.info("Solo la wake word (%r): sigo escuchando la pregunta", question)
+            LOG.info("Solo la wake word (%r): aviso y sigo escuchando la pregunta", question)
+            if self.ack_pcm and (self.task is None or self.task.done()):
+                self.task = asyncio.create_task(self._ack())
             return ""
-        return question[len(question) - len(resto):].strip()    # sin tildes tiene el mismo largo que el original
+        return resto
+
+    async def _ack(self):
+        """Aviso ya generado, sin LLM ni TTS: responde a "Órbita" sola en ~0,5 s en vez de ~3 s."""
+        await asyncio.sleep(ACK_ESPERA_S)
+        if self.state != "listening" or self.partial:
+            return                       # ya empezó la pregunta: el aviso la taparía (la ESP no escucha mientras suena)
+        self.state = "busy"
+        try:
+            LOG.info("Aviso %.2f s después del wake", self.clock() - self.t_wake)
+
+            async def uno():
+                yield self.ack_pcm
+            await self.send_pcm(uno())
+            await asyncio.wait_for(self.play_done.wait(), len(self.ack_pcm) / (2 * SAMPLE_RATE) + 5)
+        except asyncio.TimeoutError:
+            LOG.warning("El ESP no confirmó el fin del aviso")
+        finally:
+            self.ignore_until = self.received    # lo que llegó mientras sonaba no cuenta
+            self.state = "listening"
+            self.last_activity = self.clock()
 
     def _save_clip(self, pcm):
         folder = self.activaciones / self.started.strftime("%Y%m%d")
@@ -126,7 +175,7 @@ class WakeConversation(Conversation):
                           self.turns, reason, ""])
 
 
-async def handle(connection, services, activaciones):
+async def handle(connection, services, activaciones, ack_pcm=None):
     session = Session(OUTPUT, record=False)
     send_lock = asyncio.Lock()
     play_done = asyncio.Event()
@@ -203,7 +252,7 @@ async def handle(connection, services, activaciones):
                         LOG.info("wake con una conversación abierta: se ignora")
                         continue
                     preroll = int(obj.get("preroll_samples", 0))
-                    conversation = WakeConversation(services, session.id, send_pcm, play_done, preroll, activaciones)
+                    conversation = WakeConversation(services, session.id, send_pcm, play_done, preroll, activaciones, ack_pcm)
                     conversation.nfc_uid = medico
                     LOG.info("ÓRBITA detectada en la ESP (pre-roll %.1f s, médico: %s): escuchando",
                              preroll / SAMPLE_RATE, medico or "ninguno, asistente general")
@@ -227,6 +276,20 @@ async def handle(connection, services, activaciones):
         LOG.info("ESP desconectada; sigo esperando conexiones")
 
 
+def generar_ack(services, texto):
+    """El aviso para "Órbita" sola se genera una vez al arrancar (un pedido al TTS) y queda en memoria."""
+    if not texto:
+        return None
+    try:
+        norm = StreamNormalizer()
+        pcm = norm.push(services.tts.speak(texto)) + norm.flush()
+        LOG.info("Aviso de wake word %r: %.2f s", texto, len(pcm) / (2 * SAMPLE_RATE))
+        return pcm
+    except Exception as error:
+        LOG.warning("No se pudo generar el aviso %r (%s): sin aviso", texto, error)
+        return None
+
+
 async def main():
     cfg = load_config()
     try:
@@ -234,7 +297,8 @@ async def main():
     except ValueError as error:
         raise SystemExit(f"Config: {error}")
     activaciones = Path(getattr(cfg, "ACTIVACIONES_DIR", "") or ACTIVACIONES_DEFAULT)
-    async with serve(lambda ws: handle(ws, services, activaciones), cfg.HOST, cfg.PORT, max_size=8192,
+    ack_pcm = await asyncio.to_thread(generar_ack, services, getattr(cfg, "WAKE_ACK_TEXT", ACK_TEXT_DEFAULT))
+    async with serve(lambda ws: handle(ws, services, activaciones, ack_pcm), cfg.HOST, cfg.PORT, max_size=8192,
                      max_queue=8, compression=None, ping_interval=20, ping_timeout=20, close_timeout=5):
         LOG.info("Servidor wake word en %s:%d | LLM %s | STT %s (cierre %.2f s de silencio) | voz %s | activaciones en %s"
                  " | Ctrl+C para salir", cfg.HOST, cfg.PORT, services.llm_name, services.stt.name,
