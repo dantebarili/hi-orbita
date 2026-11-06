@@ -46,7 +46,7 @@ esp_err_t orbita_wakeword_start(orbita_wakeword_cb_t on_deteccion);
 /**
  * @brief   Callback para orbita_pipeline_cfg_t.on_crudo (ver orbita_crudo_cb_t en pipeline.h).
  *
- * @details Corre en la tarea de captura: solo copia el promedio de los dos mics (orbita_mono_lr) al ring, con
+ * @details Corre en la tarea de captura: solo copia el mic de adelante (orbita_mic_adelante) al ring, con
  *          timeout 0. Si el ring esta lleno, descarta el chunk y lo marca como hueco.
  */
 void orbita_wakeword_on_crudo(const int16_t *chunk_ini, size_t frames, bool hueco);

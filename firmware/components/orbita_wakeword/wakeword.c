@@ -106,8 +106,8 @@ static void cuantizar(const uint16_t *v, int8_t *out)
 // mientras la probabilidad esta por debajo del cutoff.
 static void decidir(uint8_t p)
 {
-    s_probs[s_probs_idx] = p;
-    s_probs_idx = (s_probs_idx + 1) % WW_VENTANA;
+    s_probs[s_probs_idx] = p; // Hay q guardar las ultimas 5, guardo la actual
+    s_probs_idx = (s_probs_idx + 1) % WW_VENTANA; // y avanzo el indice
     if (p > s_prob_max_periodo) {
         s_prob_max_periodo = p;
     }
@@ -212,9 +212,9 @@ void orbita_wakeword_on_crudo(const int16_t *chunk_ini, size_t frames, bool huec
     if (s_ring == NULL || frames != ORBITA_CHUNK_FRAMES) {
         return;
     }
-    // Estereo L,R,L,R...: promedio de los dos mics (el mismo mono que el modo crudo).
+    // Estereo L,R,L,R...: solo el mic de adelante (el promedio colorea los agudos segun la direccion).
     for (size_t k = 0; k < frames; k++) {
-        s_chunk_cb.muestras[k] = orbita_mono_lr(chunk_ini, k);
+        s_chunk_cb.muestras[k] = orbita_mic_adelante(chunk_ini, k);
     }
     s_chunk_cb.hueco = hueco || s_hueco_pendiente;
     if (xRingbufferSend(s_ring, &s_chunk_cb, sizeof(s_chunk_cb), 0) == pdTRUE) {

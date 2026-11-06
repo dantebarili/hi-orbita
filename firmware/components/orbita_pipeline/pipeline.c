@@ -266,9 +266,11 @@ esp_err_t orbita_pipeline_start(const orbita_pipeline_cfg_t *cfg)
     }
 
     orbita_bf_init(&s_bf, ORBITA_BF_ADELANTE_ES_L, ORBITA_BF_GANANCIA_ATRAS, ORBITA_BF_BETA, ORBITA_BF_FC_HZ,
-                   ORBITA_SAMPLE_RATE_HZ, ORBITA_BF_CORRIMIENTO_R);
-    ESP_LOGI(TAG, "Audio al servidor: hipercardioide (beta %.2f, corrimiento R %.2f); wake word: L+R; pasa-altos %d Hz",
-             (double)ORBITA_BF_BETA, (double)ORBITA_BF_CORRIMIENTO_R, HPF_HZ);
+                   ORBITA_SAMPLE_RATE_HZ, ORBITA_BF_CORRIMIENTO_R, ORBITA_BF_CRUCE_HZ);
+    ESP_LOGI(TAG, "Audio al servidor: hipercardioide (beta %.2f, corrimiento R %.2f) hasta %.0f Hz, arriba mic %s; "
+             "wake word: mic %s; pasa-altos %d Hz",
+             (double)ORBITA_BF_BETA, (double)ORBITA_BF_CORRIMIENTO_R, (double)ORBITA_BF_CRUCE_HZ,
+             ORBITA_BF_ADELANTE_ES_L ? "L" : "R", ORBITA_BF_ADELANTE_ES_L ? "L" : "R", HPF_HZ);
     // El ring out (bloque contiguo de PSRAM) se reserva antes de crear las tareas que lo usan.
     // Si ya estaba iniciado (otro modulo), se sigue con ese.
     esp_err_t ring_err = orbita_ring_out_init();

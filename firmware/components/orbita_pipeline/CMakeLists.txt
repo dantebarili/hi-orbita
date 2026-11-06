@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS "pipeline.c"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES orbita_audio orbita_beamforming esp_ringbuf esp_timer
+    REQUIRES orbita_beamforming          # publico: pipeline.h lo incluye
+    PRIV_REQUIRES orbita_audio esp_ringbuf esp_timer
 )

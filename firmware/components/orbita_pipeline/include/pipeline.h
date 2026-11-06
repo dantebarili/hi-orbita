@@ -7,7 +7,7 @@
  *
  * @copyright Copyright (c) 2026 - Proyecto Orbita
  *
- * @details captura (I2S -> pasa-altos -> 16 bit) -> on_crudo (la wake word, con el promedio L+R)
+ * @details captura (I2S -> pasa-altos -> 16 bit) -> on_crudo (la wake word, con el mic de adelante)
  *                                                -> ring in -> feed -> beamformer -> ring out (al servidor)
  */
 
@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include "esp_err.h"
 #include "sdkconfig.h"
+#include "beamforming.h"   // ORBITA_BF_ADELANTE_ES_L (orbita_mic_adelante)
 
 // --- Formato del audio (16 kHz, 16 bit) ---
 #define ORBITA_CHANNELS          2                                   // mics L y R
@@ -27,13 +28,15 @@
 #define ORBITA_CHUNK_BYTES       (ORBITA_CHUNK_FRAMES * ORBITA_FRAME_BYTES)    // 4096 B
 
 // Audio que va al servidor: salida del beamformer (hipercardioide, ver beamforming.h). Va en el campo
-// `source` del hello. La wake word, en cambio, usa el promedio L+R (omnidireccional).
+// `source` del hello. La wake word, en cambio, usa el mic de adelante solo (omnidireccional).
 #define ORBITA_RAW_MIC_SOURCE "bf"
 
-/** Muestra mono k de un buffer estereo L,R,L,R...: (L + R) / 2, sumado en 32 bit para no desbordar. */
-static inline int16_t orbita_mono_lr(const int16_t *estereo, size_t k)
+/** Muestra k del mic de adelante en un buffer estereo L,R,L,R... El slot sale de ORBITA_BF_ADELANTE_ES_L:
+ *  si se monta al reves, la wake word y el beamformer cambian juntos. No se usa (L+R)/2: con los mics a
+ *  21,4 mm el promedio hace un hueco en los agudos que depende de la direccion (atras: 4,3 kHz). */
+static inline int16_t orbita_mic_adelante(const int16_t *estereo, size_t k)
 {
-    return (int16_t)(((int32_t)estereo[2 * k] + estereo[2 * k + 1]) / 2);
+    return estereo[2 * k + (ORBITA_BF_ADELANTE_ES_L ? 0 : 1)];
 }
 
 /**

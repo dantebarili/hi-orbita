@@ -64,7 +64,7 @@ void app_main(void)
     err = audio_ws_playback_init();
     if (err != ESP_OK) arranque_fallo("playback", err);
     log_memoria("despues de playback");
-    // No enviar desde on_crudo. La wake word recibe el promedio L+R (omnidireccional): su on_crudo solo
+    // No enviar desde on_crudo. La wake word recibe el mic de adelante (omnidireccional): su on_crudo solo
     // lo copia a su ring y vuelve. Lo que va al servidor sale del beamformer (pipeline, tarea feed).
     const orbita_pipeline_cfg_t pipe_cfg = { .on_crudo = orbita_wakeword_on_crudo };
     err = orbita_pipeline_start(&pipe_cfg);

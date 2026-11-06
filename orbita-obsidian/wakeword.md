@@ -57,7 +57,7 @@ En el orden en que actúan:
 | Función | Dónde corre | Qué hace |
 |---|---|---|
 | `orbita_wakeword_start()` | `app_main`, una vez | Llama a `ww_modelo_init`. Calcula el factor de cuantización y el cutoff en 0-255. Configura el frontend con los mismos parámetros que el entrenamiento (`FrontendPopulateState`). Crea el ring en PSRAM y la tarea `wakeword`. |
-| `orbita_wakeword_on_crudo(chunk, frames, hueco)` | Tarea de captura (prio 6), cada 64 ms | Promedia los dos mics del chunk estéreo (`orbita_mono_lr`), lo copia al ring con timeout 0 y marca si hubo hueco. Si el ring está lleno, descarta, cuenta `overruns` y marca hueco en el siguiente. Nada más: no puede frenar la captura. |
+| `orbita_wakeword_on_crudo(chunk, frames, hueco)` | Tarea de captura (prio 6), cada 64 ms | Toma el mic de adelante del chunk estéreo (`orbita_mic_adelante`), lo copia al ring con timeout 0 y marca si hubo hueco. Si el ring está lleno, descarta, cuenta `overruns` y marca hueco en el siguiente. Nada más: no puede frenar la captura. |
 | `tarea_wakeword()` | Tarea propia (core 1, prio 4) | Espera chunks del ring. Por cada uno: si viene con hueco, `reiniciar_por_hueco()`; después `procesar_audio()`. Cada 10 s, `log_resumen()`. |
 | `procesar_audio(muestras, n)` | Tarea `wakeword` | El núcleo. En bucle: `FrontendProcessSamples` consume muestras y, cada 160 nuevas (10 ms), devuelve una columna de 40 uint16. `cuantizar` la pasa a int8 y la escribe en la fila `s_paso` de la entrada. Con 3 filas: `ww_modelo_invoke` y `decidir`. Si 1024 no se divide justo en columnas, no importa: el frontend y `s_paso` arrastran el resto al chunk siguiente. |
 | `cuantizar(v, out)` | Dentro de `procesar_audio` | `int8 = round(v × 0,0390625 / escala) + cero`, recortado a −128…127. El 0,0390625 es el que usa el notebook (`feature = uint16 / 25,6`); escala y cero se leen del modelo. ESPHome usa constantes fijas que suponen escala 26/256, pero el modelo trae 26/255 (difiere en el 6 % de los valores). Va en float32, igual que `wakeword_ref.py`. |
@@ -88,7 +88,7 @@ En el orden en que actúan:
 3. **En vivo:** aciertos a 0,5, 1, 2 y 3 m; falsos por hora con charla o TV de fondo; contadores de la captura en 0.
 
 ## Abierto para la integración
-- Corre sobre el crudo (promedio L+R) aunque el AFE esté activo; falta medir aciertos con el promedio (se validó con un solo mic).
+- Corre sobre el mic de adelante (desde el 06/11; antes, promedio L+R). Falta volver a medir aciertos en placa.
 - La carga con el WiFi y el AFE encendidos (RAM interna e `invoke_max` en el resumen).
 - AEC para detectar mientras suena el parlante.
 - Los eventos `dev_wake_word` de la FSM.

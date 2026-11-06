@@ -11,7 +11,7 @@ Actualizado 2026-10-26. Reemplaza a `plan_prototipo_alfa.md` (borrado hoy; sigue
 ## Línea 1 — Wake word (Dante) → mergear
 
 - [ ] Terminar la wake word y dejar el criterio de "listo para mergear" escrito (falsos positivos/negativos en las tomas; CPU y RAM interna medidas con el resto del pipeline).
-- [x] Mergear `wakeword-banco` (29/10, en `prototipo-alfa-wakeword`). Falta en placa: que no pise RAM ni core del AFE (ver Línea 2) y aciertos con el promedio L+R.
+- [x] Mergear `wakeword-banco` (29/10, en `prototipo-alfa-wakeword`). Falta en placa: que no pise RAM ni core del AFE (ver Línea 2) y aciertos con el mic de adelante (desde el 06/11).
 - [ ] Anotar en `orbita-obsidian` cómo se alimenta la wake word (mic crudo, sin AFE) y actualizar la FSM del vault, que hoy no contempla wake word en el chip.
 
 ## Línea 2 — AEC + pipeline de audio (Dante, en paralelo, antes del merge)
