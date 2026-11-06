@@ -5,8 +5,9 @@ Actualizado 2026-10-26. Reemplaza a `plan_prototipo_alfa.md` (borrado hoy; sigue
 ## Estado hoy
 
 - **Hecho:** captura continua + sockets `orbita-pcm-v2` con retención y reconexión; servidor con STT en vivo (ElevenLabs `scribe_v2_realtime`) y TTS ElevenLabs y chat de voz con la nube; parlante (`orbita_playback`) con tono local y respuesta por red validados; AFE con beamforming (SE) + VAD en la rama `prototipo-alfa`.
-- **En curso:** wake word on-device (microWakeWord, modelo `orbita`) integrada en la rama `prototipo-alfa-wakeword` (29/10): siempre activa en el modo WebSocket, sobre el crudo (promedio L+R, **fuera del AFE**); por ahora solo loguea. Sin probar en placa integrada.
-- **Sin empezar:** AEC, barge-in, LED, NFC, pruebas largas.
+- **En curso:** wake word on-device (microWakeWord, modelo `orbita`) integrada en la rama `prototipo-alfa-wakeword` (29/10): siempre activa en el modo WebSocket, sobre el crudo (mic de adelante desde el 06/11; antes promedio L+R; **fuera del AFE**); por ahora solo loguea. Sin probar en placa integrada.
+- **Sin empezar:** AEC, barge-in, pruebas largas.
+- **NFC (06/11):** banco PN532 I2C + IRQ de Juani probado en placa; integrado en la rama `integracion-nfc` (login opcional por toque, `uid` al servidor). Falta probar el firmware integrado en placa antes de mergear a `main`.
 
 ## Línea 1 — Wake word (Dante) → mergear
 

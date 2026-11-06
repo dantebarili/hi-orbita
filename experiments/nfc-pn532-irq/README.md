@@ -2,6 +2,8 @@
 
 Proyecto ESP-IDF independiente, preparado sobre `main` en `d1915e3` (06/11/2026). No está conectado al arranque, audio, red, sesión ni FSM de `firmware/`. El componente se entrega para que el integrador lo pruebe y luego lo incorpore explícitamente.
 
+**Integrado en `firmware/` (rama `integracion-nfc`, 06/11):** pines 17/18/21 y sesión en `orbita_audio_ws/audio_ws_nfc.c`. Este banco sigue con 10/11/12.
+
 Estado: **lectura de tarjeta y funcionamiento con IRQ probados en placa y confirmados por Juani**. La versión IRQ compila con ESP-IDF 5.5.5. Las pruebas host validan tramas, checksum, truncados y UID.
 
 ## Cableado de este banco
@@ -43,7 +45,7 @@ Un timeout IRQ o respuesta inválida registra el error y detiene el banco, sin r
 - ISR de flanco descendente: solo entrega un semáforo mediante `xSemaphoreGiveFromISR` y cede CPU si corresponde. No usa I2C, logs, red ni memoria dinámica.
 - `wait_ready` espera IRQ baja con timeout de 1 s y comprueba el nivel antes de dormir y después de cada aviso. Esto cubre IRQ ya activa y notificaciones anteriores; no consulta periódicamente el byte RDY.
 - IRQ anuncia tanto ACK como respuesta. La tarea lee ambos por I2C y valida status, trama y contenido. Se conservan búsquedas finitas y pausas de 150 ms entre búsquedas: IRQ no elimina esa búsqueda periódica.
-- `components/orbita_nfc`: API `open(nfc, bus, irq_pin)`, `begin`, `read_uid`, `close`. Inicializar contexto a cero y mantenerlo vivo hasta cerrar; un solo llamador, sin cierre simultáneo con una operación. El llamador posee el bus.
+- `firmware/components/orbita_nfc` (el banco lo usa desde ahí, `EXTRA_COMPONENT_DIRS`): API `open(nfc, bus, irq_pin)`, `begin`, `read_uid`, `close`. Inicializar contexto a cero y mantenerlo vivo hasta cerrar; un solo llamador, sin cierre simultáneo con una operación. El llamador posee el bus.
 - Driver de laboratorio: tramas normales de hasta 64 bytes, UID de 4/7/10 bytes, sin recuperación automática. Las llamadas bloquean la tarea con tiempos acotados; no llamarlas desde tareas/callbacks de audio o red.
 - Al integrar, usar una tarea NFC de baja prioridad y enviar una **copia** del UID por cola al dueño de sesión. Acordar login/logout y el contrato de servidor con la FSM. El UID no prueba criptográficamente identidad.
 - El servicio ISR GPIO es compartido y no se desinstala al cerrar. Esta ISR usa el servicio sin `ESP_INTR_FLAG_IRAM`; si el firmware ya instala un servicio con IRAM, adaptar handler, contexto y semáforo a ese contrato antes de integrarlo. GPIO12 debe quedar reservado a este lector durante la prueba.
@@ -54,7 +56,7 @@ Desde esta carpeta, con un compilador C instalado (sin depender de ESP-IDF):
 
 ```sh
 mkdir -p test-build
-cc -std=c11 -Wall -Wextra -Werror -Icomponents/orbita_nfc tests/test_frame.c components/orbita_nfc/pn532_frame.c -o test-build/test_frame
+cc -std=c11 -Wall -Wextra -Werror -I../../firmware/components/orbita_nfc tests/test_frame.c ../../firmware/components/orbita_nfc/pn532_frame.c -o test-build/test_frame
 ./test-build/test_frame
 ```
 
@@ -62,7 +64,7 @@ En Developer PowerShell de Visual Studio:
 
 ```powershell
 New-Item -ItemType Directory -Force test-build | Out-Null
-cl /nologo /W4 /WX /I components/orbita_nfc tests/test_frame.c components/orbita_nfc/pn532_frame.c /Fe:test-build/test_frame.exe /Fo:test-build/
+cl /nologo /W4 /WX /I ../../firmware/components/orbita_nfc tests/test_frame.c ../../firmware/components/orbita_nfc/pn532_frame.c /Fe:test-build/test_frame.exe /Fo:test-build/
 .\test-build\test_frame.exe
 ```
 

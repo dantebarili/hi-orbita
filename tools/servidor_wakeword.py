@@ -56,6 +56,11 @@ def load_config():
         sys.exit(f"Creé {HERE / 'cloud_config.py'}: abrilo, completá las claves y volvé a ejecutar.")
 
 
+def _uid(valor):
+    """UID de la tarjeta NFC como lo manda la ESP (hex mayúsculas, 4/7/10 bytes) o None si no hay/no es válido."""
+    return valor if isinstance(valor, str) and re.fullmatch(r"(?:[0-9A-F]{8}|[0-9A-F]{14}|[0-9A-F]{20})", valor) else None
+
+
 def _sin_tildes(text):
     return "".join(c for c in unicodedata.normalize("NFD", text.lower()) if unicodedata.category(c) != "Mn")
 
@@ -127,6 +132,7 @@ async def handle(connection, services, activaciones):
     play_done = asyncio.Event()
     active_play = None
     conversation = None
+    medico = None                 # UID de la tarjeta NFC logueada en esta ESP (None = asistente general)
 
     async def send_json(obj):
         async with send_lock:
@@ -180,13 +186,27 @@ async def handle(connection, services, activaciones):
                         active_play = None
                         play_done.set()
                     continue
+                if kind == "nfc":                   # login/logout del médico (puede llegar antes del hello)
+                    uid, evento = _uid(obj.get("uid")), obj.get("event")
+                    if evento == "login" and uid:
+                        medico = uid
+                    elif evento == "logout" and uid == medico:
+                        medico = None
+                    LOG.info("NFC %s %s -> médico: %s", evento, uid, medico or "ninguno")
+                    if conversation is not None:
+                        conversation.nfc_uid = medico   # los turnos que siguen quedan con el médico nuevo
+                    continue
+                if kind in ("hello", "wake") and "uid" in obj:
+                    medico = _uid(obj.get("uid"))    # el estado que manda la ESP manda (reconexión, aviso perdido)
                 if kind == "wake":
                     if conversation is not None:
                         LOG.info("wake con una conversación abierta: se ignora")
                         continue
                     preroll = int(obj.get("preroll_samples", 0))
                     conversation = WakeConversation(services, session.id, send_pcm, play_done, preroll, activaciones)
-                    LOG.info("ÓRBITA detectada en la ESP (pre-roll %.1f s): escuchando", preroll / SAMPLE_RATE)
+                    conversation.nfc_uid = medico
+                    LOG.info("ÓRBITA detectada en la ESP (pre-roll %.1f s, médico: %s): escuchando",
+                             preroll / SAMPLE_RATE, medico or "ninguno, asistente general")
                     continue
             response = session.process(message)
             if response:

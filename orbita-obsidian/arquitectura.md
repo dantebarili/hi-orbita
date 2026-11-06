@@ -116,6 +116,7 @@ Relevado el 14/10 sobre el código (`xTaskCreate*` en `components/` y `main/`). 
 | `app_main` | Arranque | 0 | 1 | 8 KB | sin medir |
 | `orbita_playback` (S7) | Ring de salida → I2S del parlante (validado con red el 15/10) | 0 | 6 | 4 KB | sin medir |
 | `led` (31/10) | Aro WS2812 por RMT con DMA (buffer ~4 KB interna); cuadros de 20 ms solo mientras anima. Detalle: `leds.md` | 0 | 2 | 3 KB | sin medir |
+| `nfc` (06/11, rama `integracion-nfc`) | PN532 por I2C + IRQ: busca tarjeta cada 150 ms (bloquea con timeouts acotados), login/logout del médico. Detalle: `audio_ws_nfc.h` | 0 | 2 | 4 KB | sin medir |
 
 **REPARTO DE CORES:**
 - core 0: main, wifi, envio (sink) y recepcion (parlante, sink)
@@ -221,7 +222,7 @@ Movido a [[protocolo]].
 
 - Seguridad: TLS, autenticación del dispositivo, aprovisionamiento de WiFi, OTA (ya hay dos slots).
 - Resiliencia offline: rol de la SD y política de pérdida de datos (liga con los rings).
-- Estados que faltan en la FSM: falla de `audio_init`, login NFC, apagado.
+- Estados que faltan en la FSM: falla de `audio_init`, apagado. El login NFC (06/11) no es un estado: es un dato aparte que acompaña a la FSM (`fsm.md`).
 
 ## 6. Backend (servidor de laboratorio, `tools/ws_audio_cloud.py`)
 
@@ -244,7 +245,7 @@ Butterworth de **2.º orden a 70 Hz**, un biquad por canal, en `tarea_captura` s
 - Lo ve todo lo que sale de la captura: AFE, wake word (su frontend arranca en 125 Hz: efecto mínimo, confirmar), socket y tomas UART del AGC/AEC.
 
 ### 6.3 Latencia de un turno (de que dejas de hablar a que suena la respuesta)
-Medida el 21/10 con ElevenLabs (STT Scribe, TTS `eleven_flash_v2_5`) y Gemini en la copia de laboratorio: **mediana de 15 turnos con `gemini-3.5-flash-lite`**; el servidor la registra por etapa (`stt_s`, `llm_s`, `tts_s`, `send_s`, `total_s`) en `tools/prueba_websocket/cloud_*.jsonl`. `total_s` arranca cuando el detector cierra la frase, o sea que **no incluye** la espera de silencio ni lo que pasa en el ESP.
+Medida el 21/10 con ElevenLabs (STT Scribe, TTS `eleven_flash_v2_5`) y Gemini en la copia de laboratorio: **mediana de 15 turnos con `gemini-3.5-flash-lite`**; el servidor la registra por etapa (`stt_s`, `llm_s`, `tts_s`, `send_s`, `total_s`) en `tools/prueba_websocket/cloud_*.jsonl`. `total_s` arranca cuando el detector cierra la frase, o sea que **no incluye** la espera de silencio ni lo que pasa en el ESP. Desde el 06/11 el TTS va en streaming y `tts_s`/`total_s` miden hasta el primer audio (`servidor.md`).
 
 | # | Etapa | Dónde | Tiempo | Notas |
 |---|---|---|---|---|

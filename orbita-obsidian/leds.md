@@ -157,7 +157,7 @@ Antes iba entre `#if CONFIG_ORBITA_LAB_WEBSOCKET ... #endif`; desde el 01/11 el 
 ```c
 typedef enum { REPOSO, ESCUCHANDO, HABLANDO, SIN_RED, N_ESTADOS } estado_t;
 static const estilo_t ESTILOS[N_ESTADOS] = {
-    [REPOSO]     = { {0x64, 0xB5, 0xF6},  31, ORBITA_LED_FIJO    },   // celeste, 12 %
+    [REPOSO]     = { {0x64, 0xB5, 0xF6},  70, ORBITA_LED_FIJO    },   // celeste, 27 % (06/11; era 12 % y despues 39 %)
     [ESCUCHANDO] = { {0x64, 0xB5, 0xF6}, 255, ORBITA_LED_RESPIRA },   // mismo celeste, pleno
     [HABLANDO]   = { {0x9F, 0xA8, 0xFF}, 255, ORBITA_LED_FIJO    },   // lavanda
     [SIN_RED]    = { {0xFF, 0xA7, 0x26}, 115, ORBITA_LED_LATIDO  },   // ámbar, 45 %
@@ -220,7 +220,7 @@ Init: crea el mutex primero, después `orbita_led_init`, arranca en SIN RED y la
 
 ```
 arranque          → SIN RED (ámbar, latido)
-conecta (≤500 ms) → REPOSO (celeste 12 %, fijo)
+conecta (≤500 ms) → REPOSO (celeste 27 %, fijo)
 "Órbita"          → ESCUCHANDO (celeste, respira)
 llega el audio    → HABLANDO (lavanda, fijo)
 termina de sonar  → ESCUCHANDO

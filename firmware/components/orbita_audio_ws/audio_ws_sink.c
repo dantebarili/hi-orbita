@@ -8,6 +8,7 @@
  */
 #include "audio_ws_sink.h"
 #include "audio_ws_conversacion.h"
+#include "audio_ws_nfc.h"
 #include "audio_ws_wire.h"
 #include "orbita_ws.h"
 #include "pipeline.h"
@@ -155,6 +156,15 @@ static bool wait_ready(uint32_t connection, uint32_t timeout_ms)
 // hello lo rechaza el servidor y cerraria la conexion.
 // Config que viaja en el hello y queda en el JSON de la toma, para saber despues con que se hizo.
 // afe y vad_* quedan fijos (0 y -1): el firmware ya no tiene AFE, pero el protocolo los sigue llevando.
+// "uid" del medico logueado por NFC como valor JSON: "\"04A1B2C3\"" o "null" (sin sesion).
+static void uid_json(char out[AUDIO_WS_NFC_UID_CHARS + 2])
+{
+    char uid[AUDIO_WS_NFC_UID_CHARS];
+    audio_ws_nfc_uid(uid);
+    if (uid[0]) snprintf(out, AUDIO_WS_NFC_UID_CHARS + 2, "\"%s\"", uid);
+    else strcpy(out, "null");
+}
+
 static bool start_session(uint32_t connection)
 {
     if (s.hello_conn != connection) {
@@ -163,12 +173,14 @@ static bool start_session(uint32_t connection)
         s.index = s.samples = 0;
         s.last_ack = -1;
         s.no_window = false;
+        char uid[AUDIO_WS_NFC_UID_CHARS + 2];
+        uid_json(uid);
         int n = snprintf(s.control, sizeof(s.control),
             "{\"type\":\"hello\",\"protocol\":\"orbita-pcm-v2\",\"id\":\"%016" PRIx64
-            "\",\"rate\":16000,\"channels\":1,\"format\":\"s16le\",\"source\":\"%s\","
+            "\",\"rate\":16000,\"channels\":1,\"format\":\"s16le\",\"source\":\"%s\",\"uid\":%s,"
             "\"config\":{\"afe\":0,\"vad_mode\":-1,\"vad_speech_ms\":-1,\"vad_noise_ms\":-1,"
             "\"play_gain_q15\":%d}}",
-            s.id, ORBITA_RAW_MIC_SOURCE, ORBITA_PLAY_GAIN_Q15);
+            s.id, ORBITA_RAW_MIC_SOURCE, uid, ORBITA_PLAY_GAIN_Q15);
         if (n <= 0 || (size_t)n >= sizeof(s.control) ||
             orbita_ws_send(ORBITA_WS_TEXT, s.control, n, SEND_TIMEOUT_MS) != ESP_OK) return false;
         s.hello_conn = connection;
@@ -263,9 +275,11 @@ static esp_err_t send_audio(void *ctx, const orbita_msg_t *msg)
         // Primer mensaje de una conversacion: antes del audio va `wake` (una vez por conexion), para que el
         // servidor sepa que arranca una conversacion y donde termina el pre-roll (= donde se detecto).
         if (msg->inicio && s.wake_conn != s.connection) {
+            char uid[AUDIO_WS_NFC_UID_CHARS + 2];
+            uid_json(uid);                                  // medico logueado al momento de la wake word
             int n = snprintf(s.control, sizeof(s.control),
-                "{\"type\":\"wake\",\"index\":%" PRIu32 ",\"seq\":%" PRIu32 ",\"preroll_samples\":%u}",
-                s.index, msg->seq_primero, (unsigned)(AUDIO_WS_PREROLL_SLOTS * ORBITA_SLOT_SAMPLES));
+                "{\"type\":\"wake\",\"index\":%" PRIu32 ",\"seq\":%" PRIu32 ",\"preroll_samples\":%u,\"uid\":%s}",
+                s.index, msg->seq_primero, (unsigned)(AUDIO_WS_PREROLL_SLOTS * ORBITA_SLOT_SAMPLES), uid);
             if (n <= 0 || (size_t)n >= sizeof(s.control) ||
                 orbita_ws_send(ORBITA_WS_TEXT, s.control, n, SEND_TIMEOUT_MS) != ESP_OK) {
                 ++s.failed_attempts;

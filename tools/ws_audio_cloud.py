@@ -383,6 +383,7 @@ class Conversation:
         self.last_activity = self.clock()
         self.turns = 0
         self.task = None
+        self.nfc_uid = None           # médico logueado por NFC (va en el registro de cada turno; None = sin médico)
         self.gate_hold = 0            # bloques que la compuerta sigue abierta
         self.gate_n = self.gate_cerrados = 0
         self.gate_max_db = -120.0     # nivel del bloque mas fuerte del turno (para afinar STT_GATE_DBFS)
@@ -469,7 +470,8 @@ class Conversation:
         t_stt = self.clock()
         record = dict(time=datetime.now(timezone.utc).isoformat(), session=self.session_id,
                       utterance_seconds=round(len(pcm) / (2 * SAMPLE_RATE), 2), stt=self.services.stt.name,
-                      llm=self.services.llm_name, question=question, stt_open_ms=self.stt_open_ms)
+                      llm=self.services.llm_name, question=question, stt_open_ms=self.stt_open_ms,
+                      nfc_uid=self.nfc_uid)
         try:
             if stt is not None:
                 await stt.close()     # libera la sesión: no se paga mientras piensa ni mientras suena

@@ -12,7 +12,7 @@ Lista completa por tipo de componente. Modelo entre paréntesis = referencia, no
 **Confirmado**
 - **MCU / módulo:** ESP32-S3 variante N16R8 (16 MB flash quad, 8 MB PSRAM octal, WiFi/BLE integrado). DevKit en prototipo, módulo soldado en la PCB.
 - **Micrófonos:** 2x MEMS digitales I2S (ICS-43434 / INMP441), alimentación estricta a 3.3V, en un mismo bus I2S (canal L y R).
-- **Lector NFC** (13.56 MHz) para el login del médico. Interfaz (SPI / I2C / UART) sin definir.
+- **Lector NFC** (13.56 MHz) para el login del médico, opcional (sin login responde como asistente general): PN532 por I2C + IRQ (banco probado; integrado en la rama `integracion-nfc`).
 - **Salida de audio:** amplificador clase D con entrada I2S + parlante — para `audio_play` y los clips de error locales. Los clips viven en flash del ESP32.
 
 **Opcional / a decidir**

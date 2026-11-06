@@ -28,3 +28,8 @@ que el pipeline asigne sus buffers. La prioridad WebSocket sigue en 4,
 playback en 6 y sink en 5; flujo simultáneo validado en placa el 15/10; falta medir pilas y RAM.
 El formato binario entrante sigue siendo una propuesta hasta que el servidor
 confirme el encabezado.
+
+`audio_ws_nfc` (06/11) es la sesión del médico por NFC: tarea propia que lee el
+PN532 (`orbita_nfc`), decide login/logout y avisa al servidor; el sink pone el
+`uid` en cada `hello` y `wake`. Es opcional: si el lector no contesta, todo
+sigue igual sin login. Contrato y pines en el cartel de `audio_ws_nfc.h`.

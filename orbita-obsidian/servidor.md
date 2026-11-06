@@ -43,6 +43,11 @@ Resumen para el servidor definitivo. Código: `tools/servidor_wakeword.py` + `to
 - **Volumen (06/11): por hardware, no por software.** `PLAY_GAIN_DB` = 0 (con +3 dB el limitador aplastaba la voz) y el pin GAIN del MAX98357A a GND = 12 dB (al aire = 9 dB; a GND con 100 kΩ = 15 dB; tabla de DFRobot y nota de Maxim, sin verificar en el datasheet). La ganancia del ampli sube todo sin procesar; si los picos recortan (el ampli no da más a 5 V), volver el pin al aire. El firmware está en ganancia 1,0 y solo atenúa.
 - **PCB:** el parlante y su caja pesan más que cualquier ajuste (3 W / 4 Ω en caja cerrada). Más ganancia = más pico de corriente en el 5 V: dimensionar el regulador.
 
+## Login NFC (06/11, rama `integracion-nfc`)
+- La ESP manda `nfc` (login/logout) en cada cambio y `uid` en cada `hello` y `wake` (`protocolo.md`). El servidor guarda el médico por conexión; el `uid` de `hello`/`wake` pisa al de los avisos (cubre reconexiones y avisos perdidos).
+- `nfc` puede llegar antes del `hello`: el servidor lo atiende antes de pasarle el mensaje a la sesión (que cierra con 1008 cualquier control desconocido). El definitivo tiene que hacer lo mismo.
+- Cada turno queda con `nfc_uid` en `cloud_*.jsonl` (`null` = sin médico, asistente general). Con `uid` es donde se asociaría al ERP; sin `uid`, nunca se toca.
+
 ## Registro
 - **Latencia por etapa en cada turno** (`stt_s`, `llm_s`, `tts_s`, `send_s`, `total_s`) en `cloud_*.jsonl`. Sin esto no se sabe qué recortar. Desde el 06/11 (streaming): `tts_s` = hasta el **primer** audio, `send_s` = cuánto dura el envío, `total_s` = fin de habla → primer PLAY; más `tts_peak_in_dbfs` y `tts_limited_pct`. `stt_s` incluye los 0,8 s de silencio que espera para cerrar la frase.
 - **Cada activación de la wake word se guarda** (WAV + fila en `activaciones.csv` con lo transcrito) para etiquetar reales/falsas y reentrenar. Nunca subir esos audios a un repo.

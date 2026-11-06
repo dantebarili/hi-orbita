@@ -13,6 +13,7 @@
 #include "audio_ws_playback.h"
 #include "audio_ws_conversacion.h"
 #include "audio_ws_led.h"
+#include "audio_ws_nfc.h"
 #include "esp_heap_caps.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -92,6 +93,9 @@ void app_main(void)
     };
     err = orbita_ws_start(&ws);
     if (err != ESP_OK) arranque_fallo("WebSocket", err);
+    // NFC opcional: si falla, el equipo sigue sin login (el servidor responde como asistente general).
+    err = audio_ws_nfc_start();
+    if (err != ESP_OK) ESP_LOGW("main", "NFC no disponible (%s): se sigue sin login", esp_err_to_name(err));
     log_memoria("arranque completo");
     ESP_LOGI("main", "Listo: decir \"Orbita\" para empezar a mandar audio al servidor");
 }

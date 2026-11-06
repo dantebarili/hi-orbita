@@ -13,7 +13,7 @@ Un solo lugar con todos los pines y dónde están en el código. Es la fuente de
 | 7 | 7 | I2S parlante: WS | En uso (PCB, 16/10) | `ORBITA_PLAY_WS_GPIO`, `orbita_playback.h` | LRC del MAX98357A |
 | 16 | 9 | I2S parlante: DOUT | En uso (PCB, 16/10) | `ORBITA_PLAY_DOUT_GPIO`, `orbita_playback.h` | DIN del MAX98357A |
 | 1 | 39 | LED aro WS2812: DIN | Propuesto (01/11, RMT; antes GPIO17) | `ORBITA_LED_GPIO`, `orbita_led.h` | DIN del primer LED (330 Ω en serie; DO del último al aire). Es ADC1_CH0: se pierde ese canal analógico |
-| 17 / 18 / 21 | 10 / 11 / 23 | NFC | Propuesto (01/11) | — | Lector NFC. Interfaz sin definir: alcanzan para I2C o UART, no para SPI (4 líneas + IRQ/RST) |
+| 17 / 18 / 21 | 10 / 11 / 23 | NFC PN532: I2C SDA / SCL / IRQ | Propuesto (06/11, rama `integracion-nfc`; el banco de Juani se probó en 10/11/12) | `AUDIO_WS_NFC_*_GPIO`, `audio_ws_nfc.h` | SDA, SCL e IRQ (activa baja, pull-up interna) del PN532 V3 (selector 1 ON, 2 OFF). Pull-up de SDA/SCL: hoy las del módulo; en la PCB ponerlas. Falta pin para RSTPD_N (reset del lector): sin él, una falla solo se recupera cortando la alimentación |
 | 19 / 20 | 13 / 14 | USB-Serial-JTAG (DM / DP) | Reservado | — | Sin uso en `main` (en la rama `tests+afe`, comandos y datos de las pruebas UART) |
 | 43 / 44 | 37 / 36 | UART0 (TX / RX) | Reservado | — | Logs (`idf.py monitor`) |
 

@@ -70,6 +70,9 @@ Regla general: si la decisión depende de **la señal de audio en el momento** (
 > [!info] Prototipo (29/10, rama `prototipo-alfa-wakeword`)
 > `audio_wake` = compuerta cerrada (no se manda audio). `dev_wake_word` la abre con 3 s de pre-roll y el envío pasa a **continuo** durante toda la conversación (no hay `dev_fin_segmento`: el servidor corta las frases por silencio). Sale con `srv_fin_conversacion` (`conversation_end`) o con un timeout local de 60 s. Sin AEC, mientras suena el parlante no entra audio: `dev_wake_word_durante_playback` no puede ocurrir todavía.
 
+> [!info] Login NFC (06/11, rama `integracion-nfc`)
+> No es un estado de la FSM: es un dato aparte (el UID del médico logueado) que viaja en `hello`, `wake` y en un aviso `nfc` en cada cambio (`protocolo.md`). Toque = login; toque de la misma tarjeta = logout; otra tarjeta la reemplaza. Opcional: sin sesión la FSM corre igual y el servidor responde como asistente general (sin ERP).
+
 > [!info] Arquitectura real: escucha continua en background, no "un pedido = un envío"
 > El uso real no es "wake word dispara un pedido puntual aislado". El médico se loguea por NFC al arrancar el turno, y le pide a Órbita que **resuma y anote continuamente durante toda la consulta**. Preguntas puntuales tipo "Órbita, ¿qué hora es?" ocurren *en medio* de esa escucha continua. El loop ya dibujado (`server_send → server_back → audio_play → server_send`, vía `srv_sigue_conversacion`) cubre el caso base: cada segmento de audio pasa por send → back → play (play no hace nada si la respuesta no trae audio, como en un segmento normal de resumen) → send de nuevo.
 
