@@ -2,7 +2,7 @@
 
 Proyecto ESP-IDF independiente, preparado sobre `main` en `d1915e3` (06/11/2026). No está conectado al arranque, audio, red, sesión ni FSM de `firmware/`. El componente se entrega para que el integrador lo pruebe y luego lo incorpore explícitamente.
 
-Estado: Juani confirmó lectura de tarjeta con la versión anterior por polling. La versión IRQ compila con ESP-IDF 5.5.5; su prueba física sigue pendiente. Las pruebas host validan tramas, checksum, truncados y UID; no comprueban el cable IRQ ni el lector real.
+Estado: **lectura de tarjeta y funcionamiento con IRQ probados en placa y confirmados por Juani**. La versión IRQ compila con ESP-IDF 5.5.5. Las pruebas host validan tramas, checksum, truncados y UID.
 
 ## Cableado de este banco
 
@@ -38,7 +38,7 @@ Arranque esperado: `NFC IRQ: SDA=10 SCL=11 IRQ=12 activo bajo...`, luego `PN532 
 
 Un timeout IRQ o respuesta inválida registra el error y detiene el banco, sin reset automático ni fallback a polling. Revisar las líneas `pn532`; cortar/reponer alimentación de ambas placas antes de reintentar. No escribe tarjetas ni autentica usuarios.
 
-## Cómo funciona e integración pendiente
+## Funcionamiento y guía de integración
 
 - ISR de flanco descendente: solo entrega un semáforo mediante `xSemaphoreGiveFromISR` y cede CPU si corresponde. No usa I2C, logs, red ni memoria dinámica.
 - `wait_ready` espera IRQ baja con timeout de 1 s y comprueba el nivel antes de dormir y después de cada aviso. Esto cubre IRQ ya activa y notificaciones anteriores; no consulta periódicamente el byte RDY.
