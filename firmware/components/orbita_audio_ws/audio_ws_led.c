@@ -25,10 +25,11 @@ typedef struct {
 
 // TABLA DE COLORES (31/10, elegida con la simulacion "Aro LED de Orbita"; brillos subidos el 01/11).
 // Con la gamma 2,2 de orbita_led, el reposo al 12 % salia RGB (0,0,1) = apagado, y el ambar al 45 % casi no se veia a
-// traves de la pieza impresa. Valores al aro con TOPE 60 % y 200 mA: reposo (1,5,10); ambar pulso (66,26,1);
+// traves de la pieza impresa. Valores al aro con TOPE 60 % y 200 mA: reposo (1,2,4); ambar pulso (66,26,1);
 // escuchando hasta (8,29,57); hablando (19,21,53).
+// Reposo 06/11: 100 (1,5,10) -> 70 (1,2,4), mas tenue. Piso: debajo de ~60 el rojo cae a 0 y el celeste vira a verde.
 static const estilo_t ESTILOS[N_ESTADOS] = {
-    [REPOSO]     = { {0x64, 0xB5, 0xF6}, 100, ORBITA_LED_FIJO    },   // celeste, 39 % (era 12 %): tenue pero visible
+    [REPOSO]     = { {0x64, 0xB5, 0xF6},  70, ORBITA_LED_FIJO    },   // celeste, 27 %: tenue pero visible
     [ESCUCHANDO] = { {0x64, 0xB5, 0xF6}, 255, ORBITA_LED_RESPIRA },   // el mismo celeste, pleno
     [HABLANDO]   = { {0x9F, 0xA8, 0xFF}, 255, ORBITA_LED_FIJO    },   // lavanda
     [SIN_RED]    = { {0xFF, 0xA7, 0x26}, 255, ORBITA_LED_LATIDO  },   // ambar, pleno (era 45 %)
