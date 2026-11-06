@@ -1,0 +1,9 @@
+/build/
+/test-build/
+/sdkconfig
+/sdkconfig.old
+/dependencies.lock
+/managed_components/
+*.log
+*.obj
+*.exe
