@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import wave
 from datetime import datetime, timezone
@@ -19,8 +20,7 @@ from urllib.parse import urlencode
 
 import numpy as np
 import requests
-from scipy.ndimage import minimum_filter1d
-from scipy.signal import butter, filtfilt, sosfilt
+from scipy.signal import butter, sosfilt
 from websockets.asyncio.client import connect
 
 from ws_audio_speech import MAX_PLAY_SECONDS, SAMPLE_RATE
@@ -34,42 +34,77 @@ CONTEXT_CHARS = 50                 # previous_text: "funciona mejor con menos de
 MAX_UTTERANCE_S = 15               # red de seguridad: si el STT no cierra la frase, se usa el último parcial
 HISTORY_MESSAGES = 12
 # --- Audio de la respuesta antes de mandarlo al parlante (01/11: el parlante saturaba con la voz cruda) ---
-# Pasaaltos (el parlante chico no da graves pero gasta excursion en ellos) + limitador de picos, compensando
-# para que el nivel promedio (RMS, lo que se oye como volumen) quede igual que el original x PLAY_GAIN_DB.
-PLAY_GAIN_DB = 0.0                 # volumen promedio extra. +3 dB sin limitador saturaba
-PLAY_HPF_HZ = 200                  # corte del pasaaltos (2.o orden)
-PLAY_PEAK_CUT_DB = 6.0             # cuanto mas bajos quedan los picos que en el original (a igual volumen promedio)
+# StreamNormalizer: pasaaltos (el parlante chico no da graves pero gasta excursion en ellos) + ganancia fija
+# PLAY_GAIN_DB + limitador a techo fijo PLAY_STREAM_PEAK_DBFS. Pedazo por pedazo (TTS en streaming).
+PLAY_GAIN_DB = 0.0                 # volumen promedio extra. 06/11: 0, el volumen lo da el ampli (GAIN a GND, 12 dB)
+PLAY_HPF_HZ = 400                  # corte del pasaaltos (2.o orden). 06/11: 200 -> 400, el parlante no da graves
+                                   # y distorsiona por ellos; la voz se entiende igual (telefono: 300-3400 Hz)
+# --- Compuerta antes del STT (06/11): voces de fondo que no dejaban cerrar la frase ---
+GATE_BLOCK = SAMPLE_RATE // 50     # 20 ms
+GATE_HOLD_BLOCKS = 15              # 300 ms abierta despues del ultimo bloque fuerte: no corta el final de las palabras
 PLAY_PEAK_DBFS = -1.0              # techo absoluto: nunca se pasa (no recorta digital)
+# TTS en streaming (06/11): no hay respuesta entera para medir el RMS, el limitador usa un techo fijo.
+# Ajustar mirando el log de cada respuesta ("pico de entrada", "% limitado").
+PLAY_STREAM_PEAK_DBFS = -6.0
+TTS_CHUNK_BYTES = 3200             # 100 ms de audio por pedazo leido del stream
 PLAY_HPF_SOS = butter(2, PLAY_HPF_HZ, btype='highpass', fs=SAMPLE_RATE, output='sos')
 LIMIT_BLOCK = SAMPLE_RATE // 200   # 5 ms: resolucion del limitador
 
 
-def _limit(x, ceiling):
-    """Baja la ganancia donde la envolvente pasa `ceiling`: bloques de 5 ms, con 1 bloque de anticipacion y
-    transiciones suaves (sin saltos que suenen a click)."""
-    n = len(x) // LIMIT_BLOCK * LIMIT_BLOCK
-    if n == 0:
-        return x
-    env = np.abs(x[:n]).reshape(-1, LIMIT_BLOCK).max(axis=1)
-    gain = np.minimum(1.0, ceiling / np.maximum(env, 1e-9))
-    gain = minimum_filter1d(gain, size=3)                         # cubre el bloque vecino (anticipacion)
-    gain = np.minimum(gain, filtfilt([0.3], [1, -0.7], gain))     # suavizado sin pasar el minimo
-    centers = np.arange(len(gain)) * LIMIT_BLOCK + LIMIT_BLOCK / 2
-    return x * np.interp(np.arange(len(x)), centers, gain)
+class StreamNormalizer:
+    """Audio del TTS antes del parlante, en pedazos (TTS en streaming: no se conoce el total).
+    - Pasaaltos con estado (sigue de un pedazo al otro).
+    - Ganancia fija (PLAY_GAIN_DB): no hay RMS de la respuesta entera para compensar.
+    - Limitador a techo fijo (PLAY_STREAM_PEAK_DBFS) en bloques de 5 ms, mirando 1 bloque adelante: la ganancia ya
+      bajo cuando llega el pico. Dentro de cada bloque la ganancia va en rampa (sin clicks); sube despacio (~15 ms).
+    Retiene 1 bloque (5 ms) para mirar adelante; flush() entrega el resto."""
 
+    def __init__(self):
+        self.zi = np.zeros((PLAY_HPF_SOS.shape[0], 2))
+        self.gain = 10 ** (PLAY_GAIN_DB / 20)
+        self.ceiling = 32767 * 10 ** (min(PLAY_STREAM_PEAK_DBFS, PLAY_PEAK_DBFS) / 20)
+        self.pend = np.zeros(0)       # filtrado, esperando el bloque siguiente
+        self.odd = b""                # byte suelto si un pedazo llego con largo impar
+        self.g_prev = 1.0             # ganancia al final del ultimo bloque entregado
+        self.t_prev = 1.0             # ganancia pedida por el ultimo bloque entregado
+        self.peak_in = self.limited = self.blocks = 0
 
-def normalize(pcm):
-    """Pasaaltos + limitador + compensacion al RMS original (x PLAY_GAIN_DB). PCM s16le mono."""
-    x = np.frombuffer(pcm, dtype="<i2").astype(np.float64)
-    if len(x) == 0 or not np.any(x):
-        return pcm
-    target_rms = np.sqrt(np.mean(x ** 2)) * 10 ** (PLAY_GAIN_DB / 20)
-    ceiling = min(np.abs(x).max() * 10 ** (-PLAY_PEAK_CUT_DB / 20), 32767 * 10 ** (PLAY_PEAK_DBFS / 20))
-    y = sosfilt(PLAY_HPF_SOS, x)
-    for _ in range(8):                 # limitar y volver a subir al RMS objetivo (converge en ~6 vueltas, ~30 ms)
-        y *= target_rms / max(np.sqrt(np.mean(y ** 2)), 1e-9)
-        y = _limit(y, ceiling)
-    return np.clip(np.round(y), -ceiling, ceiling).astype("<i2").tobytes()
+    def push(self, pcm):
+        data = self.odd + pcm
+        self.odd = data[len(data) - len(data) % 2:]
+        x = np.frombuffer(data[:len(data) - len(data) % 2], dtype="<i2").astype(np.float64)
+        if len(x):
+            self.peak_in = max(self.peak_in, np.abs(x).max())
+            y, self.zi = sosfilt(PLAY_HPF_SOS, x, zi=self.zi)
+            self.pend = np.concatenate([self.pend, y * self.gain])
+        return self._process(final=False)
+
+    def flush(self):
+        return self._process(final=True)
+
+    def _process(self, final):
+        B = LIMIT_BLOCK
+        nb = -(-len(self.pend) // B) if final else len(self.pend) // B
+        n_out = nb if final else max(nb - 1, 0)
+        if n_out == 0:
+            return b""
+        x = np.concatenate([self.pend, np.zeros(nb * B - len(self.pend))]) if final else self.pend[:nb * B]
+        env = np.abs(x.reshape(-1, B)).max(axis=1)
+        target = np.minimum(1.0, self.ceiling / np.maximum(env, 1e-9))
+        partes = []
+        for i in range(n_out):
+            pedido = min(self.t_prev, target[i], target[i + 1] if i + 1 < nb else 1.0)
+            g = min(pedido, 0.7 * self.g_prev + 0.3 * pedido)       # baja ya, sube despacio
+            partes.append(x[i * B:(i + 1) * B] * (self.g_prev + (g - self.g_prev) * np.arange(1, B + 1) / B))
+            self.limited += g < 0.999
+            self.blocks += 1
+            self.g_prev, self.t_prev = g, target[i]
+        y = np.concatenate(partes)
+        if final:
+            y, self.pend = y[:len(self.pend)], np.zeros(0)
+        else:
+            self.pend = self.pend[n_out * B:]
+        return np.clip(np.round(y), -self.ceiling, self.ceiling).astype("<i2").tobytes()
 
 
 def _key(cfg, name):
@@ -86,11 +121,15 @@ def _check(response, who):
 class ScribeRealtime:
     """STT en vivo de ElevenLabs. `open()` crea una sesión (un WebSocket) por turno."""
 
-    def __init__(self, key, model, vad_silence_s):
+    def __init__(self, key, model, vad_silence_s, vad_threshold=None):
         if not 0.192 <= vad_silence_s <= 3.0:
             raise ValueError("STT_VAD_SILENCE_S tiene que estar entre 0.192 y 3.0 s (límite de ElevenLabs)")
         params = [("model_id", model), ("audio_format", f"pcm_{SAMPLE_RATE}"), ("language_code", "es"),
                   ("commit_strategy", "vad"), ("vad_silence_threshold_secs", vad_silence_s)]
+        if vad_threshold is not None:
+            if not 0.1 <= vad_threshold <= 0.9:
+                raise ValueError("STT_VAD_THRESHOLD tiene que estar entre 0.1 y 0.9 (límite de ElevenLabs)")
+            params.append(("vad_threshold", vad_threshold))
         self.url = f"{STT_URL}?{urlencode(params)}"
         self.headers = {"xi-api-key": key}
         self.name = model
@@ -176,6 +215,20 @@ class ElevenLabsTTS:
                                   json={"text": text, "model_id": self.model}, timeout=30)
         pcm = _check(response, "ElevenLabs TTS").content
         return pcm[:len(pcm) - len(pcm) % 2]
+
+    def stream(self, text, stop):
+        """Igual que speak(), pero en pedazos a medida que ElevenLabs los genera (endpoint /stream).
+        Bloqueante: se corre en un thread. `stop` (threading.Event) corta la descarga."""
+        with self.http.post(f"{self.BASE}/text-to-speech/{self.voice_id}/stream",
+                            params={"output_format": "pcm_16000"},
+                            json={"text": text, "model_id": self.model}, timeout=30, stream=True) as response:
+            if response.status_code != 200:
+                _check(response, "ElevenLabs TTS")
+            for chunk in response.iter_content(chunk_size=TTS_CHUNK_BYTES):
+                if stop.is_set():
+                    return
+                if chunk:
+                    yield chunk
 
 
 class History:
@@ -274,8 +327,12 @@ class CloudServices:
         key = _key(cfg, "ELEVENLABS_API_KEY")
         if not key:
             raise ValueError("falta ELEVENLABS_API_KEY en tools/cloud_config.py")
+        vad_threshold = getattr(cfg, "STT_VAD_THRESHOLD", None)
         self.stt = ScribeRealtime(key, getattr(cfg, "STT_MODEL", "scribe_v2_realtime"),
-                                  float(getattr(cfg, "STT_VAD_SILENCE_S", 0.8)))
+                                  float(getattr(cfg, "STT_VAD_SILENCE_S", 0.8)),
+                                  None if vad_threshold is None else float(vad_threshold))
+        gate = getattr(cfg, "STT_GATE_DBFS", None)
+        self.gate_dbfs = None if gate is None else float(gate)
         self.stt_context = _context(getattr(cfg, "STT_CONTEXT", ""))
         self.tts = ElevenLabsTTS(key, cfg.ELEVENLABS_VOICE_ID, cfg.ELEVENLABS_TTS_MODEL)
         self.voice_name = cfg.ELEVENLABS_VOICE_ID
@@ -326,6 +383,30 @@ class Conversation:
         self.last_activity = self.clock()
         self.turns = 0
         self.task = None
+        self.gate_hold = 0            # bloques que la compuerta sigue abierta
+        self.gate_n = self.gate_cerrados = 0
+        self.gate_max_db = -120.0     # nivel del bloque mas fuerte del turno (para afinar STT_GATE_DBFS)
+
+    def _gate(self, pcm):
+        """Compuerta por nivel (STT_GATE_DBFS): los bloques de 20 ms mas bajos que el umbral van al STT como
+        silencio. Las voces de fondo (mas lejos, mas bajas) dejan de mantener abierta la frase."""
+        umbral = self.services.gate_dbfs
+        if umbral is None:
+            return pcm
+        x = np.frombuffer(pcm, dtype="<i2").copy()
+        for i in range(0, len(x), GATE_BLOCK):
+            b = x[i:i + GATE_BLOCK].astype(np.float64)
+            db = 10 * np.log10(np.mean(b ** 2) + 1e-9) - 90.31        # dBFS (0 dB = seno a fondo de escala x raiz 2)
+            self.gate_n += 1
+            self.gate_max_db = max(self.gate_max_db, db)
+            if db >= umbral:
+                self.gate_hold = GATE_HOLD_BLOCKS
+            elif self.gate_hold > 0:
+                self.gate_hold -= 1
+            else:
+                x[i:i + GATE_BLOCK] = 0
+                self.gate_cerrados += 1
+        return x.tobytes()
 
     def feed(self, pcm):
         start, self.received = self.received, self.received + len(pcm) // 2
@@ -338,6 +419,7 @@ class Conversation:
             if self.clock() < self.stt_retry_at:
                 return
             self.stt = self.services.stt.open(self.previous_text, self._on_stt)
+        pcm = self._gate(pcm)
         self.stt.send(pcm)
         self.pcm += pcm
         if self.t_speech is not None and self.clock() - self.t_speech > MAX_UTTERANCE_S and self.partial:
@@ -371,6 +453,11 @@ class Conversation:
         pcm = bytes(self.pcm)
         self.partial, self.t_speech, self.pcm = "", None, bytearray()
         self.last_activity = self.clock()
+        if self.services.gate_dbfs is not None and self.gate_n:
+            LOG.info("Compuerta %.0f dBFS: %.0f %% del audio en silencio, bloque mas fuerte %.0f dBFS",
+                     self.services.gate_dbfs, 100 * self.gate_cerrados / self.gate_n, self.gate_max_db)
+            self.gate_n = self.gate_cerrados = 0
+            self.gate_max_db = -120.0
         if not question:
             LOG.info("STT sin pregunta (%r): sigo escuchando", text)
             return
@@ -388,20 +475,26 @@ class Conversation:
                 await stt.close()     # libera la sesión: no se paga mientras piensa ni mientras suena
             answer, tokens_in, tokens_out = await asyncio.to_thread(self.services.llm.reply, question)
             t_llm = self.clock()
-            speech = (await asyncio.to_thread(self.services.tts.speak, answer))[:MAX_PLAY_SECONDS * SAMPLE_RATE * 2]
-            speech = normalize(speech)
-            t_tts = self.clock()
-            await self.send_pcm(speech)
+            # TTS en streaming: cada pedazo sale a la ESP apenas llega (la ESP junta 400 ms antes de sonar).
+            pedazos, norm, t_first = [], StreamNormalizer(), []
+            await self.send_pcm(self._tts_stream(answer, norm, pedazos, t_first))
             t_sent = self.clock()
+            if not t_first:
+                raise RuntimeError("el TTS no devolvió audio")
+            speech = b"".join(pedazos)
             self.previous_text = _context(answer)    # contexto de la próxima sesión: "¿y la dosis?" se entiende
             record.update(answer=answer, tokens_in=tokens_in, tokens_out=tokens_out,
                           reply_seconds=round(len(speech) / (2 * SAMPLE_RATE), 2),
                           stt_s=round(t_stt - t_end, 3), llm_s=round(t_llm - t_stt, 3),
-                          tts_s=round(t_tts - t_llm, 3), send_s=round(t_sent - t_tts, 3),
-                          total_s=round(t_sent - t_end, 3))
-            LOG.info("Turno %d: %r -> %r | STT %.2f s, LLM %.2f s, TTS %.2f s, envío %.2f s | fin de habla -> PLAY: "
-                     "%.2f s (el STT incluye el silencio que espera para cerrar)", self.turns + 1, question, answer,
-                     record["stt_s"], record["llm_s"], record["tts_s"], record["send_s"], record["total_s"])
+                          tts_s=round(t_first[0] - t_llm, 3), send_s=round(t_sent - t_first[0], 3),
+                          total_s=round(t_first[0] - t_end, 3),
+                          tts_peak_in_dbfs=round(20 * np.log10(max(norm.peak_in, 1) / 32768), 1),
+                          tts_limited_pct=round(100 * norm.limited / max(norm.blocks, 1), 1))
+            LOG.info("Turno %d: %r -> %r | STT %.2f s, LLM %.2f s, TTS al 1.er audio %.2f s, envío %.2f s | "
+                     "fin de habla -> 1.er PLAY: %.2f s (el STT incluye el silencio que espera para cerrar) | "
+                     "TTS pico de entrada %.1f dBFS, %.0f %% limitado a %.0f dBFS", self.turns + 1, question, answer,
+                     record["stt_s"], record["llm_s"], record["tts_s"], record["send_s"], record["total_s"],
+                     record["tts_peak_in_dbfs"], record["tts_limited_pct"], PLAY_STREAM_PEAK_DBFS)
             if self.services.save_audio:
                 await asyncio.to_thread(self._save_wavs, pcm, speech)
             # Esperar el fin de la reproducción para no tomar el propio parlante como pregunta nueva.
@@ -420,6 +513,44 @@ class Conversation:
             self.state = "listening"
             self.last_activity = self.clock()
             await asyncio.to_thread(self._log, record)
+
+    async def _tts_stream(self, text, norm, pedazos, t_first):
+        """Generador async: baja el TTS en un thread (requests bloquea) y entrega PCM normalizado de a pedazos.
+        Guarda lo entregado en `pedazos` y el instante del primero en `t_first`. Corta en MAX_PLAY_SECONDS."""
+        loop = asyncio.get_running_loop()
+        cola, stop = asyncio.Queue(), threading.Event()
+
+        def bajar():
+            try:
+                for chunk in self.services.tts.stream(text, stop):
+                    loop.call_soon_threadsafe(cola.put_nowait, chunk)
+            except Exception as error:
+                loop.call_soon_threadsafe(cola.put_nowait, error)
+            finally:
+                loop.call_soon_threadsafe(cola.put_nowait, None)
+
+        hilo = loop.run_in_executor(None, bajar)
+        quedan = MAX_PLAY_SECONDS * SAMPLE_RATE * 2
+        try:
+            while quedan > 0:
+                item = await cola.get()
+                if isinstance(item, Exception):
+                    raise item
+                out = norm.flush() if item is None else norm.push(item)
+                out = out[:quedan]
+                if out:
+                    if not t_first:
+                        t_first.append(self.clock())
+                    pedazos.append(out)
+                    quedan -= len(out)
+                    yield out
+                if item is None:
+                    break
+            else:
+                LOG.warning("Respuesta de más de %d s: se corta", MAX_PLAY_SECONDS)
+        finally:
+            stop.set()                # si se cortó antes (error, límite), que el thread deje de bajar
+            await hilo
 
     def clean_question(self, question):
         """Gancho para subclases: ajustar la pregunta antes del LLM ("" = no hay pregunta)."""

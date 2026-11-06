@@ -32,7 +32,7 @@ from websockets.exceptions import ConnectionClosed
 from ws_audio_cloud import CloudServices, Conversation
 from ws_audio_protocol import HEADER
 from ws_audio_session import Session
-from ws_audio_speech import SAMPLE_RATE, play_frames
+from ws_audio_speech import SAMPLE_RATE, play_begin, play_data, play_end
 
 LOG = logging.getLogger("servidor_wakeword")
 HERE = Path(__file__).resolve().parent
@@ -132,15 +132,31 @@ async def handle(connection, services, activaciones):
         async with send_lock:
             await connection.send(json.dumps(obj, separators=(",", ":")))
 
-    async def send_pcm(pcm):
+    async def send_pcm(pedazos):
+        """Manda una respuesta que llega en pedazos (async iterable de PCM): `play` con el primero, cada pedazo
+        apenas llega, `play_end` al final. Si el TTS falla a mitad, cierra con lo que se mandó."""
         nonlocal active_play
         identity = secrets.randbits(64)
-        active_play = f"{identity:016x}"
-        play_done.clear()
-        for frame in play_frames(identity, pcm):
+        seq, abierto = 0, False
+
+        async def mandar(frame):
             async with send_lock:
                 await connection.send(json.dumps(frame) if isinstance(frame, dict) else frame)
-            await asyncio.sleep(0)
+
+        try:
+            async for pcm in pedazos:
+                if not abierto:
+                    active_play = f"{identity:016x}"
+                    play_done.clear()
+                    await mandar(play_begin(identity))
+                    abierto = True
+                for frame in play_data(identity, seq, pcm):
+                    await mandar(frame)
+                    seq += 1
+                await asyncio.sleep(0)
+        finally:
+            if abierto:
+                await mandar(play_end(identity))
 
     async def finish(reason, notify=True):
         nonlocal conversation

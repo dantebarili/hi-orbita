@@ -9,11 +9,14 @@ ELEVENLABS_API_KEY = ""   # elevenlabs.io -> API Keys (STT y voz)
 # --- STT en vivo (ElevenLabs) ---
 STT_MODEL = "scribe_v2_realtime"
 STT_VAD_SILENCE_S = 0.8             # silencio que cierra la frase (ElevenLabs acepta 0.192 a 3.0). Si corta a mitad, subir
+STT_VAD_THRESHOLD = 0.6             # probabilidad de voz del VAD de ElevenLabs (0.1-0.9, por defecto 0.4). Mas alto = menos sensible
+STT_GATE_DBFS = -45.0               # compuerta: bloques de 20 ms mas bajos que esto van al STT como silencio (voces de fondo).
+                                    # Voz cerca: -21 a -37 dBFS; fondo: -49 a -65 (activaciones del 01 y 06/11). None = sin compuerta
 STT_CONTEXT = "Charla con el asistente Orbita"   # previous_text de la 1.a sesion (< 50 caracteres); despues, la ultima respuesta
 
 # --- Voz (ElevenLabs) ---
-ELEVENLABS_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
-ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5"
+ELEVENLABS_VOICE_ID = "oq8K6jJPiW08295EbH2y"
+ELEVENLABS_TTS_MODEL = "eleven_v4_turbo"
 
 # --- Que modelo conversa ---
 LLM = "gemini"                      # "gemini" (gratis) o "claude" (pago)
