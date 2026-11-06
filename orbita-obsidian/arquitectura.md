@@ -244,7 +244,7 @@ Butterworth de **2.º orden a 70 Hz**, un biquad por canal, en `tarea_captura` s
 - Lo ve todo lo que sale de la captura: AFE, wake word (su frontend arranca en 125 Hz: efecto mínimo, confirmar), socket y tomas UART del AGC/AEC.
 
 ### 6.3 Latencia de un turno (de que dejas de hablar a que suena la respuesta)
-Medida el 21/10 con ElevenLabs (STT Scribe, TTS `eleven_flash_v2_5`) y Gemini en la copia de laboratorio: **mediana de 15 turnos con `gemini-3.5-flash-lite`**; el servidor la registra por etapa (`stt_s`, `llm_s`, `tts_s`, `send_s`, `total_s`) en `tools/prueba_websocket/cloud_*.jsonl`. `total_s` arranca cuando el detector cierra la frase, o sea que **no incluye** la espera de silencio ni lo que pasa en el ESP.
+Medida el 21/10 con ElevenLabs (STT Scribe, TTS `eleven_flash_v2_5`) y Gemini en la copia de laboratorio: **mediana de 15 turnos con `gemini-3.5-flash-lite`**; el servidor la registra por etapa (`stt_s`, `llm_s`, `tts_s`, `send_s`, `total_s`) en `tools/prueba_websocket/cloud_*.jsonl`. `total_s` arranca cuando el detector cierra la frase, o sea que **no incluye** la espera de silencio ni lo que pasa en el ESP. Desde el 06/11 el TTS va en streaming y `tts_s`/`total_s` miden hasta el primer audio (`servidor.md`).
 
 | # | Etapa | Dónde | Tiempo | Notas |
 |---|---|---|---|---|
