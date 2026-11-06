@@ -1,0 +1,3 @@
+# datos.js lleva audio embebido (grabaciones de la placa / clips): no se versiona.
+# Se regenera con: python presentacion/gen/gen_datos.py (necesita orbita-dataset, pymicro_features y tensorflow)
+*/assets/datos.js

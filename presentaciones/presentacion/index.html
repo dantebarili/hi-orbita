@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beamforming y wake word</title>
+<link rel="stylesheet" href="assets/fonts/fonts.css">
+<link rel="stylesheet" href="assets/deck.css">
+<script>
+window.MathJax = {
+  tex: { inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]],
+         macros: { nv: ["{\\color[RGB]{42,74,133}{#1}}", 1], tc: ["{\\color[RGB]{181,85,47}{#1}}", 1] } },
+  svg: { fontCache: "global" },
+  startup: { pageReady: () => MathJax.startup.defaultPageReady().then(() => { document.body.classList.add("mj-listo"); if (window.ajustarFormulas) window.ajustarFormulas(); }) }
+};
+</script>
+<script defer src="assets/mathjax/tex-svg.js"></script>
+<script defer src="assets/datos.js"></script>
+<script defer src="assets/deck.js"></script>
+</head>
+<body>
+<div id="stage">
+
+<!-- ═════════════ 1. PORTADA ═════════════ -->
+<section class="slide" id="portada">
+  <div class="card">
+    <div class="vl" style="left:70px"></div><div class="vl" style="left:1220px"></div><div class="vl" style="right:70px"></div>
+    <div class="hl" style="top:130px"></div>
+    <p class="kick" style="position:absolute;left:110px;top:70px">Análisis de Sistemas y Señales Digitales · Trabajo de investigación</p>
+    <p class="sub" style="position:absolute;left:1262px;top:180px;width:480px;text-align:right">Para la implementación en hardware de un asistente de IA para odontólogos</p>
+    <img src="assets/ilus/array.svg" alt="Dos micrófonos en endfire con frentes de onda" style="position:absolute;left:120px;top:210px;width:470px">
+    <img src="assets/ilus/placa_sola.svg" alt="Placa con ESP32-S3" style="position:absolute;left:660px;top:165px;width:490px">
+    <div style="position:absolute;left:110px;bottom:120px;width:1080px">
+      <h1 class="tit-portada"><span class="nro">I.</span> Beamforming de array endfire de micrófonos MEMS</h1>
+      <h1 class="tit-portada" style="margin-top:28px"><span class="nro">II.</span> Detección de palabra de activación en microcontrolador</h1>
+    </div>
+    <p class="muted" style="position:absolute;right:110px;bottom:120px;text-align:right;font-size:26px;line-height:1.5">Dante Barili<br>Juan Förster<br>Mauricio Garavani<br>Bautista Mijalovich<br><span style="color:var(--navy)">Noviembre 2026</span></p>
+    <img class="deco" src="assets/ilus/deco_mic.svg" alt="" style="right:120px;bottom:430px;width:90px">
+    <img class="deco" src="assets/ilus/deco_cap.svg" alt="" style="right:220px;bottom:400px;width:60px">
+  </div>
+</section>
+
+<!-- ═════════════ 2. CONTEXTO ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Órbita en el consultorio</h2><span class="kick">Contexto</span></header>
+    <div class="cuerpo">
+      <div class="cols" style="grid-template-columns:560px 1fr;align-items:center">
+        <div class="pila" style="align-items:center;gap:4px"><canvas id="disp" class="disp3d" width="540" height="400" style="cursor:grab;touch-action:none" aria-label="Dispositivo Hi Órbita en 3D: arrastrar para girar"></canvas><p class="nota">Arrastrá para girarlo</p></div>
+        <div class="pila">
+          <p class="lead">Dispositivo de escritorio sin pantalla: escucha la consulta, reconoce su nombre y manda el audio a una IA que completa la historia clínica.</p>
+          <p>Este trabajo cubre los dos bloques de <b>señales</b> que corren en el chip.</p>
+        </div>
+      </div>
+      <svg class="diag" viewBox="0 0 1700 230" style="margin-top:36px" aria-label="Cadena de procesamiento de Órbita">
+        <defs><marker id="fl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1c2f57"/></marker></defs>
+        <g class="caja"><rect x="0" y="70" width="250" height="96" rx="18"/><text x="125" y="112">2 mics MEMS</text><text class="s" x="125" y="142">I2S · 16 kHz · L y R</text></g>
+        <g class="caja nv"><rect x="370" y="10" width="330" height="96" rx="18"/><text x="535" y="52">Beamformer</text><text class="s" x="535" y="82">hipercardioide · Parte I</text></g>
+        <g class="caja nv"><rect x="370" y="130" width="330" height="96" rx="18"/><text x="535" y="172">Wake word</text><text class="s" x="535" y="202">“Órbita” · Parte II</text></g>
+        <g class="caja"><rect x="830" y="10" width="330" height="96" rx="18"/><text x="995" y="52">WebSocket</text><text class="s" x="995" y="82">voz filtrada al servidor</text></g>
+        <g class="caja"><rect x="830" y="130" width="330" height="96" rx="18"/><text x="995" y="172">Abre la conversación</text><text class="s" x="995" y="202">evento de la máquina de estados</text></g>
+        <g class="caja"><rect x="1290" y="70" width="410" height="96" rx="18"/><text x="1495" y="112">Backend de IA</text><text class="s" x="1495" y="142">historia clínica, agenda</text></g>
+        <g class="cable"><path d="M250,118 H310 V58 H366" marker-end="url(#fl)"/><path d="M310,118 V178 H366" marker-end="url(#fl)"/>
+          <path d="M700,58 H826" marker-end="url(#fl)"/><path d="M700,178 H826" marker-end="url(#fl)"/>
+          <path d="M1160,58 H1225 V118 H1286" marker-end="url(#fl)"/><path d="M1160,178 H1225 V118" /></g>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 3. SECCIÓN BEAMFORMING ═════════════ -->
+<section class="slide sec">
+  <div class="card">
+    <div class="hl" style="top:540px"></div>
+    <img src="assets/ilus/array.svg" alt="Dos micrófonos en línea con frentes de onda" style="position:absolute;left:60px;top:250px;width:620px">
+    <p class="nro-sec" style="position:absolute;left:760px;top:215px">01</p>
+    <h2 class="tit-sec" style="position:absolute;left:760px;top:355px">Beamforming</h2>
+    <p class="sub" style="position:absolute;left:1050px;top:640px;width:760px">Cómo dos micrófonos separados 21,4 mm pueden preferir la voz que llega de frente: geometría, algoritmo, la demostración del hipercardioide y su ecualización.</p>
+    <img class="deco" src="assets/ilus/deco_mic.svg" alt="" style="left:110px;bottom:70px;width:84px">
+    <img class="deco" src="assets/ilus/deco_chip.svg" alt="" style="left:200px;bottom:60px;width:64px">
+  </div>
+</section>
+
+<!-- ═════════════ 4. OBJETIVO ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Objetivo: directividad en un array chico</h2><span class="kick">Beamforming</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:1fr 520px;gap:110px">
+      <div class="pila">
+        <p class="lead">Captar la voz del odontólogo, que llega de frente, y no el ruido de la sala, que llega de todos lados.</p>
+        <p><b>Factor de directividad:</b> lo que capta de frente contra el promedio de todas las direcciones.</p>
+        <div class="eq">\[ \mathrm{DF} = \frac{|H(0)|^2}{\frac{1}{4\pi}\oint |H(\theta,\varphi)|^2\, d\Omega} = \frac{|H(0)|^2}{\frac12\int_0^{\pi}|H(\theta)|^2\sin\theta\, d\theta} \]</div>
+        <p>Los mics están mucho más juntos que la longitud de onda \(\lambda = c/f\) (lo que avanza el sonido en un período): les llega casi igual.</p>
+        <div class="eq">\[ \lambda_{500\,\mathrm{Hz}} = 69\ \mathrm{cm}, \quad \lambda_{3\,\mathrm{kHz}} = 11\ \mathrm{cm} \;\gg\; \nv{d = 21{,}4\ \mathrm{mm}} \;\Rightarrow\; \omega\tau_0 \ll 1 \]</div>
+      </div>
+      <div class="pila" style="gap:26px">
+        <div class="tarjeta"><p class="big">6 dB</p><p>lo máximo que se puede lograr con 2 micrófonos: el <b>hipercardioide</b></p></div>
+        <div class="fila3">
+          <div class="mini"><p class="mnum">0 dB</p><p>voz de frente</p></div>
+          <div class="mini"><p class="mnum">−12 dB</p><p>costados</p></div>
+          <div class="mini"><p class="mnum">−6 dB</p><p>ruido de sala</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 5. SUMA CONTRA RESTA ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Delay-and-sum contra delay-and-subtract</h2><span class="kick">Beamforming</span></header>
+    <div class="cuerpo">
+      <p>En los dos casos al mic 2 se le agrega un retardo \(T\). El retardo total entre las dos señales es \(\Delta = T + \tau_0\cos\theta\), con \(\tau_0 = d/c\).</p>
+      <div class="cols" style="grid-template-columns:1fr 1fr;gap:80px;margin-top:34px">
+        <div class="pila">
+          <h3>Suma (delay-and-sum)</h3>
+          <div class="eq">\[ y(t) = \tfrac12\big[x_1(t) + x_2(t-T)\big] \]</div>
+          <div class="eq">\[ \boxed{|H_+| = \left|\cos\tfrac{\omega\Delta}{2}\right|} \]</div>
+          <p>Con mics tan juntos \(\omega\Delta \ll 1\) y el coseno vale ≈ 1 para todo \(\theta\): <b>la suma no distingue direcciones</b>.</p>
+        </div>
+        <div class="pila">
+          <h3>Resta (delay-and-subtract)</h3>
+          <div class="eq">\[ y(t) = x_1(t) - x_2(t-T) \]</div>
+          <div class="eq">\[ \boxed{|H_-| = 2\left|\sin\tfrac{\omega\Delta}{2}\right|} \qquad \Delta = 0 \iff \cos\theta_{\mathrm{nulo}} = -\tfrac{T}{\tau_0} \]</div>
+          <p>Lo común se cancela: \(|H_-| \approx \omega|\Delta|\), que <b>depende de \(\theta\)</b>.</p>
+        </div>
+      </div>
+      <table class="tabla" style="margin-top:12px">
+        <tr><th>Ganancia contra ruido difuso, d = 21 mm (simulación)</th><th>500 Hz</th><th>1 kHz</th><th>4 kHz</th></tr>
+        <tr><td>Delay-and-sum</td><td>0,0 dB</td><td>0,1 dB</td><td>0,9 dB</td></tr>
+        <tr><td>Cardioide (resta, T = τ₀)</td><td>4,7 dB</td><td>4,7 dB</td><td>3,0 dB</td></tr>
+        <tr class="dest"><td>Hipercardioide (elegido)</td><td>6,0 dB</td><td>6,0 dB</td><td>5,1 dB</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 7. GEOMETRÍA ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Geometría: broadside contra endfire</h2><span class="kick">Beamforming</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:1000px 1fr;gap:60px;align-items:center">
+      <svg class="diag" viewBox="80 15 750 515" aria-label="Recorrido del sonido hasta cada micrófono en broadside y en endfire">
+        <defs><marker id="fl2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1c2f57"/></marker><marker id="fl2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="16" markerHeight="16" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#b5552f"/></marker></defs>
+        <text class="t" x="215" y="40">Broadside</text><text class="t" x="665" y="40">Endfire</text>
+        <!-- broadside: el sonido llega de frente al eje, los dos recorridos miden lo mismo -->
+        <text class="s" x="215" y="84">hablante</text>
+        <g class="cable"><path d="M160,110 V280" marker-end="url(#fl2)"/><path d="M270,110 V280" marker-end="url(#fl2)"/></g>
+        <line x1="90" y1="300" x2="340" y2="300" class="eje"/>
+        <circle cx="160" cy="300" r="16" class="mic"/><circle cx="270" cy="300" r="16" class="mic"/>
+        <text class="s" x="215" y="360">mismo recorrido</text>
+        <text class="s" x="215" y="392" style="fill:#b5552f">Δx = 0: llegan a la vez</text>
+        <!-- endfire: rayos paralelos a θ = 35° del eje; el que va al mic 2 recorre d·cosθ de más -->
+        <line x1="665" y1="150" x2="665" y2="460" class="eje"/>
+        <g class="cable"><path d="M567,111 L655,236" marker-end="url(#fl2)"/><path d="M516,147 L613,286"/></g>
+        <path d="M613,286 L655,346" class="cota" style="stroke-width:4.5" marker-end="url(#fl2a)"/>
+        <path d="M665,250 L613,286" stroke="#8a8a8a" stroke-width="2" stroke-dasharray="6 5" fill="none"/>
+        <path d="M665,170 A80,80 0 0,0 619,184" fill="none" stroke="#1c2f57" stroke-width="2"/>
+        <text class="t" x="648" y="152" style="font-size:30px">θ</text>
+        <text class="s" x="600" y="335" style="text-anchor:end;fill:#b5552f">d cos θ</text>
+        <text class="s" x="600" y="362" style="text-anchor:end;fill:#b5552f">recorrido extra</text>
+        <path d="M700,250 L700,360" class="cota"/><text class="s" x="712" y="312" style="text-anchor:start;fill:#b5552f">d</text>
+        <circle cx="665" cy="250" r="16" class="mic"/><circle cx="665" cy="360" r="16" class="mic"/>
+        <text class="s" x="690" y="236" style="text-anchor:start">mic 1</text><text class="s" x="545" y="96">hablante</text><text class="s" x="690" y="398" style="text-anchor:start">mic 2</text>
+        <text class="s" x="665" y="510">el eje apunta al hablante</text>
+      </svg>
+      <div class="pila grande-txt" style="gap:30px">
+        <p>Al segundo mic el sonido le llega más tarde:</p>
+        <div class="eq">\[ \Delta x = d\cos\theta \;\Rightarrow\; \Delta t = \tau_0\cos\theta \]</div>
+        <p>Con \(\tau_0 = d/c\), la separación \(d\) da un retardo de <b>exactamente una muestra</b>: un \(z^{-1}\), sin interpolar.</p>
+        <div class="eq">\[ \nv{d = \frac{c}{f_s} = \frac{343}{16\,000} = 21{,}4\ \mathrm{mm}} \]</div>
+        <ul class="lista">
+          <li><b>Broadside:</b> llega a los dos a la vez; la resta lo cancela.</li>
+          <li><b>Endfire:</b> \(+\tau_0\) de frente, \(-\tau_0\) de atrás; eso usa la resta.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 8. INTERACTIVO: COMPARACIÓN ═════════════ -->
+<section class="slide" data-ia="comparacion">
+  <div class="card">
+    <header class="hd"><h2>Suma contra resta, en vivo</h2><span class="kick">Beamforming · interactivo</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:760px 1fr;gap:70px">
+      <canvas id="cmp-polar" width="760" height="760" style="width:760px;height:760px;margin-top:-30px"></canvas>
+      <div class="pila ctrls">
+        <div class="ctrl"><label>Frecuencia <output id="cmp-f-o"></output></label><input id="cmp-f" type="range" min="0" max="1" step="0.001" value="0.42"></div>
+        <div class="ctrl"><label>Separación d <output id="cmp-d-o"></output></label><input id="cmp-d" type="range" min="10" max="120" step="0.5" value="21.4"></div>
+        <div class="ley" id="cmp-ley"></div>
+        <table class="tabla chica" id="cmp-tab"></table>
+        <p class="nota">Curvas normalizadas a su frente; radio de 0 a −30 dB.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 9. DOS CARDIOIDES (implementación + desarrollo) ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Implementación con dos cardioides</h2><span class="kick">Beamforming</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:900px 1fr;gap:70px;align-items:center">
+      <div class="pila" style="gap:30px">
+        <svg class="diag" viewBox="0 0 900 420" aria-label="Diagrama de bloques: dos cardioides con retardo de una muestra y peso beta">
+          <defs><marker id="fl3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1c2f57"/></marker></defs>
+          <text class="t" x="34" y="92" style="font-style:italic">x<tspan baseline-shift="sub" style="font-size:70%;font-style:normal">1</tspan></text>
+          <text class="t" x="34" y="352" style="font-style:italic">x<tspan baseline-shift="sub" style="font-size:70%;font-style:normal">2</tspan></text>
+          <g class="cable">
+            <path d="M64,80 H436" marker-end="url(#fl3)"/>
+            <path d="M64,340 H526" marker-end="url(#fl3)"/>
+            <path d="M140,80 V160 H196" marker-end="url(#fl3)"/>
+            <path d="M140,340 V260 H196" marker-end="url(#fl3)"/>
+            <path d="M300,260 H470 V114" marker-end="url(#fl3)"/>
+            <path d="M300,160 H462 a8,8 0 0,1 16,0 H560 V306" marker-end="url(#fl3)"/>
+            <path d="M500,80 H800 V176" marker-end="url(#fl3)"/>
+            <path d="M590,340 H636" marker-end="url(#fl3)"/>
+            <path d="M730,340 H800 V244" marker-end="url(#fl3)"/>
+            <path d="M830,210 H888" marker-end="url(#fl3)"/>
+          </g>
+          <circle cx="140" cy="80" r="6" fill="#1c2f57"/><circle cx="140" cy="340" r="6" fill="#1c2f57"/>
+          <g class="caja"><rect x="200" y="132" width="100" height="56" rx="12"/><text x="250" y="170">z⁻¹</text></g>
+          <g class="caja"><rect x="200" y="232" width="100" height="56" rx="12"/><text x="250" y="270">z⁻¹</text></g>
+          <g class="caja"><circle cx="470" cy="80" r="30"/><text x="470" y="91">Σ</text></g>
+          <g class="caja"><circle cx="560" cy="340" r="30"/><text x="560" y="351">Σ</text></g>
+          <g class="caja nv"><rect x="640" y="312" width="90" height="56" rx="12"/><text x="685" y="350">× β</text></g>
+          <g class="caja"><circle cx="800" cy="210" r="30"/><text x="800" y="221">Σ</text></g>
+          <g class="signos">
+            <text class="s nvt" x="428" y="66">+</text><text class="s nvt" x="490" y="132">−</text>
+            <text class="s nvt" x="518" y="326">+</text><text class="s nvt" x="580" y="302">−</text>
+            <text class="s nvt" x="822" y="172">+</text><text class="s nvt" x="822" y="262">−</text>
+          </g>
+          <text class="s nvt" x="650" y="64">c<tspan baseline-shift="sub" style="font-size:70%">F</tspan> (mira adelante)</text>
+          <text class="s nvt" x="600" y="404">c<tspan baseline-shift="sub" style="font-size:70%">B</tspan> (mira atrás)</text>
+          <text class="t" x="870" y="192" style="font-style:italic">y</text>
+        </svg>
+        <div class="eq" style="font-size:42px">\[ \begin{aligned} c_F[n] &= x_1[n] - x_2[n-1] \\ c_B[n] &= x_2[n] - x_1[n-1] \\ \nv{y[n]} &\nv{= c_F[n] - \beta\, c_B[n]} \end{aligned} \]</div>
+      </div>
+      <div class="pasos grande">
+        <div class="paso"><span class="pn">1</span><div><p>En graves (\(\sin x \approx x\)) los cardioides son</p><div class="eq">\[ \begin{aligned} c_F &\propto \tfrac12(1+\cos\theta) \\ c_B &\propto \tfrac12(1-\cos\theta) \end{aligned} \]</div></div></div>
+        <div class="paso"><span class="pn">2</span><div><p>La resta es una mezcla de omni y figura-8:</p><div class="eq">\[ \begin{aligned} y \propto B(\theta) &= \alpha + (1-\alpha)\cos\theta \\ \alpha &= \tfrac{1-\beta}{2} \end{aligned} \]</div></div></div>
+        <div class="paso"><span class="pn">3</span><div><p>Con \(\beta = \tfrac12\) sale el hipercardioide:</p><div class="eq">\[ \nv{B(\theta) = \tfrac14 + \tfrac34\cos\theta}, \quad \theta_{\mathrm{nulo}} = 109{,}5^\circ \]</div></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 11. INTERACTIVO: DOS CARDIOIDES ═════════════ -->
+<section class="slide" data-ia="hiper">
+  <div class="card">
+    <header class="hd"><h2>De dos cardioides al hipercardioide</h2><span class="kick">Beamforming · interactivo</span></header>
+    <div class="cuerpo">
+      <div class="ecuacion-polar" style="height:530px;margin-top:-24px">
+        <div class="pz"><canvas id="h-cf" width="380" height="380"></canvas><p class="pt" style="color:#2f4f86">c<sub>F</sub></p></div>
+        <p class="op">−</p>
+        <div class="pz"><canvas id="h-cb" width="380" height="380"></canvas><p class="pt" style="color:#b5552f" id="h-cb-t">β·c<sub>B</sub></p></div>
+        <p class="op">=</p>
+        <div class="pz"><canvas id="h-y" width="470" height="470"></canvas><p class="pt" style="color:#1c2f57" id="h-y-t">y</p></div>
+      </div>
+      <div class="barra-ctrl" style="align-items:flex-start;justify-content:space-between">
+        <div class="pila" style="gap:14px;width:560px">
+          <div class="ctrl"><label>Peso β <output id="h-b-o"></output></label><input id="h-b" type="range" min="0" max="1" step="0.01" value="0.5"></div>
+          <div class="presets" id="h-pre"><button data-b="0">Cardioide</button><button data-b="0.27">Super</button><button data-b="0.5">Hiper</button><button data-b="1">Dipolo</button></div>
+        </div>
+        <div class="pila" style="gap:14px;width:420px">
+          <div class="ctrl"><label>Modelo</label><select id="h-modo"><option value="ideal">Baja frecuencia (sin x ≈ x)</option><option value="exacto">Exacto a una frecuencia</option></select></div>
+          <div class="ctrl" id="h-f-w"><label>Frecuencia <output id="h-f-o"></output></label><input id="h-f" type="range" min="0" max="1" step="0.001" value="0.55"></div>
+        </div>
+        <div class="pila" style="gap:10px;width:470px"><dl class="lect" id="h-lect"></dl><p class="nota" style="font-size:21px">Punteado: lóbulo con polaridad invertida. Pasá el mouse sobre y para leer cada ángulo.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 11b. RESPUESTA EN FRECUENCIA SIN CORREGIR ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Respuesta en frecuencia, sin corregir</h2><span class="kick">Beamforming</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:1060px 1fr;gap:70px;align-items:center">
+      <canvas id="pr-resp" width="1060" height="640"></canvas>
+      <div class="pila">
+        <p>En graves, restar es derivar: lo común se cancela y queda la pendiente.</p>
+        <div class="eq">\[ s(t) - s(t-\Delta) \approx \Delta\, s'(t) \;\Rightarrow\; \times\, j\omega \]</div>
+        <div class="eq">\[ |y| \approx 2\,\omega\tau_0\,B(\theta) \]</div>
+        <div class="eq">\[ B(\theta) = \tfrac14 + \tfrac34\cos\theta \]</div>
+        <ul class="lista">
+          <li><b>+6 dB/oct:</b> el nivel sube con \(\omega\).</li>
+          <li>A 200 Hz la voz de frente queda <b>−16,1 dB</b> bajo un solo mic.</li>
+        </ul>
+        <p class="nota">Modelo exacto, d = 21,4 mm. Pasando ~3 kHz la recta deja de valer (sin x ≠ x).</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 12. EL ECUALIZADOR ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>El ecualizador</h2><span class="kick">Beamforming</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:720px 1fr;gap:50px;align-items:center">
+      <div class="pasos" style="gap:30px">
+        <div class="paso"><span class="pn">1</span><div><p>De frente \(x_2[n] = x_1[n-1]\), así que \(c_B = 0\) y</p><div class="eq">\[ H_{\text{frente}}(z) = 1 - z^{-2} = \nv{(1 - z^{-1})}(1 + z^{-1}) \]</div><p class="nota">\(1 - z^{-1}\) es un derivador: +6 dB/oct.</p></div></div>
+        <div class="paso"><span class="pn">2</span><div><p>Se cancela con su inversa, el integrador:</p><div class="eq">\[ (1 - z^{-2})\cdot\frac{1}{1 - z^{-1}} = 1 + z^{-1} \]</div><div class="eq">\[ \Big|\tfrac12(1 + z^{-1})\Big| = \cos\tfrac{\omega}{2f_s} \approx 1 \]</div></div></div>
+        <div class="paso"><span class="pn">3</span><div><p>Con pérdida, para no saturar con la continua:</p><div class="eq">\[ v[n] = a\,v[n-1] + y[n] \]</div><div class="eq">\[ f_c = 150\ \mathrm{Hz} \;\Rightarrow\; a = e^{-2\pi f_c/f_s} \approx 0{,}943 \]</div></div></div>
+      </div>
+      <canvas id="eq-resp" width="940" height="620"></canvas>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 13. IMPLEMENTACIÓN EN EL CHIP ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Implementación en el ESP32-S3</h2><span class="kick">Beamforming</span></header>
+    <div class="cuerpo">
+      <svg class="diag" viewBox="0 0 1700 230" aria-label="Cadena del beamformer en el firmware, con cruce a 4 kHz">
+        <defs><marker id="fl4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1c2f57"/></marker></defs>
+        <g class="caja"><rect x="0" y="20" width="250" height="96" rx="18"/><text x="125" y="62">I2S estéreo</text><text class="s" x="125" y="92">L y R, mismo frame</text></g>
+        <g class="caja"><rect x="310" y="20" width="250" height="96" rx="18"/><text x="435" y="62">Pasaaltos</text><text class="s" x="435" y="92">biquad, 70 Hz</text></g>
+        <g class="caja nv"><rect x="620" y="20" width="320" height="96" rx="18"/><text x="780" y="62">c_F − 0,5·c_B</text><text class="s" x="780" y="92">hipercardioide</text></g>
+        <g class="caja"><rect x="1000" y="20" width="340" height="96" rx="18"/><text x="1170" y="62">Integrador</text><text class="s" x="1170" y="92">con pérdida, ÷2</text></g>
+        <g class="caja nv"><rect x="1400" y="20" width="300" height="96" rx="18"/><text x="1550" y="62">Cruce 4 kHz</text><text class="s" x="1550" y="92">Linkwitz-Riley 4.º orden</text></g>
+        <g class="cable"><path d="M250,68 H306" marker-end="url(#fl4)"/><path d="M560,68 H616" marker-end="url(#fl4)"/><path d="M940,68 H996" marker-end="url(#fl4)"/><path d="M1340,68 H1396" marker-end="url(#fl4)"/>
+          <path d="M590,68 V180 H1550 V120" marker-end="url(#fl4)"/></g>
+        <circle cx="590" cy="68" r="6" fill="#1c2f57"/>
+        <text class="s nvt" x="1070" y="214">mic de adelante, x₁[n−1] (agudos)</text>
+        <text class="s" x="1555" y="150" style="text-anchor:start;font-size:19px">HP</text><text class="s" x="1385" y="56" style="text-anchor:end;font-size:19px">LP</text>
+      </svg>
+      <div class="cols" style="grid-template-columns:1fr 1fr;gap:80px;margin-top:34px">
+        <div class="pila">
+          <h3>Por qué se corta a 4 kHz</h3>
+          <p>Arriba de ~4 kHz el frente del hipercardioide cae (−3 dB a 4 kHz, −16 dB a 7 kHz) y se pierden consonantes. Arriba del cruce va el mic de adelante solo:</p>
+          <div class="eq">\[ \nv{\text{salida} = \mathrm{LP}(y) + \mathrm{HP}\big(x_1[n-1]\big)} \]</div>
+          <p class="nota">\(x_1[n-1]\): una muestra atrás para quedar en fase con el hipercardioide, que de frente vale \(\approx \tfrac12(x_1[n] + x_1[n-1])\).</p>
+        </div>
+        <div class="pila">
+          <h3>Qué cuesta</h3>
+          <p>LP y HP son dos biquads Butterworth en cascada cada uno: sumados dan módulo plano.</p>
+          <p>Arriba de 4 kHz la directividad es la de un mic solo (0 dB). Ahí la voz tiene poca energía.</p>
+          <p class="nota">Simulado: frente dentro de −2 dB de 200 Hz a 7 kHz. <b>Pasaaltos</b> de 70 Hz antes de restar: el integrador sube los graves hasta 17,5 veces.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 15. SECCIÓN WAKE WORD ═════════════ -->
+<section class="slide sec">
+  <div class="card">
+    <div class="hl" style="top:540px"></div>
+    <img src="assets/ilus/red.svg" alt="Capas de una red neuronal sobre el chip" style="position:absolute;left:120px;top:80px;width:470px">
+    <p class="nro-sec" style="position:absolute;left:760px;top:215px">02</p>
+    <h2 class="tit-sec" style="position:absolute;left:760px;top:355px">Wake word</h2>
+    <p class="sub" style="position:absolute;left:1050px;top:640px;width:760px">Detectar “Órbita” en el microcontrolador: el chip, el framework, los datos, el espectrograma que ve la red, la red y cómo decide cada 30 ms.</p>
+    <img class="deco" src="assets/ilus/deco_chip.svg" alt="" style="right:120px;bottom:80px;width:70px">
+    <img class="deco" src="assets/ilus/deco_cap.svg" alt="" style="right:210px;bottom:70px;width:56px">
+  </div>
+</section>
+
+<!-- ═════════════ 16. OBJETIVO WAKE WORD ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Objetivo: escuchar una palabra, en el chip</h2><span class="kick">Wake word</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:1fr 1fr;gap:80px">
+      <div class="pila">
+        <p class="lead">El dispositivo escucha todo el tiempo, pero el audio sale a la red recién cuando alguien dice “Órbita”.</p>
+        <p>Una función aprendida, evaluada cada 30 ms, más un comparador:</p>
+        <div class="eq">\[ f_{\mathbf w}:\ \underbrace{X \in \mathbb{R}^{\sim 150\times 40}}_{\text{espectrograma de }\sim 1{,}5\text{ s}} \;\longrightarrow\; p \in (0,1) \]</div>
+        <div class="eq">\[ \text{detección} \iff \bar p[n] > \nv{p_{\text{umbral}}} \]</div>
+      </div>
+      <div class="grilla2">
+        <div class="mini2"><p class="mnum">Privacidad</p><p>en un consultorio no se transmite nada hasta la palabra</p></div>
+        <div class="mini2"><p class="mnum">Latencia</p><p>la decisión no depende de la red</p></div>
+        <div class="mini2"><p class="mnum">Costo</p><p>sin streaming continuo al servidor</p></div>
+        <div class="mini2"><p class="mnum">Límite</p><p>tiene que entrar en KB de RAM y en una fracción de un núcleo</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 17. ¿POR QUÉ ESP32-S3? ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>¿Por qué ESP32-S3?</h2><span class="kick">Wake word</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:480px 1fr 440px;gap:60px;align-items:center">
+      <img src="assets/ilus/chip.svg" alt="Chip ESP32-S3" style="width:460px">
+      <table class="tabla">
+        <tr><th>Del datasheet (v2.2, “Features”)</th><th>Para qué sirve acá</th></tr>
+        <tr><td>2 núcleos Xtensa LX7, hasta 240 MHz</td><td>captura y DSP en uno, red en el otro</td></tr>
+        <tr class="dest"><td>Bus de 128 bits e instrucciones SIMD</td><td>registros de 128 bits: 16 valores int8 por instrucción</td></tr>
+        <tr><td>512 KB de SRAM + PSRAM octal (8 MB en el N16R8)</td><td>modelo y arena en interna, buffers de audio en PSRAM</td></tr>
+        <tr><td>Dos interfaces I2S</td><td>mics por una, amplificador por la otra</td></tr>
+        <tr><td>Wi-Fi 802.11 b/g/n y Bluetooth LE 5</td><td>WebSocket al servidor, en el mismo chip</td></tr>
+      </table>
+      <div class="pila" style="gap:24px">
+        <div class="tarjeta"><p class="big">×14</p><p>convolución 1×1 int8 con ESP-NN frente a C portable (README de ESP-NN)</p></div>
+        <div class="tarjeta"><p class="big" style="font-size:64px;white-space:nowrap">2300 → 54 ms</p><p>detección de personas (int8) sin y con ESP-NN, a 240 MHz</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 18. FRAMEWORK ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Framework: microWakeWord + TFLite Micro</h2><span class="kick">Wake word</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:720px 1fr;gap:80px">
+      <svg class="diag" viewBox="0 0 720 640" aria-label="Pila de software de la wake word">
+        <g class="capa"><rect x="0" y="0" width="720" height="104" rx="18"/><text x="36" y="46">microWakeWord (TensorFlow, GPU)</text><text class="s" x="36" y="80" style="text-anchor:start">entrena MixedNet, la pasa a streaming y la cuantiza</text></g>
+        <g class="capa"><rect x="60" y="130" width="600" height="104" rx="18"/><text x="96" y="176">orbita.tflite · 61 KB</text><text class="s" x="96" y="210" style="text-anchor:start">grafo + pesos int8, embebido en la flash</text></g>
+        <g class="capa nv"><rect x="0" y="260" width="720" height="104" rx="18"/><text x="36" y="306">TensorFlow Lite Micro</text><text class="s" x="36" y="340" style="text-anchor:start">intérprete en C++, arena fija, sin malloc</text></g>
+        <g class="capa nv"><rect x="0" y="390" width="720" height="104" rx="18"/><text x="36" y="436">ESP-NN</text><text class="s" x="36" y="470" style="text-anchor:start">kernels int8 en assembler con SIMD del S3</text></g>
+        <g class="capa"><rect x="0" y="520" width="720" height="104" rx="18"/><text x="36" y="566">ESP32-S3</text><text class="s" x="36" y="600" style="text-anchor:start">ESP-IDF · FreeRTOS · núcleo 1</text></g>
+        <text class="s" x="700" y="122" style="text-anchor:end">PC</text><line x1="0" y1="117" x2="560" y2="117" class="eje" style="stroke-dasharray:6 6"/>
+        <text class="s" x="700" y="252" style="text-anchor:end">chip</text><line x1="0" y1="247" x2="560" y2="247" class="eje" style="stroke-dasharray:6 6"/>
+      </svg>
+      <div class="pila">
+        <div class="vent"><span class="pn">1</span><p><b>Mismo frontend en PC y chip.</b> Si el espectrograma difiere, el modelo falla sin avisar.</p></div>
+        <div class="vent"><span class="pn">2</span><p><b>int8.</b> 4 veces menos memoria y cuentas enteras, que acelera el SIMD.</p></div>
+        <div class="vent"><span class="pn">3</span><p><b>Streaming.</b> Cada llamada procesa solo 30 ms nuevos.</p></div>
+        <div class="vent"><span class="pn">4</span><p><b>Memoria fija.</b> Arena reservada al arrancar, sin malloc.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 19. DATOS ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Datos de entrenamiento</h2><span class="kick">Wake word</span></header>
+    <div class="cuerpo">
+      <table class="tabla">
+        <tr><th>Conjunto</th><th>Qué es</th><th>Cantidad (v0)</th><th>% del lote</th><th>Penalidad × clase</th></tr>
+        <tr class="dest"><td>Positivos</td><td>“Órbita” sintético, ElevenLabs, voces rioplatenses</td><td>11.727 clips</td><td>12 %</td><td>2 × 2 = 4</td></tr>
+        <tr><td>Confundibles</td><td>palabras parecidas a “órbita”</td><td>5.659 clips</td><td>12 %</td><td>5 × 40 = 200</td></tr>
+        <tr><td>Español leído</td><td>OpenSLR, Common Voice</td><td>22,3 h</td><td>8 %</td><td>2,5 × 40 = 100</td></tr>
+        <tr><td>Español conversación</td><td>PRESEEA, CORdeBA</td><td>34,2 h</td><td>23 %</td><td>3 × 40 = 120</td></tr>
+        <tr><td>Negativos de microWakeWord</td><td>habla en inglés, charla de cena, ruido y música</td><td>~900 h</td><td>46 %</td><td>40 a 120</td></tr>
+        <tr><td>Evaluación</td><td>entrevistas en español: eligen el mejor punto y miden</td><td>6,3 h + 5,3 h</td><td>0 %</td><td>no entrena</td></tr>
+      </table>
+      <p style="margin-top:30px"><b>Aumentación:</b> ruido (SNR −5 a 20 dB), eco de salas reales y volumen. Las voces reales quedan para el test.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 20. FEATURES: CUENTAS ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Features: del audio al espectrograma</h2><span class="kick">Wake word</span></header>
+    <div class="cuerpo">
+      <svg class="diag" viewBox="0 0 1700 120" aria-label="Cadena del frontend de audio">
+        <defs><marker id="fl5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1c2f57"/></marker></defs>
+        <g class="caja"><rect x="0" y="12" width="230" height="90" rx="18"/><text x="115" y="54">Ventana</text><text class="s" x="115" y="84">30 ms cada 10 ms</text></g>
+        <g class="caja"><rect x="290" y="12" width="200" height="90" rx="18"/><text x="390" y="54">Hann</text><text class="s" x="390" y="84">+ FFT 512</text></g>
+        <g class="caja"><rect x="550" y="12" width="250" height="90" rx="18"/><text x="675" y="54">40 bandas mel</text><text class="s" x="675" y="84">125 a 7500 Hz</text></g>
+        <g class="caja nv"><rect x="860" y="12" width="260" height="90" rx="18"/><text x="990" y="54">Reducción de ruido</text><text class="s" x="990" y="84">piso estimado por banda</text></g>
+        <g class="caja nv"><rect x="1180" y="12" width="230" height="90" rx="18"/><text x="1295" y="54">PCAN</text><text class="s" x="1295" y="84">ganancia por canal</text></g>
+        <g class="caja"><rect x="1470" y="12" width="230" height="90" rx="18"/><text x="1585" y="54">log → int8</text><text class="s" x="1585" y="84">40 números</text></g>
+        <g class="cable"><path d="M230,57 H286" marker-end="url(#fl5)"/><path d="M490,57 H546" marker-end="url(#fl5)"/><path d="M800,57 H856" marker-end="url(#fl5)"/><path d="M1120,57 H1176" marker-end="url(#fl5)"/><path d="M1410,57 H1466" marker-end="url(#fl5)"/></g>
+      </svg>
+      <div class="cols" style="grid-template-columns:1fr 1fr;gap:70px;margin-top:26px">
+        <div class="pila">
+          <div class="eq">\[ X_m[k] = \sum_{n=0}^{L-1} w[n]\, x[n + mH]\, e^{-j2\pi kn/N} \]</div>
+          <p>con \(L = 480\) (30 ms), \(H = 160\) (10 ms) y \(N = 512\).</p>
+          <div class="eq">\[ w[n] = \tfrac12\Big(1 - \cos\frac{2\pi n}{L-1}\Big), \quad \mathrm{mel}(f) = 1127\ln\!\Big(1 + \frac{f}{700}\Big) \]</div>
+          <div class="eq">\[ E_m[b] = \sqrt{\textstyle\sum_k W_b[k]\,|X_m[k]|^2}, \qquad b = 1..40 \]</div>
+          <p class="nota">Las ventanas se solapan dos tercios: cada instante entra en 3 columnas seguidas.</p>
+        </div>
+        <div class="pila">
+          <p><b>Reducción de ruido:</b> sigue el piso de cada banda y lo resta:</p>
+          <div class="eq">\[ N_m[b] = (1-s)\,N_{m-1}[b] + s\,E_m[b] \]</div>
+          <div class="eq">\[ E'_m[b] = \max\!\big(E_m[b] - N_m[b],\; 0{,}05\,E_m[b]\big) \]</div>
+          <p><b>PCAN:</b> un AGC por banda:</p>
+          <div class="eq">\[ \mathrm{PCEN} = \Big(\frac{E}{(\varepsilon + M)^{\alpha}} + \delta\Big)^{r} - \delta^{r} \]</div>
+          <p class="nota">Forma de Wang et al. (2017); TFLM usa una versión entera.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 21. INTERACTIVO: ESPECTROGRAMA ═════════════ -->
+<section class="slide" data-ia="espectro">
+  <div class="card">
+    <header class="hd"><h2>La ventana que arma el espectrograma</h2><span class="kick">Wake word · interactivo</span></header>
+    <div class="cuerpo">
+      <div class="esp-grid">
+        <div class="pz-l"><canvas id="e-onda" width="1700" height="150"></canvas></div>
+        <div class="esp-medio">
+          <div class="pz-l"><p class="rot">Ventana × Hann (480 muestras)</p><canvas id="e-trama" width="540" height="270"></canvas></div>
+          <div class="pz-l"><p class="rot">|X[k]| en dB y los 40 filtros mel</p><canvas id="e-fft" width="790" height="270"></canvas></div>
+          <div class="pz-l"><p class="rot">columna</p><canvas id="e-col" width="90" height="270"></canvas></div>
+          <div class="pila" style="gap:14px;width:230px">
+            <button class="boton" id="e-play">▶ Reproducir</button>
+            <div class="ctrl"><label style="flex-direction:column;gap:2px">Columna <output id="e-m-o"></output></label><input id="e-m" type="range" min="0" max="146" step="1" value="0"></div>
+          </div>
+        </div>
+        <div class="pz-l"><p class="rot">Features del microfrontend (lo que ve la red): 40 bandas × una columna cada 10 ms</p><canvas id="e-spec" width="1700" height="190"></canvas></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 21b. LA RED POR ETAPAS ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>La red, etapa por etapa</h2><span class="kick">Wake word</span></header>
+    <div class="cuerpo">
+      <p class="nota" style="text-align:center"><b>k</b>: columnas que mira cada filtro &nbsp;·&nbsp; <b>p</b>: paso, columnas que salta la ventana</p>
+      <canvas id="r-etapas" width="1720" height="440" style="width:1720px;height:440px;margin-left:-10px"></canvas>
+      <div class="cols" style="grid-template-columns:1fr 1fr;gap:80px;margin-top:20px">
+        <div class="pila" style="gap:12px"><p><b>Paso 3:</b> la ventana de Conv 1 salta de a 3 columnas, así que 170 → 56. Por eso cada inferencia procesa 30 ms nuevos.</p>
+          <p class="nota">La ventana punteada es lo que mira una salida: columnas enteras, porque las convoluciones son solo en el tiempo.</p></div>
+        <div class="pila" style="gap:12px"><p><b>Cada bloque:</b> un filtro en el tiempo para cada canal por separado (<i>depthwise</i>, un FIR por canal) y después una mezcla de canales (<i>pointwise</i>).</p>
+          <p class="nota"><i>MixConv</i>: la mitad de los canales con un filtro corto y la otra mitad con uno largo, para mirar dos escalas de tiempo a la vez.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 22. INTERACTIVO: LA RED ═════════════ -->
+<section class="slide" data-ia="red">
+  <div class="card">
+    <header class="hd"><h2>La red: MixedNet</h2><span class="kick">Wake word · interactivo</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:1080px 1fr;gap:60px">
+      <div class="pila" style="gap:8px">
+        <canvas id="r-red" width="1080" height="640" style="width:1080px;height:640px"></canvas>
+        <p class="nota">Pasá el mouse por una neurona para ver qué parte de la entrada mira.</p>
+      </div>
+      <div class="pila" style="gap:6px;justify-content:center">
+        <p><b>¿Por qué MixedNet?</b> Red convolucional diminuta (~24.000 pesos, 61 KB), hecha para un microcontrolador.</p>
+        <p>La entrada tiene 40 bandas. Después, cada <b>canal</b> es un patrón aprendido (32 o 64 por paso), ya no una frecuencia.</p>
+        <p><b>Depthwise:</b> cada canal por separado. Una ventana de <i>k</i> pasos se desliza en el tiempo y los pondera con <i>k</i> pesos (el filtro).</p>
+        <p><b>MixConv:</b> grupos de canales con ventanas de distinto largo (7 y 11 pasos): detalle corto y más contexto.</p>
+        <div class="eq" style="font-size:30px">\[ \underbrace{5\cdot 64}_{\text{depthwise}} + \underbrace{64\cdot 64}_{\text{pointwise}} = \nv{4\,416} \ll \underbrace{5\cdot 64\cdot 64}_{20\,480} \]</div>
+        <div class="eq" style="font-size:28px">\[ y = \mathrm{ReLU}\Big(\sum_i w_i x_i + b\Big), \qquad p = \frac{1}{1+e^{-z}} \]</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 23. ENTRENAMIENTO ═════════════ -->
+<section class="slide" data-ia="entreno">
+  <div class="card">
+    <header class="hd"><h2>Entrenamiento</h2><span class="kick">Wake word</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:640px 1fr;gap:60px">
+      <div class="pila">
+        <p>Pérdida: entropía cruzada, pesada por conjunto:</p>
+        <div class="eq">\[ \mathcal L = -\frac1B\sum_{i=1}^{B} \nv{c_i}\big[y_i\ln p_i + (1-y_i)\ln(1-p_i)\big] \]</div>
+        <p>Descenso por gradiente (Adam):</p>
+        <div class="eq">\[ \mathbf w \leftarrow \mathbf w - \eta\,\frac{\partial \mathcal L}{\partial \mathbf w}, \qquad \eta = 10^{-3} \to 10^{-4} \]</div>
+        <p>45.000 pasos en una A100 (~75 min). Mejor punto: <b>paso 11.000</b>.</p>
+        <p class="nota">La validación se estanca mientras el entrenamiento baja: empieza a memorizar.</p>
+      </div>
+      <div class="pila" style="gap:10px">
+        <canvas id="t-perd" width="1000" height="300" style="width:1000px;height:300px"></canvas>
+        <canvas id="t-fah" width="1000" height="300" style="width:1000px;height:300px"></canvas>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 24. STREAMING Y CUANTIZACIÓN ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Streaming y cuantización</h2><span class="kick">Wake word</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:1fr 1fr;gap:80px">
+      <div class="pila">
+        <h3>Una red con memoria</h3>
+        <p>Cada convolución guarda sus últimas entradas, como la línea de retardo de un FIR:</p>
+        <div class="eq">\[ y[n] = \sum_{k=0}^{K-1} h[k]\, x[n-k] \]</div>
+        <div class="eq">\[ \text{estado} = \{x[n-1], \dots, x[n-K+1]\} \]</div>
+        <p>Cada llamada procesa solo <b>3 columnas nuevas</b> (30 ms).</p>
+        <p>Campo receptivo, en columnas de entrada:</p>
+        <div class="eq">\[ 5 + 3\,(4 + 10 + 14 + 22) = 155 \;\to\; 1{,}57\ \mathrm{s} \]</div>
+      </div>
+      <div class="pila">
+        <h3>De float32 a int8</h3>
+        <p>Enteros de 8 bits con escala y cero, como un ADC:</p>
+        <div class="eq">\[ r = s\,(q - z), \qquad q = \mathrm{clip}\Big(\mathrm{round}\big(\tfrac{r}{s}\big) + z,\; -128,\; 127\Big) \]</div>
+        <p>Escalas medidas con 500 espectrogramas de entrenamiento.</p>
+        <table class="tabla chica">
+          <tr><th></th><th>Forma</th><th>Tipo</th></tr>
+          <tr><td>Entrada</td><td>[1, 3, 40]</td><td>int8</td></tr>
+          <tr><td>Salida</td><td>[1, 1]</td><td>uint8 → p = q/256</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 25. INTERACTIVO: DETECCIÓN ═════════════ -->
+<section class="slide" data-ia="deteccion">
+  <div class="card">
+    <header class="hd"><h2>De la probabilidad a la detección</h2><span class="kick">Wake word · interactivo</span></header>
+    <div class="cuerpo">
+      <canvas id="d-graf" width="1700" height="520" style="width:1700px;height:520px"></canvas>
+      <div class="barra-ctrl" style="margin-top:14px">
+        <div class="ctrl" style="width:340px"><label>Umbral <output id="d-u-o"></output></label><input id="d-u" type="range" min="0.05" max="0.99" step="0.01" value="0.4"></div>
+        <div class="ctrl" style="width:400px"><label>Promedio de N salidas <output id="d-n-o"></output></label><input id="d-n" type="range" min="1" max="15" step="1" value="5"></div>
+        <div class="eq" style="font-size:28px;width:470px">\[ \bar p[n] = \frac1N\sum_{k=0}^{N-1} p[n-k] \;>\; p_{\text{umbral}} \]</div>
+        <dl class="lect" id="d-lect"></dl>
+      </div>
+      <p class="nota" style="margin-top:6px">Audio real pasado por el <b>orbita.tflite</b> del firmware (int8, streaming).</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 27. RESULTADOS ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Resultados en simulación</h2><span class="kick">Wake word</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:1fr;max-width:1100px">
+      <div class="pila">
+        <h3>Entrenamiento v0 (paso 11.000, int8, umbral 0,4)</h3>
+        <div class="fila3">
+          <div class="mini"><p class="mnum">90 %</p><p>“Órbita” sintéticos detectados</p></div>
+          <div class="mini"><p class="mnum">0</p><p>falsas en 5,3 h de entrevistas</p></div>
+          <div class="mini"><p class="mnum tcn">37 %</p><p>con 30 grabaciones reales</p></div>
+        </div>
+        <p>Hallazgo: la brecha entre voces sintéticas y reales. El v1 suma voces reales al entrenamiento.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 28. CONCLUSIONES ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Conclusiones y trabajo futuro</h2><span class="kick">Cierre</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:1fr 1fr;gap:80px">
+      <div class="pila">
+        <h3>Conclusiones</h3>
+        <ul class="lista">
+          <li>Con 2 mics tan juntos, <b>restar</b> rinde lo que sumar no: 6 dB de directividad debajo de 4 kHz; arriba, el mic de adelante solo.</li>
+          <li>La resta sube +6 dB/oct; un integrador con pérdida la deja plana en la banda de voz.</li>
+          <li>Una red int8 de ~24.000 pesos detecta el 90 % de los “Órbita” sintéticos, sin falsas en 5,3 h de entrevistas.</li>
+        </ul>
+      </div>
+      <div class="pila">
+        <h3>Trabajo futuro</h3>
+        <ul class="lista">
+          <li>v1 del modelo con voces reales y falsas activaciones recolectadas.</li>
+          <li>Medir en la placa: patrón del beamformer, detección por distancia y uso de CPU.</li>
+          <li>Cancelación de eco para detectar mientras suena el parlante.</li>
+                  </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 29. REFERENCIAS ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Referencias</h2><span class="kick">Cierre</span></header>
+    <div class="cuerpo">
+      <ol class="refs">
+        <li>G. W. Elko y A.-T. Nguyen Pong, “A simple adaptive first-order differential microphone”, IEEE WASPAA, 1995.</li>
+        <li>J. Benesty y J. Chen, <i>Study and Design of Differential Microphone Arrays</i>, Springer, 2012.</li>
+        <li>InvenSense, nota de aplicación “Microphone Array Beamforming” (broadside y endfire); ST, DT0117.</li>
+        <li>Y. Wang et al., “Trainable frontend for robust and far-field keyword spotting”, IEEE ICASSP, 2017 (PCEN).</li>
+        <li>M. Tan y Q. V. Le, “MixConv: Mixed depthwise convolutional kernels”, BMVC, 2019.</li>
+        <li>K. Ahrendt, <i>microWakeWord</i>, github.com/kahrendt/microWakeWord (commit 4665173).</li>
+        <li>TensorFlow Lite Micro y su microfrontend, github.com/tensorflow/tflite-micro.</li>
+        <li>Espressif, <i>ESP32-S3 Series Datasheet</i> v2.2; <i>ESP-NN</i>, github.com/espressif/esp-nn.</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 30. GRACIAS ═════════════ -->
+<section class="slide sec">
+  <div class="card">
+    <div class="hl" style="top:540px"></div>
+    <canvas class="disp3d" width="540" height="400" style="position:absolute;left:110px;top:170px;transform:scale(1.2);transform-origin:top left;cursor:grab;touch-action:none" aria-label="Dispositivo Hi Órbita en 3D: arrastrar para girar"></canvas>
+    <h2 class="tit-sec" style="position:absolute;left:760px;top:355px">¿Preguntas?</h2>
+    <p class="sub" style="position:absolute;left:1050px;top:640px;width:760px">Gracias. Código y simulaciones del proyecto Órbita: firmware ESP-IDF, simulaciones en Python y entrenamiento del modelo.</p>
+    <img class="deco" src="assets/ilus/deco_mic.svg" alt="" style="right:130px;bottom:80px;width:84px">
+    <img class="deco" src="assets/ilus/deco_chip.svg" alt="" style="right:230px;bottom:70px;width:64px">
+  </div>
+</section>
+
+</div>
+<nav id="nav"><button id="ant" aria-label="Anterior">‹</button><span id="pag"></span><button id="sig" aria-label="Siguiente">›</button></nav>
+</body>
+</html>

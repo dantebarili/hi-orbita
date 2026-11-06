@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mediciones en placa</title>
+<link rel="stylesheet" href="assets/fonts/fonts.css">
+<link rel="stylesheet" href="assets/deck.css">
+<script>
+window.MathJax = {
+  tex: { inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]],
+         macros: { nv: ["{\\color[RGB]{42,74,133}{#1}}", 1], tc: ["{\\color[RGB]{181,85,47}{#1}}", 1] } },
+  svg: { fontCache: "global" },
+  startup: { pageReady: () => MathJax.startup.defaultPageReady().then(() => { document.body.classList.add("mj-listo"); if (window.ajustarFormulas) window.ajustarFormulas(); }) }
+};
+</script>
+<script defer src="assets/mathjax/tex-svg.js"></script>
+<script defer src="assets/datos.js"></script>
+<script defer src="assets/deck.js"></script>
+</head>
+<body>
+<div id="stage">
+
+<!-- ═════════════ 1. PORTADA ═════════════ -->
+<section class="slide" id="portada">
+  <div class="card">
+    <div class="vl" style="left:70px"></div><div class="vl" style="left:1220px"></div><div class="vl" style="right:70px"></div>
+    <div class="hl" style="top:130px"></div>
+    <p class="kick" style="position:absolute;left:110px;top:70px">Análisis de Sistemas y Señales Digitales · Mediciones en placa</p>
+    <p class="sub" style="position:absolute;left:1262px;top:180px;width:480px;text-align:right">Para la implementación en hardware de un asistente de IA para odontólogos</p>
+    <img src="assets/ilus/array.svg" alt="Dos micrófonos en endfire con frentes de onda" style="position:absolute;left:120px;top:210px;width:470px">
+    <img src="assets/ilus/placa_sola.svg" alt="Placa con ESP32-S3" style="position:absolute;left:660px;top:165px;width:490px">
+    <div style="position:absolute;left:110px;bottom:120px;width:1080px">
+      <h1 class="tit-portada"><span class="nro">I.</span> Beamforming de array endfire de micrófonos MEMS</h1>
+      <h1 class="tit-portada" style="margin-top:28px"><span class="nro">II.</span> Detección de palabra de activación en microcontrolador</h1>
+    </div>
+    <p class="muted" style="position:absolute;right:110px;bottom:120px;text-align:right;font-size:26px;line-height:1.5">Dante Barili<br>Juan Förster<br>Mauricio Garavani<br>Bautista Mijalovich<br><span style="color:var(--navy)">Noviembre 2026</span></p>
+    <img class="deco" src="assets/ilus/deco_mic.svg" alt="" style="right:120px;bottom:430px;width:90px">
+    <img class="deco" src="assets/ilus/deco_cap.svg" alt="" style="right:220px;bottom:400px;width:60px">
+  </div>
+</section>
+
+<!-- ═════════════ 3. SECCIÓN BEAMFORMING ═════════════ -->
+<section class="slide sec">
+  <div class="card">
+    <div class="hl" style="top:540px"></div>
+    <img src="assets/ilus/array.svg" alt="Dos micrófonos en línea con frentes de onda" style="position:absolute;left:60px;top:250px;width:620px">
+    <p class="nro-sec" style="position:absolute;left:760px;top:215px">01</p>
+    <h2 class="tit-sec" style="position:absolute;left:760px;top:355px">Beamforming</h2>
+    <p class="sub" style="position:absolute;left:1050px;top:640px;width:760px">El beamformer corriendo en la placa: el desfase entre canales que apareció al medir, cómo se compensa y cuánto atenúa según dónde está el parlante.</p>
+    <img class="deco" src="assets/ilus/deco_mic.svg" alt="" style="left:110px;bottom:70px;width:84px">
+    <img class="deco" src="assets/ilus/deco_chip.svg" alt="" style="left:200px;bottom:60px;width:64px">
+  </div>
+</section>
+
+<!-- ═════════════ 13. IMPLEMENTACIÓN EN EL CHIP ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Un desfase entre canales</h2><span class="kick">Beamforming · medido en placa</span></header>
+    <div class="cuerpo">
+      <svg class="diag" viewBox="0 0 1700 170" aria-label="Cadena del beamformer en el firmware">
+        <defs><marker id="fl4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1c2f57"/></marker></defs>
+        <g class="caja"><rect x="0" y="36" width="220" height="96" rx="18"/><text x="110" y="78">I2S estéreo</text><text class="s" x="110" y="108">L y R, mismo frame</text></g>
+        <g class="caja"><rect x="290" y="36" width="250" height="96" rx="18"/><text x="415" y="78">Pasaaltos</text><text class="s" x="415" y="108">biquad, ~70 Hz</text></g>
+        <g class="caja nv"><rect x="610" y="36" width="290" height="96" rx="18"/><text x="755" y="78">Alineación L/R</text><text class="s" x="755" y="108">FIR de Lagrange, 4 coef.</text></g>
+        <g class="caja nv"><rect x="970" y="36" width="290" height="96" rx="18"/><text x="1115" y="78">c_F − 0,5·c_B</text><text class="s" x="1115" y="108">hipercardioide</text></g>
+        <g class="caja"><rect x="1330" y="36" width="370" height="96" rx="18"/><text x="1515" y="78">Integrador con pérdida</text><text class="s" x="1515" y="108">÷2, mismo nivel que un mic</text></g>
+        <g class="cable"><path d="M220,84 H286" marker-end="url(#fl4)"/><path d="M540,84 H606" marker-end="url(#fl4)"/><path d="M900,84 H966" marker-end="url(#fl4)"/><path d="M1260,84 H1326" marker-end="url(#fl4)"/></g>
+      </svg>
+      <div class="cols" style="grid-template-columns:1fr 1fr;gap:80px;margin-top:30px">
+        <div class="pila">
+          <h3>Lo que no estaba en la simulación</h3>
+          <p>El canal R llega <b>0,86 muestras antes</b> que L (bus I2S). Se corrige con un FIR de Lagrange:</p>
+          <div class="eq">\[ h[k] = \prod_{m\neq k}\frac{D-m}{k-m}, \qquad D = 1{,}86,\; k = 0..3 \]</div>
+        </div>
+        <div class="pila">
+          <div class="eq">\[ \begin{aligned} R_{al}[n] = &-0{,}023\,R[n] + 0{,}148\,R[n-1] \\ &+ \nv{0{,}912}\,R[n-2] - 0{,}037\,R[n-3] \end{aligned} \]</div>
+          <div class="eq">\[ L_{al}[n] = L[n-1] \]</div>
+          <p>Se atrasan los dos para centrar el retardo en el filtro: 62,5 µs de latencia.</p>
+          <p class="nota">Costo total: menos de ~30 operaciones por muestra. Despreciable para el chip.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 14. MEDICIÓN EN PLACA ═════════════ -->
+<section class="slide" data-ia="medicion">
+  <div class="card">
+    <header class="hd"><h2>Medición en la placa</h2><span class="kick">Beamforming · resultados</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:680px 1fr;gap:70px">
+      <canvas id="med-polar" width="680" height="680" style="width:680px;height:680px;margin-top:-20px"></canvas>
+      <div class="pila">
+        <p>INMP441 a 21,4 mm, β = 0,5, ruido a 0,5 m. Salida contra mic L, 300–3000 Hz.</p>
+        <table class="tabla">
+          <tr><th>Parlante</th><th>Ángulo</th><th>Sin compensar</th><th>Compensado</th><th>Teoría</th></tr>
+          <tr><td>Frente</td><td>0°</td><td>−3,0 dB</td><td class="nvc">−0,7 dB</td><td>0 dB</td></tr>
+          <tr><td>Arriba</td><td>90°</td><td>−3,8 dB</td><td class="nvc">−7,1 dB</td><td>−12 dB</td></tr>
+          <tr><td>Costado</td><td>90°</td><td>−3,8 dB</td><td class="nvc">−15,1 dB</td><td>−12 dB</td></tr>
+          <tr><td>Atrás</td><td>180°</td><td>+1,7 dB</td><td class="nvc">−3,0 dB</td><td>−6 dB</td></tr>
+        </table>
+        <ul class="lista">
+          <li>Sin compensar: no hay directividad.</li>
+          <li>Compensado: el frente pasa entero y los costados caen 7 a 15 dB.</li>
+          <li>Arriba y costado deberían dar igual: falta repetir la medición.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 15. SECCIÓN WAKE WORD ═════════════ -->
+<section class="slide sec">
+  <div class="card">
+    <div class="hl" style="top:540px"></div>
+    <img src="assets/ilus/red.svg" alt="Capas de una red neuronal sobre el chip" style="position:absolute;left:120px;top:80px;width:470px">
+    <p class="nro-sec" style="position:absolute;left:760px;top:215px">02</p>
+    <h2 class="tit-sec" style="position:absolute;left:760px;top:355px">Wake word</h2>
+    <p class="sub" style="position:absolute;left:1050px;top:640px;width:760px">La red corriendo en el ESP32-S3: lo que cuesta cada 30 ms y cómo detecta en el consultorio según la distancia, con y sin beamformer.</p>
+    <img class="deco" src="assets/ilus/deco_chip.svg" alt="" style="right:120px;bottom:80px;width:70px">
+    <img class="deco" src="assets/ilus/deco_cap.svg" alt="" style="right:210px;bottom:70px;width:56px">
+  </div>
+</section>
+
+<!-- ═════════════ 26. COSTO EN EL CHIP ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Lo que cuesta en el chip</h2><span class="kick">Wake word · medido en placa</span></header>
+    <div class="cuerpo">
+      <div class="fila4">
+        <div class="kpi"><p class="big">19 %</p><p>de un núcleo como máximo</p><p class="nota">3 × 1,2 ms (frontend) + 2,1 ms (Invoke) = 5,7 ms cada 30 ms</p></div>
+        <div class="kpi"><p class="big">25,8 KB</p><p>de arena (de 32 KB reservados)</p><p class="nota">modelo y arena en RAM interna; quedan 228 KB libres</p></div>
+        <div class="kpi"><p class="big">61 KB</p><p>de modelo int8</p><p class="nota">~24.000 pesos en las convoluciones</p></div>
+        <div class="kpi"><p class="big">0</p><p>diferencias PC contra chip</p><p class="nota">697 columnas × 40 features y 232 probabilidades idénticas, bit a bit</p></div>
+      </div>
+      <div class="eq" style="margin-top:50px;margin-bottom:14px">\[ \text{carga} = \frac{3\,t_{\text{frontend}} + t_{\text{Invoke}}}{30\ \mathrm{ms}} = \frac{3\cdot 1{,}2 + 2{,}1}{30} \approx \nv{0{,}19} \]</div>
+      <p class="nota" style="text-align:center">Medido con okay_nabu (misma arquitectura). Falta repetirlo con “Órbita” y Wi-Fi.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 27. RESULTADOS ═════════════ -->
+<section class="slide">
+  <div class="card">
+    <header class="hd"><h2>Detección en la placa</h2><span class="kick">Wake word · medido en placa</span></header>
+    <div class="cuerpo cols" style="grid-template-columns:1fr;max-width:1200px">
+      <div class="pila">
+        <h3>En la placa <span class="pend">pendiente</span></h3>
+        <table class="tabla">
+          <tr><th>Distancia</th><th>0,5 m</th><th>1 m</th><th>2 m</th><th>3 m</th></tr>
+          <tr><td>Detección</td><td>[__ %]</td><td>[__ %]</td><td>[__ %]</td><td>[__ %]</td></tr>
+          <tr><td>Con beamformer</td><td>[__ %]</td><td>[__ %]</td><td>[__ %]</td><td>[__ %]</td></tr>
+        </table>
+        <table class="tabla chica">
+          <tr><th>Falsas por hora</th><th>Charla</th><th>TV / música</th></tr>
+          <tr><td>En el consultorio</td><td>[__]</td><td>[__]</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════ 30. GRACIAS ═════════════ -->
+<section class="slide sec">
+  <div class="card">
+    <div class="hl" style="top:540px"></div>
+    <canvas class="disp3d" width="540" height="400" style="position:absolute;left:110px;top:170px;transform:scale(1.2);transform-origin:top left;cursor:grab;touch-action:none" aria-label="Dispositivo Hi Órbita en 3D: arrastrar para girar"></canvas>
+    <h2 class="tit-sec" style="position:absolute;left:760px;top:355px">¿Preguntas?</h2>
+    <p class="sub" style="position:absolute;left:1050px;top:640px;width:760px">Gracias. Código y mediciones del proyecto Órbita: firmware ESP-IDF, simulaciones en Python y entrenamiento del modelo.</p>
+    <img class="deco" src="assets/ilus/deco_mic.svg" alt="" style="right:130px;bottom:80px;width:84px">
+    <img class="deco" src="assets/ilus/deco_chip.svg" alt="" style="right:230px;bottom:70px;width:64px">
+  </div>
+</section>
+
+</div>
+<nav id="nav"><button id="ant" aria-label="Anterior">‹</button><span id="pag"></span><button id="sig" aria-label="Siguiente">›</button></nav>
+</body>
+</html>
